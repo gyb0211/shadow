@@ -1,13 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    ".",                    # 根 crate (二进制: shadow)
-    "agent-core",           # 核心层: trait 定义
-    "crates/shadow-config", # 配置 schema 与加载
-    "crates/shadow-log",    # 统一日志
-    "crates/shadow-runtime",# 运行时: agent loop
+    ".",                       # 根 crate (二进制: shadow)
+    "agent-core",              # 核心层: trait 定义
+    "crates/shadow-config",    # 配置 schema 与加载
+    "crates/shadow-log",       # 统一日志
+    "crates/shadow-runtime",   # 运行时: agent loop
     "crates/shadow-providers", # LLM provider 实现
-    "crates/shadow-memory", # 记忆后端实现
+    "crates/shadow-memory",    # 记忆后端实现
 ]
 
 [workspace.package]
@@ -41,25 +41,37 @@ name = "shadow"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "影子 -- ZeroClaw 架构的精简复刻: trait 驱动 + 微内核 + 归因系统"
+description = "影子 -- ZeroClaw 架构精简复刻: trait 驱动 + 微内核 + 归因系统"
 
 [[bin]]
 name = "shadow"
 path = "src/main.rs"
 
 [dependencies]
+# ── Kernel 层 (始终编译) ──
 agent-core.workspace = true
-shadow-log.workspace = true
-shadow-runtime.workspace = true
 shadow-config.workspace = true
+shadow-log.workspace = true
 shadow-providers.workspace = true
 shadow-memory.workspace = true
+
+# ── Runtime 层 (可选, 默认开启) ──
+shadow-runtime = { workspace = true, optional = true }
+
+# ── 外部依赖 ──
 anyhow.workspace = true
 clap = { version = "4", features = ["derive"] }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+
+[features]
+default = ["runtime"]
+
+# 完整运行时: Agent loop + AgentBuilder + Observer
+# 关闭此 feature 构建 kernel-only 二进制 (~最小内核)
+runtime = ["dep:shadow-runtime"]
 
 [profile.release]
 opt-level = "z"
