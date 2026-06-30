@@ -13,8 +13,8 @@ use parking_lot::Mutex;
 use shadow_log::Action;
 use std::sync::Arc;
 
-/// 工具调用最大循环次数 -- 防止无限循环
-const MAX_TOOL_ITERATIONS: usize = 10;
+/// 工具调用最大循环次数 -- 默认值, 可被 AgentConfig.max_iterations 覆盖
+const DEFAULT_MAX_ITERATIONS: usize = 10;
 
 /// Agent 配置
 #[derive(Debug, Clone)]
@@ -25,6 +25,8 @@ pub struct AgentConfig {
     pub temperature: Option<f64>,
     pub autonomy: AutonomyLevel,
     pub workspace_dir: std::path::PathBuf,
+    /// 工具调用最大循环次数 (默认 10)
+    pub max_iterations: usize,
 }
 
 impl Default for AgentConfig {
@@ -36,6 +38,7 @@ impl Default for AgentConfig {
             temperature: Some(0.7),
             autonomy: AutonomyLevel::default(),
             workspace_dir: std::path::PathBuf::from("."),
+            max_iterations: DEFAULT_MAX_ITERATIONS,
         }
     }
 }
@@ -105,7 +108,7 @@ impl Agent {
 
         loop {
             iteration += 1;
-            if iteration > MAX_TOOL_ITERATIONS {
+            if iteration > self.config.max_iterations {
                 shadow_log::record!(
                     WARN,
                     Action::Fail,

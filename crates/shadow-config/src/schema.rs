@@ -55,6 +55,10 @@ pub struct AgentSection {
     /// 自主级别: full / supervised / read_only
     #[serde(default = "default_autonomy")]
     pub autonomy: String,
+
+    /// 工具调用最大循环次数 (默认 10)
+    #[serde(default = "default_max_iterations")]
+    pub max_iterations: usize,
 }
 
 fn default_model_provider() -> String {
@@ -69,6 +73,10 @@ fn default_autonomy() -> String {
     "supervised".to_string()
 }
 
+fn default_max_iterations() -> usize {
+    10
+}
+
 impl Default for AgentSection {
     fn default() -> Self {
         Self {
@@ -77,6 +85,7 @@ impl Default for AgentSection {
             model: default_model(),
             temperature: Some(0.7),
             autonomy: default_autonomy(),
+            max_iterations: default_max_iterations(),
         }
     }
 }

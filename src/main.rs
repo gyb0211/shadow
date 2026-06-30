@@ -282,6 +282,7 @@ async fn chat_via_agent(
             _ => agent_core::AutonomyLevel::Supervised,
         },
         workspace_dir: shadow_config::config_dir(),
+        max_iterations: config.agent.max_iterations,
     };
 
     // 创建观察者 (日志观察者, 捕获事件到 JSONL)
@@ -413,6 +414,7 @@ fn config_command(config: shadow_config::Config, action: ConfigAction) {
             println!("  model = \"{}\"", config.agent.model);
             println!("  temperature = {:?}", config.agent.temperature);
             println!("  autonomy = \"{}\"", config.agent.autonomy);
+            println!("  max_iterations = {}", config.agent.max_iterations);
             println!();
             println!("[memory]");
             println!("  backend = \"{}\"", config.memory.backend);
