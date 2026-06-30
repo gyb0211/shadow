@@ -16,3 +16,7 @@ tokio.workspace = true
 tracing.workspace = true
 chrono.workspace = true
 uuid.workspace = true
+rusqlite = { version = "0.37", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -4,6 +4,7 @@
 
 pub mod none;
 pub mod markdown;
+pub mod sqlite;
 
 use agent_core::Memory;
 use anyhow::Result;
@@ -14,6 +15,7 @@ pub fn create_memory(backend: &str, workspace_dir: &std::path::Path) -> Result<A
     match backend {
         "none" => Ok(Arc::new(none::NoneMemoryBackend)),
         "markdown" => Ok(Arc::new(markdown::MarkdownMemory::new(workspace_dir))),
+        "sqlite" => Ok(Arc::new(sqlite::SqliteMemory::new(workspace_dir)?)),
         _ => anyhow::bail!("未知的 memory 后端: {backend}"),
     }
 }

@@ -3,4 +3,6 @@
 //! 配置已迁移到 shadow-config crate
 
 pub mod agent;
+pub mod cron;
+pub mod skills;
 pub mod tools;
