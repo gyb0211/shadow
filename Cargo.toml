@@ -1,0 +1,67 @@
+[workspace]
+resolver = "2"
+members = [
+    ".",          # 根 crate (二进制: shadow)
+    "agent-core", # 核心层: trait 定义
+    "crates/log", # 统一日志
+    "crates/runtime", # 运行时: agent loop + config
+    "crates/providers", # LLM provider 实现
+    "crates/memory", # 记忆后端实现
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://gitee.com/gyb1563407/shadow.git"
+
+[workspace.dependencies]
+agent-core = { path = "agent-core" }
+shadow-log = { path = "crates/log" }
+shadow-runtime = { path = "crates/runtime" }
+shadow-providers = { path = "crates/providers" }
+shadow-memory = { path = "crates/memory" }
+
+# 核心依赖
+anyhow = "1.0"
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "io-std"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+chrono = { version = "0.4", features = ["clock", "serde"] }
+uuid = { version = "1", features = ["v4"] }
+parking_lot = "0.12"
+
+[package]
+name = "shadow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "影子 -- ZeroClaw 架构的精简复刻: trait 驱动 + 微内核 + 归因系统"
+
+[[bin]]
+name = "shadow"
+path = "src/main.rs"
+
+[dependencies]
+agent-core.workspace = true
+shadow-log.workspace = true
+shadow-runtime.workspace = true
+shadow-providers.workspace = true
+shadow-memory.workspace = true
+anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml = "0.8"
+uuid.workspace = true
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
