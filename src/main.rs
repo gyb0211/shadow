@@ -75,11 +75,17 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Chat { message } => {
+            // 解析 provider 引用 (如 "openai.default" 或 "custom.minimax1")
+            let resolved = shadow_config::resolve_provider(
+                &config.providers.families,
+                &config.agent.model_provider,
+            )?;
+
             // 创建 provider
             let provider = shadow_providers::create_provider(
-                &config.provider.provider_type,
-                config.provider.api_key.as_deref(),
-                config.provider.base_url.as_deref(),
+                &resolved.family,
+                resolved.entry.api_key.as_deref(),
+                resolved.effective_base_url(),
             )?;
 
             // 创建 memory
@@ -88,9 +94,9 @@ async fn main() -> Result<()> {
             // 创建 agent
             let agent_config = shadow_runtime::agent::AgentConfig {
                 alias: config.agent.alias.clone(),
-                model_provider_type: config.provider.provider_type.clone(),
-                model: config.agent.model.clone(),
-                temperature: config.agent.temperature,
+                model_provider_type: resolved.family.clone(),
+                model: resolved.effective_model(&config.agent.model).to_string(),
+                temperature: Some(resolved.effective_temperature()),
                 autonomy: match config.agent.autonomy.as_str() {
                     "full" => agent_core::AutonomyLevel::Full,
                     "read_only" => agent_core::AutonomyLevel::ReadOnly,
@@ -147,8 +153,46 @@ async fn main() -> Result<()> {
 
         Commands::Config { action } => match action {
             ConfigAction::List => {
-                let content = serde_json::to_string_pretty(&config)?;
-                println!("{content}");
+                // 显示 agent + memory 配置
+                println!("[agent]");
+                println!("  alias = \"{}\"", config.agent.alias);
+                println!("  model_provider = \"{}\"", config.agent.model_provider);
+                println!("  model = \"{}\"", config.agent.model);
+                println!("  temperature = {:?}", config.agent.temperature);
+                println!("  autonomy = \"{}\"", config.agent.autonomy);
+                println!();
+                println!("[memory]");
+                println!("  backend = \"{}\"", config.memory.backend);
+                println!();
+
+                // 显示所有 providers
+                let providers = config.providers.list();
+                if providers.is_empty() {
+                    println!("[providers] (无)");
+                } else {
+                    for (family, alias) in &providers {
+                        let entry = config.providers.find(family, alias).unwrap();
+                        println!("[providers.{family}.{alias}]");
+                        if let Some(ref key) = entry.api_key {
+                            let masked = if key.len() > 8 {
+                                format!("{}...{}", &key[..4], &key[key.len()-4..])
+                            } else {
+                                "***".to_string()
+                            };
+                            println!("  api_key = \"{masked}\"");
+                        }
+                        if let Some(ref model) = entry.model {
+                            println!("  model = \"{model}\"");
+                        }
+                        if let Some(ref url) = entry.base_url {
+                            println!("  base_url = \"{url}\"");
+                        }
+                        if let Some(temp) = entry.temperature {
+                            println!("  temperature = {temp}");
+                        }
+                        println!();
+                    }
+                }
             }
             ConfigAction::Set { key, value } => {
                 println!("设置 {key} = {value}");
