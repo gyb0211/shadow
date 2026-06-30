@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
     shadow_log::install_subscriber(cli.verbose);
 
     // 加载配置
-    let config = shadow_config::load_or_init()?;
+    let mut config = shadow_config::load_or_init()?;
 
     match cli.command {
         Commands::Chat { message } => {
@@ -107,7 +107,7 @@ async fn main() -> Result<()> {
         }
 
         Commands::Config { action } => {
-            config_command(config, action);
+            config_command(&mut config, action);
         }
 
         Commands::Memory { action } => {
@@ -283,11 +283,26 @@ async fn chat_via_agent(
         },
         workspace_dir: shadow_config::config_dir(),
         max_iterations: config.agent.max_iterations,
+        max_history: config.agent.max_history,
+        system_prompt: config.agent.system_prompt.clone(),
     };
 
     // 创建观察者 (日志观察者, 捕获事件到 JSONL)
     let observer: std::sync::Arc<dyn agent_core::Observer> =
         std::sync::Arc::new(LogObserver);
+
+    // 工具执行回调 -- CLI 实时显示工具调用
+    let callback: std::sync::Arc<dyn shadow_runtime::agent::ToolEventCallback> =
+        std::sync::Arc::new(|event: &str, detail: &str| {
+            match event {
+                "tool_start" => eprintln!("  [工具] {detail}"),
+                "tool_success" => eprintln!("  [完成] {detail}"),
+                "tool_error" => eprintln!("  [失败] {detail}"),
+                "tool_timeout" => eprintln!("  [超时] {detail}"),
+                "tool_approval_skipped" => eprintln!("  [跳过] {detail}"),
+                _ => {}
+            }
+        });
 
     // 注册默认工具集
     let tools = shadow_runtime::tools::default_tools();
@@ -298,6 +313,7 @@ async fn chat_via_agent(
         .memory(memory)
         .observer(observer)
         .tools(tools)
+        .tool_event_callback(callback)
         .config(agent_config)
         .build()?;
 
@@ -405,7 +421,7 @@ impl agent_core::Observer for LogObserver {
 
 // ── Config 命令 ──
 
-fn config_command(config: shadow_config::Config, action: ConfigAction) {
+fn config_command(config: &mut shadow_config::Config, action: ConfigAction) {
     match action {
         ConfigAction::List => {
             println!("[agent]");
@@ -449,8 +465,36 @@ fn config_command(config: shadow_config::Config, action: ConfigAction) {
             }
         }
         ConfigAction::Set { key, value } => {
-            println!("设置 {key} = {value}");
-            println!("(配置写入功能开发中, 手动编辑: {})", shadow_config::config_path().display());
+            // 支持 dotted path 设置配置项
+            // 例: agent.model, agent.max_iterations, providers.openai.default.api_key
+            match config_set(&mut *config, &key, &value) {
+                Ok(changed) => {
+                    if shadow_config::save(&config).is_ok() {
+                        println!("✓ 已设置 {key} = {value}");
+                        if changed {
+                            println!("  (配置已保存到 {})", shadow_config::config_path().display());
+                        }
+                    } else {
+                        eprintln!("✗ 保存配置失败");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("✗ {e}");
+                    eprintln!("  支持的路径:");
+                    eprintln!("    agent.alias <string>");
+                    eprintln!("    agent.model <string>");
+                    eprintln!("    agent.model_provider <string>");
+                    eprintln!("    agent.temperature <float>");
+                    eprintln!("    agent.autonomy <full|supervised|read_only>");
+                    eprintln!("    agent.max_iterations <int>");
+                    eprintln!("    agent.max_history <int>");
+                    eprintln!("    agent.system_prompt <string>");
+                    eprintln!("    memory.backend <none|markdown>");
+                    eprintln!("    providers.<family>.<alias>.api_key <string>");
+                    eprintln!("    providers.<family>.<alias>.model <string>");
+                    eprintln!("    providers.<family>.<alias>.base_url <string>");
+                }
+            }
         }
         ConfigAction::Path => {
             println!("{}", shadow_config::config_path().display());
@@ -500,4 +544,54 @@ async fn memory_command(config: shadow_config::Config, action: MemoryAction) -> 
     }
 
     Ok(())
+}
+
+// ── config set 实现 ──
+
+/// 解析 dotted path 并设置配置项
+fn config_set(config: &mut shadow_config::Config, key: &str, value: &str) -> Result<bool, String> {
+    let parts: Vec<&str> = key.split('.').collect();
+
+    match parts.as_slice() {
+        ["agent", "alias"] => { config.agent.alias = value.to_string(); Ok(true) }
+        ["agent", "model"] => { config.agent.model = value.to_string(); Ok(true) }
+        ["agent", "model_provider"] => { config.agent.model_provider = value.to_string(); Ok(true) }
+        ["agent", "temperature"] => {
+            let v: f64 = value.parse().map_err(|_| "temperature 需要数字".to_string())?;
+            config.agent.temperature = Some(v);
+            Ok(true)
+        }
+        ["agent", "autonomy"] => match value {
+            "full" | "supervised" | "read_only" => { config.agent.autonomy = value.to_string(); Ok(true) }
+            _ => Err("autonomy 必须是: full / supervised / read_only".to_string()),
+        },
+        ["agent", "max_iterations"] => {
+            config.agent.max_iterations = value.parse().map_err(|_| "需要正整数".to_string())?;
+            Ok(true)
+        }
+        ["agent", "max_history"] => {
+            config.agent.max_history = value.parse().map_err(|_| "需要正整数".to_string())?;
+            Ok(true)
+        }
+        ["agent", "system_prompt"] => { config.agent.system_prompt = Some(value.to_string()); Ok(true) }
+        ["memory", "backend"] => match value {
+            "none" | "markdown" => { config.memory.backend = value.to_string(); Ok(true) }
+            _ => Err("backend 必须是: none / markdown".to_string()),
+        },
+        ["providers", family, alias, field] => {
+            let entry = config.providers.find_or_create(family, alias);
+            match *field {
+                "api_key" => { entry.api_key = Some(value.to_string()); Ok(true) }
+                "model" => { entry.model = Some(value.to_string()); Ok(true) }
+                "base_url" => { entry.base_url = Some(value.to_string()); Ok(true) }
+                "temperature" => {
+                    let v: f64 = value.parse().map_err(|_| "需要数字".to_string())?;
+                    entry.temperature = Some(v);
+                    Ok(true)
+                }
+                _ => Err(format!("未知的 provider 字段: {field} (支持: api_key/model/base_url/temperature)")),
+            }
+        }
+        _ => Err(format!("无法识别的配置路径: {key}")),
+    }
 }

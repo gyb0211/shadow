@@ -5,6 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::time::Duration;
 
 /// 工具执行结果
 #[derive(Debug, Clone)]
@@ -52,6 +53,18 @@ pub trait Tool: Attributable {
 
     /// 执行工具
     async fn execute(&self, args: Value) -> Result<ToolResult>;
+
+    /// 工具超时 -- None 表示不限制, Agent 用 tokio::time::timeout 包装
+    /// 默认 30 秒
+    fn timeout(&self) -> Option<Duration> {
+        Some(Duration::from_secs(30))
+    }
+
+    /// 是否需要审批 -- Supervised 模式下执行前请求用户确认
+    /// 默认 false, 敏感工具 (Shell/FileWrite) 覆盖为 true
+    fn requires_approval(&self) -> bool {
+        false
+    }
 
     /// 工具规格 (name + description + parameters)
     fn spec(&self) -> ToolSpec {

@@ -16,6 +16,22 @@ use std::sync::Arc;
 /// 工具调用最大循环次数 -- 默认值, 可被 AgentConfig.max_iterations 覆盖
 const DEFAULT_MAX_ITERATIONS: usize = 10;
 
+/// 对话历史最大条数 -- 默认值, 可被 AgentConfig.max_history 覆盖
+const DEFAULT_MAX_HISTORY: usize = 50;
+
+/// 默认 system prompt
+const DEFAULT_SYSTEM_PROMPT: &str = "你是一个有用的 AI 助手. 你可以使用工具来完成任务.";
+
+/// 工具事件回调 trait -- CLI 通过此回调接收工具执行事件通知
+///
+/// 两个 &str 参数: (事件类型, 详情)
+/// 事件类型: "tool_start" / "tool_success" / "tool_error" / "tool_timeout" / "tool_approval_skipped"
+/// 详情: 工具名称或错误信息
+pub trait ToolEventCallback: Fn(&str, &str) + Send + Sync {}
+
+// 为所有满足 Fn(&str, &str) + Send + Sync 的类型自动实现 ToolEventCallback
+impl<T> ToolEventCallback for T where T: Fn(&str, &str) + Send + Sync {}
+
 /// Agent 配置
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
@@ -27,6 +43,10 @@ pub struct AgentConfig {
     pub workspace_dir: std::path::PathBuf,
     /// 工具调用最大循环次数 (默认 10)
     pub max_iterations: usize,
+    /// 对话历史最大条数 (超过时自动截断旧消息, 默认 50)
+    pub max_history: usize,
+    /// 自定义 system prompt (None 则使用默认)
+    pub system_prompt: Option<String>,
 }
 
 impl Default for AgentConfig {
@@ -39,6 +59,8 @@ impl Default for AgentConfig {
             autonomy: AutonomyLevel::default(),
             workspace_dir: std::path::PathBuf::from("."),
             max_iterations: DEFAULT_MAX_ITERATIONS,
+            max_history: DEFAULT_MAX_HISTORY,
+            system_prompt: None,
         }
     }
 }
@@ -52,6 +74,8 @@ pub struct Agent {
     pub observer: Arc<dyn Observer>,
     pub config: AgentConfig,
     pub history: Mutex<Vec<ChatMessage>>,
+    /// 工具事件回调 (可选) -- CLI 通过此回调接收工具执行通知
+    pub tool_event_callback: Option<Arc<dyn ToolEventCallback>>,
 }
 
 impl Attributable for Agent {
@@ -69,21 +93,55 @@ impl Agent {
         AgentBuilder::default()
     }
 
+    /// 获取当前生效的 system prompt
+    /// 优先使用 config.system_prompt, 未设则用默认
+    fn system_prompt(&self) -> &str {
+        self.config
+            .system_prompt
+            .as_deref()
+            .unwrap_or(DEFAULT_SYSTEM_PROMPT)
+    }
+
+    /// 通知工具事件回调 (若已设置)
+    fn notify_tool_event(&self, event: &str, detail: &str) {
+        if let Some(cb) = &self.tool_event_callback {
+            cb(event, detail);
+        }
+    }
+
     /// 单轮对话 (含工具调用循环)
     ///
     /// 流程:
-    /// 1. 构建消息 (system + history + user)
-    /// 2. 调用 LLM
-    /// 3. 若响应包含 tool_calls, 执行工具, 将结果追加到消息, 回到步骤 2
-    /// 4. 若无 tool_calls, 保存历史并返回最终内容
+    /// 1. 截断过长的历史 (上下文窗口管理)
+    /// 2. 构建消息 (system + history + user)
+    /// 3. 调用 LLM
+    /// 4. 若响应包含 tool_calls, 执行工具, 将结果追加到消息, 回到步骤 3
+    /// 5. 若无 tool_calls, 保存历史并返回最终内容
     pub async fn chat(&self, user_message: &str) -> Result<String> {
         // 记录会话开始
         shadow_log::record!(INFO, Action::Start, "agent chat 开始");
 
-        // 构建初始消息
+        // 上下文窗口管理: 截断过长的历史, 保留最近 max_history 条
+        {
+            let mut history = self.history.lock();
+            if history.len() > self.config.max_history {
+                let drain_count = history.len() - self.config.max_history;
+                history.drain(0..drain_count);
+                shadow_log::record!(
+                    INFO,
+                    Action::Note,
+                    format!(
+                        "历史超过 max_history({}), 截断 {} 条旧消息",
+                        self.config.max_history, drain_count
+                    )
+                );
+            }
+        }
+
+        // 构建初始消息 -- system prompt (从 config 读取, 未设则用默认)
         let mut messages = vec![ChatMessage {
             role: "system".to_string(),
-            content: "你是一个有用的 AI 助手. 你可以使用工具来完成任务.".to_string(),
+            content: self.system_prompt().to_string(),
             tool_call_id: None,
             tool_calls: vec![],
         }];
@@ -230,22 +288,83 @@ impl Agent {
     }
 
     /// 执行单个工具调用
+    ///
+    /// 包含以下检查:
+    /// 1. 只读模式拒绝
+    /// 2. Supervised 模式审批检查 (requires_approval 的工具跳过执行)
+    /// 3. 工具超时控制 (tool.timeout() 返回的时长)
+    /// 4. 工具事件回调通知
     async fn execute_tool_call(&self, tool_call: &ToolCall) -> ToolResult {
         // 查找匹配的工具
         let tool = self.tools.iter().find(|t| t.name() == tool_call.name);
 
         match tool {
             Some(t) => {
-                // 检查自主级别
+                // 检查自主级别 -- 只读模式拒绝所有工具
                 if self.config.autonomy == AutonomyLevel::ReadOnly {
                     return ToolResult::err("只读模式: 工具执行被拒绝");
                 }
 
-                // 执行工具
-                match t.execute(tool_call.arguments.clone()).await {
-                    Ok(result) => result,
-                    Err(e) => ToolResult::err(format!("工具执行异常: {e}")),
+                // 审批检查: Supervised 模式下, 需要审批的工具跳过执行
+                if self.config.autonomy == AutonomyLevel::Supervised && t.requires_approval() {
+                    let msg = format!(
+                        "工具 [{}] 需要用户审批 (supervised 模式), 已跳过执行",
+                        tool_call.name
+                    );
+                    println!("{msg}");
+                    self.notify_tool_event("tool_approval_skipped", &tool_call.name);
+                    return ToolResult::err("需要用户审批 (supervised 模式)");
                 }
+
+                // 通知工具开始执行
+                self.notify_tool_event("tool_start", &tool_call.name);
+
+                // 获取工具超时配置 -- None 表示不限制
+                let timeout = t.timeout();
+
+                // 执行工具 (带超时控制)
+                let exec_future = t.execute(tool_call.arguments.clone());
+
+                let result = match timeout {
+                    Some(d) => {
+                        // 有超时: 用 tokio::time::timeout 包装
+                        match tokio::time::timeout(d, exec_future).await {
+                            Ok(Ok(result)) => result,
+                            Ok(Err(e)) => ToolResult::err(format!("工具执行异常: {e}")),
+                            Err(_) => {
+                                let msg = format!(
+                                    "工具 [{}] 执行超时 ({}ms)",
+                                    tool_call.name,
+                                    d.as_millis()
+                                );
+                                println!("{msg}");
+                                self.notify_tool_event("tool_timeout", &tool_call.name);
+                                ToolResult::err("工具执行超时")
+                            }
+                        }
+                    }
+                    None => {
+                        // 无超时: 直接执行
+                        match exec_future.await {
+                            Ok(result) => result,
+                            Err(e) => ToolResult::err(format!("工具执行异常: {e}")),
+                        }
+                    }
+                };
+
+                // 通知工具执行结果
+                if result.success {
+                    self.notify_tool_event("tool_success", &tool_call.name);
+                } else {
+                    let detail = format!(
+                        "{}: {}",
+                        tool_call.name,
+                        result.error.as_deref().unwrap_or("未知错误")
+                    );
+                    self.notify_tool_event("tool_error", &detail);
+                }
+
+                result
             }
             None => ToolResult::err(format!("未找到工具: {}", tool_call.name)),
         }
@@ -266,6 +385,7 @@ pub struct AgentBuilder {
     memory: Option<Arc<dyn Memory>>,
     observer: Option<Arc<dyn Observer>>,
     config: Option<AgentConfig>,
+    tool_event_callback: Option<Arc<dyn ToolEventCallback>>,
 }
 
 impl AgentBuilder {
@@ -294,6 +414,26 @@ impl AgentBuilder {
         self
     }
 
+    /// 设置自定义 system prompt
+    pub fn system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        let config = self.config.get_or_insert_with(AgentConfig::default);
+        config.system_prompt = Some(prompt.into());
+        self
+    }
+
+    /// 设置对话历史最大条数
+    pub fn max_history(mut self, max: usize) -> Self {
+        let config = self.config.get_or_insert_with(AgentConfig::default);
+        config.max_history = max;
+        self
+    }
+
+    /// 设置工具事件回调
+    pub fn tool_event_callback(mut self, callback: Arc<dyn ToolEventCallback>) -> Self {
+        self.tool_event_callback = Some(callback);
+        self
+    }
+
     /// 构建 Agent
     pub fn build(self) -> Result<Agent> {
         let config = self.config.unwrap_or_default();
@@ -308,6 +448,7 @@ impl AgentBuilder {
             .observer
             .unwrap_or_else(|| Arc::new(agent_core::NoopObserver));
         let tools = self.tools.unwrap_or_default();
+        let tool_event_callback = self.tool_event_callback;
 
         Ok(Agent {
             alias,
@@ -317,6 +458,7 @@ impl AgentBuilder {
             observer,
             config,
             history: Mutex::new(Vec::new()),
+            tool_event_callback,
         })
     }
 }

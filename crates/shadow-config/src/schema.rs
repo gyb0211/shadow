@@ -59,6 +59,14 @@ pub struct AgentSection {
     /// 工具调用最大循环次数 (默认 10)
     #[serde(default = "default_max_iterations")]
     pub max_iterations: usize,
+
+    /// 对话历史最大条数 (超过时自动截断旧消息, 默认 50)
+    #[serde(default = "default_max_history")]
+    pub max_history: usize,
+
+    /// 自定义 system prompt (不设则用默认)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
 }
 
 fn default_model_provider() -> String {
@@ -77,6 +85,10 @@ fn default_max_iterations() -> usize {
     10
 }
 
+fn default_max_history() -> usize {
+    50
+}
+
 impl Default for AgentSection {
     fn default() -> Self {
         Self {
@@ -86,6 +98,8 @@ impl Default for AgentSection {
             temperature: Some(0.7),
             autonomy: default_autonomy(),
             max_iterations: default_max_iterations(),
+            max_history: default_max_history(),
+            system_prompt: None,
         }
     }
 }
