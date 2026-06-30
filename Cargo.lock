@@ -1075,13 +1075,23 @@ dependencies = [
  "clap",
  "serde",
  "serde_json",
+ "shadow-config",
  "shadow-log",
  "shadow-memory",
  "shadow-providers",
  "shadow-runtime",
  "tokio",
- "toml",
  "uuid",
+]
+
+[[package]]
+name = "shadow-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]
@@ -1141,9 +1151,9 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "shadow-config",
  "shadow-log",
  "tokio",
- "toml",
  "tracing",
 ]
 

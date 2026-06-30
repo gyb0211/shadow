@@ -1,12 +1,8 @@
-//! 配置 -- TOML 读写 + 密钥管理
-//!
-//! 借鉴 ZeroClaw 的 Config 设计, 但大幅精简:
-//! - ZeroClaw: 61,918 行, 36 文件
-//! - Shadow: 目标 ~200 行, 单文件
+//! 配置 schema 与加载/保存
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// 顶层配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,14 +84,10 @@ pub fn config_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("SHADOW_CONFIG_DIR") {
         return PathBuf::from(dir);
     }
-    if let Some(home) = dirs_home() {
-        return home.join(".shadow");
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".shadow");
     }
     PathBuf::from(".shadow")
-}
-
-fn dirs_home() -> Option<PathBuf> {
-    std::env::var("HOME").ok().map(PathBuf::from)
 }
 
 /// 配置文件路径

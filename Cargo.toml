@@ -3,8 +3,9 @@ resolver = "2"
 members = [
     ".",                    # 根 crate (二进制: shadow)
     "agent-core",           # 核心层: trait 定义
+    "crates/shadow-config", # 配置 schema 与加载
     "crates/shadow-log",    # 统一日志
-    "crates/shadow-runtime",# 运行时: agent loop + config
+    "crates/shadow-runtime",# 运行时: agent loop
     "crates/shadow-providers", # LLM provider 实现
     "crates/shadow-memory", # 记忆后端实现
 ]
@@ -17,6 +18,7 @@ repository = "https://github.com/gyb0211/shadow.git"
 
 [workspace.dependencies]
 agent-core = { path = "agent-core" }
+shadow-config = { path = "crates/shadow-config" }
 shadow-log = { path = "crates/shadow-log" }
 shadow-runtime = { path = "crates/shadow-runtime" }
 shadow-providers = { path = "crates/shadow-providers" }
@@ -49,6 +51,7 @@ path = "src/main.rs"
 agent-core.workspace = true
 shadow-log.workspace = true
 shadow-runtime.workspace = true
+shadow-config.workspace = true
 shadow-providers.workspace = true
 shadow-memory.workspace = true
 anyhow.workspace = true
@@ -56,7 +59,6 @@ clap = { version = "4", features = ["derive"] }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-toml = "0.8"
 uuid.workspace = true
 
 [profile.release]

@@ -1,0 +1,12 @@
+[package]
+name = "shadow-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "影子配置层 -- TOML schema + 加载 + 密钥管理"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml = "0.8"

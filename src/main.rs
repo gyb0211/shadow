@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
     shadow_log::install_subscriber(cli.verbose);
 
     // 加载配置
-    let config = shadow_runtime::config::load_or_init()?;
+    let config = shadow_config::load_or_init()?;
 
     match cli.command {
         Commands::Chat { message } => {
@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
             )?;
 
             // 创建 memory
-            let memory = shadow_memory::create_memory(&config.memory.backend, &shadow_runtime::config::config_dir())?;
+            let memory = shadow_memory::create_memory(&config.memory.backend, &shadow_config::config_dir())?;
 
             // 创建 agent
             let agent_config = shadow_runtime::agent::AgentConfig {
@@ -96,7 +96,7 @@ async fn main() -> Result<()> {
                     "read_only" => agent_core::AutonomyLevel::ReadOnly,
                     _ => agent_core::AutonomyLevel::Supervised,
                 },
-                workspace_dir: shadow_runtime::config::config_dir(),
+                workspace_dir: shadow_config::config_dir(),
             };
 
             let agent = shadow_runtime::agent::Agent::builder()
@@ -147,8 +147,8 @@ async fn main() -> Result<()> {
 
         Commands::Config { action } => match action {
             ConfigAction::List => {
-                let toml = toml::to_string_pretty(&config)?;
-                println!("{toml}");
+                let content = serde_json::to_string_pretty(&config)?;
+                println!("{content}");
             }
             ConfigAction::Set { key, value } => {
                 println!("设置 {key} = {value}");
@@ -156,13 +156,13 @@ async fn main() -> Result<()> {
                 println!("(配置写入功能开发中)");
             }
             ConfigAction::Path => {
-                println!("{}", shadow_runtime::config::config_path().display());
+                println!("{}", shadow_config::config_path().display());
             }
         },
 
         Commands::Memory { action } => match action {
             MemoryAction::List => {
-                let memory = shadow_memory::create_memory("markdown", &shadow_runtime::config::config_dir())?;
+                let memory = shadow_memory::create_memory("markdown", &shadow_config::config_dir())?;
                 let entries = memory.list().await?;
                 if entries.is_empty() {
                     println!("(无记忆)");
@@ -173,14 +173,14 @@ async fn main() -> Result<()> {
                 }
             }
             MemoryAction::Get { key } => {
-                let memory = shadow_memory::create_memory("markdown", &shadow_runtime::config::config_dir())?;
+                let memory = shadow_memory::create_memory("markdown", &shadow_config::config_dir())?;
                 match memory.get(&key).await? {
                     Some(entry) => println!("{}: {}", entry.key, entry.content),
                     None => println!("(未找到: {key})"),
                 }
             }
             MemoryAction::Forget { key } => {
-                let memory = shadow_memory::create_memory("markdown", &shadow_runtime::config::config_dir())?;
+                let memory = shadow_memory::create_memory("markdown", &shadow_config::config_dir())?;
                 memory.forget(&key).await?;
                 println!("(已删除: {key})");
             }
