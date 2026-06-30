@@ -2,7 +2,6 @@
 
 use crate::event::{Action, EventCategory, LogEvent, Severity};
 use crate::writer::record_event;
-use serde_json::Value;
 use tracing::field::Visit;
 use tracing::{Event, Subscriber};
 use tracing_subscriber::layer::Context;

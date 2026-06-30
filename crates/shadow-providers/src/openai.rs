@@ -1,11 +1,15 @@
 //! OpenAI 兼容 provider -- 支持 OpenAI/OpenRouter/Ollama
+//!
+//! 实现 OpenAI Chat Completions API 的 tool calling 功能.
+//! 将 agent-core 的 ToolSpec 转换为 API 格式, 解析响应中的 tool_calls.
 
 use agent_core::{
-    Attributable, ChatMessage, ChatRequest, ChatResponse, ModelProvider, Role, TokenUsage, ToolCall,
+    Attributable, ChatRequest, ChatResponse, ModelProvider, Role, TokenUsage, ToolCall,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub struct OpenAiProvider {
     provider_type: String,
@@ -66,12 +70,57 @@ impl ModelProvider for OpenAiProvider {
         let client = self.client()?;
         let url = format!("{}/chat/completions", self.base_url);
 
+        // 转换消息: ChatMessage -> ApiMessage
         let messages: Vec<ApiMessage> = request
             .messages
             .iter()
-            .map(|m| ApiMessage {
-                role: m.role.clone(),
-                content: m.content.clone(),
+            .map(|m| {
+                let tool_calls: Option<Vec<ApiToolCall>> = if m.tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(
+                        m.tool_calls
+                            .iter()
+                            .map(|tc| ApiToolCall {
+                                id: tc.id.clone(),
+                                call_type: "function".to_string(),
+                                function: ApiFunction {
+                                    name: tc.name.clone(),
+                                    arguments: serde_json::to_string(&tc.arguments)
+                                        .unwrap_or_default(),
+                                },
+                            })
+                            .collect(),
+                    )
+                };
+
+                // content 为空且有 tool_calls 时, API 期望 content 为 null
+                let content = if m.content.is_empty() && tool_calls.is_some() {
+                    None
+                } else {
+                    Some(m.content.clone())
+                };
+
+                ApiMessage {
+                    role: m.role.clone(),
+                    content,
+                    tool_call_id: m.tool_call_id.clone(),
+                    tool_calls,
+                }
+            })
+            .collect();
+
+        // 转换工具规格: ToolSpec -> ApiTool
+        let tools: Vec<ApiTool> = request
+            .tools
+            .iter()
+            .map(|t| ApiTool {
+                tool_type: "function".to_string(),
+                function: ApiToolSpec {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    parameters: t.parameters.clone(),
+                },
             })
             .collect();
 
@@ -79,6 +128,7 @@ impl ModelProvider for OpenAiProvider {
             model: request.model,
             messages,
             temperature: request.temperature,
+            tools: if tools.is_empty() { None } else { Some(tools) },
         };
 
         let resp = client
@@ -101,6 +151,27 @@ impl ModelProvider for OpenAiProvider {
 
         let choice = api_resp.choices.first().context("LLM 响应无 choices")?;
         let content = choice.message.content.clone().unwrap_or_default();
+
+        // 解析 tool_calls
+        let tool_calls: Vec<ToolCall> = choice
+            .message
+            .tool_calls
+            .as_ref()
+            .map(|tcs| {
+                tcs.iter()
+                    .map(|tc| {
+                        let args: Value = serde_json::from_str(&tc.function.arguments)
+                            .unwrap_or(Value::Null);
+                        ToolCall {
+                            id: tc.id.clone(),
+                            name: tc.function.name.clone(),
+                            arguments: args,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
         let usage = TokenUsage {
             prompt_tokens: api_resp.usage.prompt_tokens,
             completion_tokens: api_resp.usage.completion_tokens,
@@ -109,7 +180,7 @@ impl ModelProvider for OpenAiProvider {
 
         Ok(ChatResponse {
             content,
-            tool_calls: vec![],
+            tool_calls,
             usage,
         })
     }
@@ -122,19 +193,56 @@ impl ModelProvider for OpenAiProvider {
     }
 }
 
-// ── API 类型 ──
+// ── API 类型 (OpenAI Chat Completions 格式) ──
 
 #[derive(Serialize)]
 struct ApiRequest {
     model: String,
     messages: Vec<ApiMessage>,
     temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ApiTool>>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct ApiMessage {
     role: String,
-    content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<ApiToolCall>>,
+}
+
+/// 请求中的工具调用 (assistant 消息携带)
+#[derive(Serialize, Deserialize)]
+struct ApiToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    call_type: String,
+    function: ApiFunction,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ApiFunction {
+    name: String,
+    arguments: String,
+}
+
+/// 请求中的工具定义
+#[derive(Serialize)]
+struct ApiTool {
+    #[serde(rename = "type")]
+    tool_type: String,
+    function: ApiToolSpec,
+}
+
+#[derive(Serialize)]
+struct ApiToolSpec {
+    name: String,
+    description: String,
+    parameters: Value,
 }
 
 #[derive(Deserialize)]
@@ -151,6 +259,24 @@ struct ApiChoice {
 #[derive(Deserialize)]
 struct ApiChoiceMessage {
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ApiToolCallResponse>>,
+}
+
+/// 响应中的工具调用
+#[derive(Deserialize)]
+struct ApiToolCallResponse {
+    id: String,
+    #[serde(rename = "type")]
+    #[allow(dead_code)]
+    call_type: String,
+    function: ApiFunctionResponse,
+}
+
+#[derive(Deserialize)]
+struct ApiFunctionResponse {
+    name: String,
+    arguments: String,
 }
 
 #[derive(Deserialize)]

@@ -5,12 +5,16 @@
 //! - Shadow: ~10 字段, 目标 ~300 行
 
 use agent_core::{
-    Attributable, AutonomyLevel, ChatMessage, ChatRequest, ChatResponse, Memory, ModelProvider,
-    Observer, ObserverEvent, Role, Tool, ToolResult,
+    Attributable, AutonomyLevel, ChatMessage, ChatRequest, Memory, ModelProvider,
+    Observer, ObserverEvent, Role, Tool, ToolCall, ToolResult,
 };
 use anyhow::Result;
 use parking_lot::Mutex;
+use shadow_log::Action;
 use std::sync::Arc;
+
+/// 工具调用最大循环次数 -- 防止无限循环
+const MAX_TOOL_ITERATIONS: usize = 10;
 
 /// Agent 配置
 #[derive(Debug, Clone)]
@@ -62,17 +66,23 @@ impl Agent {
         AgentBuilder::default()
     }
 
-    /// 单轮对话
+    /// 单轮对话 (含工具调用循环)
+    ///
+    /// 流程:
+    /// 1. 构建消息 (system + history + user)
+    /// 2. 调用 LLM
+    /// 3. 若响应包含 tool_calls, 执行工具, 将结果追加到消息, 回到步骤 2
+    /// 4. 若无 tool_calls, 保存历史并返回最终内容
     pub async fn chat(&self, user_message: &str) -> Result<String> {
-        // 记录 LLM 请求
-        self.observer
-            .record_event(&ObserverEvent::LlmRequest { model: self.config.model.clone(), message_count: 1 });
+        // 记录会话开始
+        shadow_log::record!(INFO, Action::Start, "agent chat 开始");
 
-        // 构建消息
+        // 构建初始消息
         let mut messages = vec![ChatMessage {
             role: "system".to_string(),
-            content: "你是一个有用的 AI 助手.".to_string(),
+            content: "你是一个有用的 AI 助手. 你可以使用工具来完成任务.".to_string(),
             tool_call_id: None,
+            tool_calls: vec![],
         }];
 
         // 加载历史
@@ -85,44 +95,157 @@ impl Agent {
             role: "user".to_string(),
             content: user_message.to_string(),
             tool_call_id: None,
+            tool_calls: vec![],
         });
 
-        // 构建请求
-        let request = ChatRequest {
-            messages,
-            model: self.config.model.clone(),
-            temperature: self.config.temperature,
-            max_tokens: None,
-            tools: self.tools.iter().map(|t| t.spec()).collect(),
-        };
+        // 工具调用循环
+        #[allow(unused_assignments)]
+        let mut final_content = String::new();
+        let mut iteration = 0;
 
-        // 调用 provider
-        let start = std::time::Instant::now();
-        let response = self.provider.chat(request).await?;
-        let duration_ms = start.elapsed().as_millis() as u64;
+        loop {
+            iteration += 1;
+            if iteration > MAX_TOOL_ITERATIONS {
+                shadow_log::record!(
+                    WARN,
+                    Action::Fail,
+                    "工具调用超过最大循环次数, 终止"
+                );
+                final_content = "工具调用次数超过上限, 终止对话.".to_string();
+                break;
+            }
 
-        // 记录 LLM 响应
-        self.observer.record_event(&ObserverEvent::LlmResponse {
-            model: self.config.model.clone(),
-            duration_ms,
-            tokens: response.usage.total_tokens,
-        });
+            // 记录 LLM 请求
+            self.observer.record_event(&ObserverEvent::LlmRequest {
+                model: self.config.model.clone(),
+                message_count: messages.len(),
+            });
 
-        // 保存到历史
+            // 构建请求
+            let request = ChatRequest {
+                messages: messages.clone(),
+                model: self.config.model.clone(),
+                temperature: self.config.temperature,
+                max_tokens: None,
+                tools: self.tools.iter().map(|t| t.spec()).collect(),
+            };
+
+            // 调用 provider
+            let start = std::time::Instant::now();
+            let response = self.provider.chat(request).await?;
+            let duration_ms = start.elapsed().as_millis() as u64;
+
+            // 记录 LLM 响应
+            self.observer.record_event(&ObserverEvent::LlmResponse {
+                model: self.config.model.clone(),
+                duration_ms,
+                tokens: response.usage.total_tokens,
+            });
+
+            // 判断是否有工具调用
+            if response.tool_calls.is_empty() {
+                // 无工具调用, 对话结束
+                final_content = response.content.clone();
+
+                // 添加 assistant 消息到历史
+                messages.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: response.content.clone(),
+                    tool_call_id: None,
+                    tool_calls: vec![],
+                });
+                break;
+            }
+
+            // 有工具调用: 先添加 assistant 消息 (含 tool_calls)
+            messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: response.content.clone(),
+                tool_call_id: None,
+                tool_calls: response.tool_calls.clone(),
+            });
+
+            // 执行每个工具调用
+            for tool_call in &response.tool_calls {
+                shadow_log::record!(
+                    INFO,
+                    Action::Invoke,
+                    format!("调用工具: {} (id: {})", tool_call.name, tool_call.id)
+                );
+
+                let tool_start = std::time::Instant::now();
+                let result = self.execute_tool_call(tool_call).await;
+                let tool_duration_ms = tool_start.elapsed().as_millis() as u64;
+
+                // 记录工具调用事件
+                self.observer.record_event(&ObserverEvent::ToolCall {
+                    tool: tool_call.name.clone(),
+                    success: result.success,
+                    duration_ms: tool_duration_ms,
+                });
+
+                // 将工具结果添加到消息
+                let tool_content = if result.success {
+                    result.output
+                } else {
+                    format!(
+                        "[工具执行失败] {}",
+                        result.error.unwrap_or_default()
+                    )
+                };
+
+                messages.push(ChatMessage {
+                    role: "tool".to_string(),
+                    content: tool_content,
+                    tool_call_id: Some(tool_call.id.clone()),
+                    tool_calls: vec![],
+                });
+            }
+
+            // 继续循环, 将工具结果发给 LLM
+        }
+
+        // 保存到历史 (只保存 user + 最终 assistant, 不保存中间 tool 消息)
         let mut history = self.history.lock();
         history.push(ChatMessage {
             role: "user".to_string(),
             content: user_message.to_string(),
             tool_call_id: None,
+            tool_calls: vec![],
         });
         history.push(ChatMessage {
             role: "assistant".to_string(),
-            content: response.content.clone(),
+            content: final_content.clone(),
             tool_call_id: None,
+            tool_calls: vec![],
         });
         drop(history);
 
-        Ok(response.content)
+        shadow_log::record!(INFO, Action::Complete, "agent chat 完成");
+
+        Ok(final_content)
+    }
+
+    /// 执行单个工具调用
+    async fn execute_tool_call(&self, tool_call: &ToolCall) -> ToolResult {
+        // 查找匹配的工具
+        let tool = self.tools.iter().find(|t| t.name() == tool_call.name);
+
+        match tool {
+            Some(t) => {
+                // 检查自主级别
+                if self.config.autonomy == AutonomyLevel::ReadOnly {
+                    return ToolResult::err("只读模式: 工具执行被拒绝");
+                }
+
+                // 执行工具
+                match t.execute(tool_call.arguments.clone()).await {
+                    Ok(result) => result,
+                    Err(e) => ToolResult::err(format!("工具执行异常: {e}")),
+                }
+            }
+            None => ToolResult::err(format!("未找到工具: {}", tool_call.name)),
+        }
     }
 
     /// 清空历史

@@ -13,6 +13,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use shadow_log::Action;
 
 /// 影子 -- trait 驱动的 AI agent 运行时
 #[derive(Parser)]
@@ -88,7 +89,13 @@ enum MemoryAction {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // 安装日志
+    // 配置目录
+    let workspace = shadow_config::config_dir();
+
+    // 初始化日志写入器 (JSONL 持久化)
+    shadow_log::init_from_config(&workspace, 10_000);
+
+    // 安装日志 subscriber (终端 + LogCaptureLayer)
     shadow_log::install_subscriber(cli.verbose);
 
     // 加载配置
@@ -167,6 +174,7 @@ async fn chat_direct(
         role: "system".to_string(),
         content: "你是一个有用的 AI 助手.".to_string(),
         tool_call_id: None,
+        tool_calls: vec![],
     };
 
     if let Some(msg) = message {
@@ -175,6 +183,7 @@ async fn chat_direct(
             role: "user".to_string(),
             content: msg,
             tool_call_id: None,
+            tool_calls: vec![],
         };
         let request = ChatRequest {
             messages: vec![system, user],
@@ -218,6 +227,7 @@ async fn chat_direct(
                 role: "user".to_string(),
                 content: trimmed.to_string(),
                 tool_call_id: None,
+                tool_calls: vec![],
             });
 
             let request = ChatRequest {
@@ -234,6 +244,7 @@ async fn chat_direct(
                         role: "assistant".to_string(),
                         content: response.content.clone(),
                         tool_call_id: None,
+                        tool_calls: vec![],
                     });
                     println!("\n{}\n", response.content);
                 }
@@ -273,10 +284,19 @@ async fn chat_via_agent(
         workspace_dir: shadow_config::config_dir(),
     };
 
+    // 创建观察者 (日志观察者, 捕获事件到 JSONL)
+    let observer: std::sync::Arc<dyn agent_core::Observer> =
+        std::sync::Arc::new(LogObserver);
+
+    // 注册默认工具集
+    let tools = shadow_runtime::tools::default_tools();
+
     let agent = shadow_runtime::agent::Agent::builder()
         .alias(&agent_config.alias)
         .provider(provider)
         .memory(memory)
+        .observer(observer)
+        .tools(tools)
         .config(agent_config)
         .build()?;
 
@@ -319,6 +339,67 @@ async fn chat_via_agent(
     }
 
     Ok(())
+}
+
+// ── 日志观察者 -- 将 Observer 事件转发到 shadow-log ──
+
+#[cfg(feature = "runtime")]
+struct LogObserver;
+
+#[cfg(feature = "runtime")]
+impl agent_core::Attributable for LogObserver {
+    fn role(&self) -> agent_core::Role {
+        agent_core::Role::System
+    }
+    fn alias(&self) -> &str {
+        "log-observer"
+    }
+}
+
+#[cfg(feature = "runtime")]
+#[async_trait::async_trait]
+impl agent_core::Observer for LogObserver {
+    fn record_event(&self, event: &agent_core::ObserverEvent) {
+        use agent_core::ObserverEvent;
+        match event {
+            ObserverEvent::LlmRequest { model, message_count } => {
+                shadow_log::record!(
+                    INFO,
+                    Action::Send,
+                    format!("LLM 请求: model={}, messages={}", model, message_count)
+                );
+            }
+            ObserverEvent::LlmResponse { model, duration_ms, tokens } => {
+                shadow_log::record!(
+                    INFO,
+                    Action::Receive,
+                    format!("LLM 响应: model={}, duration={}ms, tokens={}", model, duration_ms, tokens)
+                );
+            }
+            ObserverEvent::ToolCall { tool, success, duration_ms } => {
+                let outcome = if *success { "成功" } else { "失败" };
+                shadow_log::record!(
+                    INFO,
+                    Action::Invoke,
+                    format!("工具调用: {} ({}, {}ms)", tool, outcome, duration_ms)
+                );
+            }
+            ObserverEvent::SessionStart { session_id } => {
+                shadow_log::record!(INFO, Action::Start, format!("会话开始: {}", session_id));
+            }
+            ObserverEvent::SessionEnd { session_id } => {
+                shadow_log::record!(INFO, Action::Complete, format!("会话结束: {}", session_id));
+            }
+            ObserverEvent::Error { message } => {
+                shadow_log::record!(ERROR, Action::Fail, format!("错误: {}", message));
+            }
+            _ => {}
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 // ── Config 命令 ──

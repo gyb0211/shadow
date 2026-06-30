@@ -3,7 +3,6 @@
 use crate::event::LogEvent;
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
-use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
