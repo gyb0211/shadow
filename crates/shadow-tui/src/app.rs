@@ -1,6 +1,9 @@
 //! AppState -- 中心状态机, 纯逻辑无 IO
 
+use crate::event::AppEvent;
 use shadow_core::{ChatMessage, MemoryEntry};
+use std::sync::Arc;
+use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum View { Chat, Config, Memory }
@@ -43,7 +46,7 @@ pub const COMMANDS: &[&str] = &[
     "clear history", "quit",
 ];
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AppState {
     pub view: View,
     pub palette: Option<PaletteState>,
@@ -54,6 +57,22 @@ pub struct AppState {
     pub status_bottom: StatusLine,
     pub running: bool,
     pub last_error: Option<String>,
+    /// 后台 Agent (TUI 启动时注入; None = 无 agent, Enter 不触发对话)
+    pub agent: Option<Arc<shadow_runtime::agent::Agent>>,
+    /// mpsc 发送端 (用于向主循环推送 Agent 事件)
+    pub tx: Option<mpsc::Sender<AppEvent>>,
+}
+
+impl std::fmt::Debug for AppState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppState")
+            .field("view", &self.view)
+            .field("palette", &self.palette)
+            .field("chat", &self.chat)
+            .field("running", &self.running)
+            .field("last_error", &self.last_error)
+            .finish()
+    }
 }
 
 impl Default for AppState {
@@ -68,6 +87,8 @@ impl Default for AppState {
             status_bottom: StatusLine { text: "↵ send · ⌥↵ newline · ⌘K palette · /help".to_string() },
             running: true,
             last_error: None,
+            agent: None,
+            tx: None,
         }
     }
 }

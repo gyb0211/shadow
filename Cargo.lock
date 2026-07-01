@@ -1488,6 +1488,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "crossterm",
  "fuzzy-matcher",
  "parking_lot",
@@ -1495,6 +1496,8 @@ dependencies = [
  "shadow-config",
  "shadow-core",
  "shadow-log",
+ "shadow-memory",
+ "shadow-providers",
  "shadow-runtime",
  "tempfile",
  "tokio",

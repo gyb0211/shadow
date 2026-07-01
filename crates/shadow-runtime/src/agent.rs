@@ -122,20 +122,26 @@ impl Agent {
         shadow_log::record!(INFO, Action::Start, "agent chat 开始");
 
         // 上下文窗口管理: 截断过长的历史, 保留最近 max_history 条
-        {
+        // 注: 锁必须在 block 内释放, 避免进入 async 状态机导致 future !Send
+        let truncated = {
             let mut history = self.history.lock();
             if history.len() > self.config.max_history {
                 let drain_count = history.len() - self.config.max_history;
                 history.drain(0..drain_count);
-                shadow_log::record!(
-                    INFO,
-                    Action::Note,
-                    format!(
-                        "历史超过 max_history({}), 截断 {} 条旧消息",
-                        self.config.max_history, drain_count
-                    )
-                );
+                Some(drain_count)
+            } else {
+                None
             }
+        };
+        if let Some(drain_count) = truncated {
+            shadow_log::record!(
+                INFO,
+                Action::Note,
+                format!(
+                    "历史超过 max_history({}), 截断 {} 条旧消息",
+                    self.config.max_history, drain_count
+                )
+            );
         }
 
         // 构建初始消息 -- system prompt (从 config 读取, 未设则用默认)
@@ -146,10 +152,11 @@ impl Agent {
             tool_calls: vec![],
         }];
 
-        // 加载历史
-        let history = self.history.lock();
-        messages.extend(history.iter().cloned());
-        drop(history);
+        // 加载历史 (锁在 block 内释放, 避免 future !Send)
+        {
+            let history = self.history.lock();
+            messages.extend(history.iter().cloned());
+        }
 
         // 添加用户消息
         messages.push(ChatMessage {
@@ -275,20 +282,22 @@ impl Agent {
         }
 
         // 保存到历史 (只保存 user + 最终 assistant, 不保存中间 tool 消息)
-        let mut history = self.history.lock();
-        history.push(ChatMessage {
-            role: "user".to_string(),
-            content: user_message.to_string(),
-            tool_call_id: None,
-            tool_calls: vec![],
-        });
-        history.push(ChatMessage {
-            role: "assistant".to_string(),
-            content: final_content.clone(),
-            tool_call_id: None,
-            tool_calls: vec![],
-        });
-        drop(history);
+        // 注: 锁必须在 block 内释放, 避免进入 async 状态机导致 future !Send
+        {
+            let mut history = self.history.lock();
+            history.push(ChatMessage {
+                role: "user".to_string(),
+                content: user_message.to_string(),
+                tool_call_id: None,
+                tool_calls: vec![],
+            });
+            history.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: final_content.clone(),
+                tool_call_id: None,
+                tool_calls: vec![],
+            });
+        }
 
         shadow_log::record!(INFO, Action::Complete, "agent chat 完成");
 

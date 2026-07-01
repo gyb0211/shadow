@@ -229,12 +229,30 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
                     if !text.trim().is_empty() {
                         state.chat.input_history.push(text.clone());
                         state.chat.messages.push(shadow_core::ChatMessage {
-                            role: "user".into(), content: text,
+                            role: "user".into(), content: text.clone(),
                             tool_call_id: None, tool_calls: vec![],
                         });
                         state.chat.input.clear();
                         state.chat.agent_busy = true;
-                        // 实际 spawn agent 在 Task 17 集成时
+                        // spawn 后台 task 调用 agent.chat(); UiObserver 已在 agent 内部,
+                        // 会通过 mpsc 推送 Status/ToolCall/Error 事件, 完成后再推 AgentMessage + AgentDone
+                        if let (Some(agent), Some(tx)) = (state.agent.clone(), state.tx.clone()) {
+                            tokio::spawn(async move {
+                                match agent.chat(&text).await {
+                                    Ok(resp) => {
+                                        let _ = tx.send(AppEvent::AgentMessage(resp)).await;
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(AppEvent::AgentError(e.to_string())).await;
+                                    }
+                                }
+                                let _ = tx.send(AppEvent::AgentDone).await;
+                            });
+                        } else {
+                            // 无 agent: 立即解锁, 避免卡死
+                            state.chat.agent_busy = false;
+                            state.last_error = Some("未配置 agent".into());
+                        }
                     }
                 }
             }
@@ -280,7 +298,9 @@ mod tests {
         assert_eq!(s.chat.messages.len(), 1);
         assert_eq!(s.chat.messages[0].role, "user");
         assert!(s.chat.input.is_empty());
-        assert!(s.chat.agent_busy);
+        // 无 agent 注入时, agent_busy 立即重置 (避免卡死), 且 last_error 标记原因
+        assert!(!s.chat.agent_busy);
+        assert!(s.last_error.as_deref().unwrap_or("").contains("未配置"));
     }
 
     #[test]

@@ -16,14 +16,86 @@ pub use runner::run_loop;
 
 use anyhow::Result;
 use shadow_config::Config;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// 启动 TUI. 默认进入 Chat view.
+///
+/// 构建流程:
+/// 1. 从 config 解析 provider + 创建 memory
+/// 2. 用 UiObserver (转发事件到 mpsc) 构建 Agent
+/// 3. 把 Arc<Agent> + mpsc::Sender 注入 AppState
+/// 4. 进入主循环
 pub async fn run_tui(config: Config) -> Result<()> {
     let (tx, rx) = mpsc::channel::<AppEvent>(256);
-    let _observer = UiObserver::arc(tx); // 注: 实际在 Task 17 联动时交给 AgentBuilder
-    let state = AppState::new();
-    let _final = run_loop(state, rx).await?;
-    let _ = config;
+    let observer = UiObserver::arc(tx.clone());
+
+    let mut state = AppState::new();
+    match build_agent(&config, observer) {
+        Ok(agent) => {
+            state.agent = Some(Arc::new(agent));
+            state.tx = Some(tx);
+        }
+        Err(e) => {
+            // agent 构建失败 (如 provider 未配置): TUI 仍可启动, Enter 会提示错误
+            state.last_error = Some(format!("agent 未就绪: {e}"));
+        }
+    }
+
+    run_loop(state, rx).await?;
     Ok(())
+}
+
+/// 从 config 构建 Agent (镜像 main.rs::chat_via_agent 的构建逻辑)
+fn build_agent(
+    config: &Config,
+    observer: Arc<dyn shadow_core::Observer>,
+) -> Result<shadow_runtime::agent::Agent> {
+    use shadow_core::AutonomyLevel;
+
+    let resolved = shadow_config::resolve_provider(
+        &config.providers.families,
+        &config.agent.model_provider,
+    )?;
+
+    let model = resolved.effective_model(&config.agent.model).to_string();
+    let temperature = resolved.effective_temperature();
+
+    let provider = shadow_providers::create_provider(
+        &resolved.family,
+        resolved.entry.api_key.as_deref(),
+        resolved.effective_base_url(),
+    )?;
+
+    let workspace = shadow_config::config_dir();
+    let memory = shadow_memory::create_memory(&config.memory.backend, &workspace)?;
+
+    let agent_config = shadow_runtime::agent::AgentConfig {
+        alias: config.agent.alias.clone(),
+        model_provider_type: resolved.family.clone(),
+        model,
+        temperature: Some(temperature),
+        autonomy: match config.agent.autonomy.as_str() {
+            "full" => AutonomyLevel::Full,
+            "read_only" => AutonomyLevel::ReadOnly,
+            _ => AutonomyLevel::Supervised,
+        },
+        workspace_dir: shadow_config::config_dir(),
+        max_iterations: config.agent.max_iterations,
+        max_history: config.agent.max_history,
+        system_prompt: config.agent.system_prompt.clone(),
+    };
+
+    let tools = shadow_runtime::tools::default_tools();
+
+    let agent = shadow_runtime::agent::Agent::builder()
+        .alias(&agent_config.alias)
+        .provider(provider)
+        .memory(memory)
+        .observer(observer)
+        .tools(tools)
+        .config(agent_config)
+        .build()?;
+
+    Ok(agent)
 }
