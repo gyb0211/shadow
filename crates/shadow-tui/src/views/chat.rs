@@ -29,7 +29,9 @@ impl<'a> Widget for ChatView<'a> {
             .constraints(constraints)
             .split(area);
 
-        MessageList::new(&self.state.messages).render(chunks[0], buf);
+        MessageList::new(&self.state.messages)
+            .scroll(self.state.scroll_offset)
+            .render(chunks[0], buf);
         InputBox::new(&self.state.input, self.state.input.chars().count()).render(chunks[1], buf);
     }
 }

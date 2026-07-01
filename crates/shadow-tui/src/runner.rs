@@ -111,8 +111,10 @@ fn draw(term: &mut Frame, state: &AppState) -> Result<()> {
         }
 
         // 底
+        let busy_label = if state.chat.agent_busy { "⏳ " } else { "" };
+        let right = format!("{}hist {}/{}", busy_label, state.chat.messages.len(), 50);
         f.render_widget(
-            StatusBar::new(&state.status_bottom.text, &format!("hist {}/{}", state.chat.messages.len(), 50)),
+            StatusBar::new(&state.status_bottom.text, &right),
             chunks[2],
         );
 
@@ -139,6 +141,7 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
                 tool_call_id: None,
                 tool_calls: vec![], reasoning_content: None,
             });
+            state.chat.scroll_offset = 0;
         }
         AppEvent::AgentToolCall {
             name,
@@ -153,6 +156,7 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
                 tool_call_id: None,
                 tool_calls: vec![], reasoning_content: None,
             });
+            state.chat.scroll_offset = 0;
             if !success {
                 state.last_error = Some(format!("tool {name} failed"));
             }
@@ -222,6 +226,12 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
             state.running = false;
         }
         Esc => { /* 退出当前 view? 暂不处理 */ }
+        PageUp => {
+            state.chat.scroll_offset = state.chat.scroll_offset.saturating_add(5);
+        }
+        PageDown => {
+            state.chat.scroll_offset = state.chat.scroll_offset.saturating_sub(5);
+        }
         Enter => {
             if !state.chat.agent_busy {
                 if !state.try_slash_input() {
@@ -234,6 +244,7 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
                         });
                         state.chat.input.clear();
                         state.chat.agent_busy = true;
+                        state.chat.scroll_offset = 0;
                         // spawn 后台 task 调用 agent.chat(); UiObserver 已在 agent 内部,
                         // 会通过 mpsc 推送 Status/ToolCall/Error 事件, 完成后再推 AgentMessage + AgentDone
                         if let (Some(agent), Some(tx)) = (state.agent.clone(), state.tx.clone()) {

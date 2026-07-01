@@ -84,7 +84,7 @@ impl Default for AppState {
             config_view: ConfigViewState::default(),
             memory_view: MemoryViewState::default(),
             status_top: StatusLine { text: "shadow".to_string() },
-            status_bottom: StatusLine { text: "↵ send · ⌥↵ newline · ⌘K palette · /help".to_string() },
+            status_bottom: StatusLine { text: "↵ send · ⌘K palette · PgUp/PgDn scroll · /help".to_string() },
             running: true,
             last_error: None,
             agent: None,
