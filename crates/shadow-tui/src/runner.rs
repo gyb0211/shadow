@@ -182,6 +182,17 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
     Ok(())
 }
 
+/// 在 cursor 位置插入字符
+fn insert_char(input: &mut String, cursor: &mut usize, c: char) {
+    let chars: Vec<char> = input.chars().collect();
+    let pos = (*cursor).min(chars.len());
+    let mut new_input: String = chars[..pos].iter().collect();
+    new_input.push(c);
+    new_input.extend(chars[pos..].iter());
+    *input = new_input;
+    *cursor += 1;
+}
+
 fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
     use crossterm::event::KeyCode::*;
 
@@ -233,6 +244,11 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
             state.chat.scroll_offset = state.chat.scroll_offset.saturating_sub(5);
         }
         Enter => {
+            // Alt+Enter = 插入换行 (多行输入)
+            if k.modifiers.contains(crossterm::event::KeyModifiers::ALT) {
+                insert_char(&mut state.chat.input, &mut state.chat.cursor, '\n');
+                return Ok(());
+            }
             if !state.chat.agent_busy {
                 if !state.try_slash_input() {
                     let text = state.chat.input.clone();
@@ -243,6 +259,7 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
                             tool_call_id: None, tool_calls: vec![], reasoning_content: None,
                         });
                         state.chat.input.clear();
+                        state.chat.cursor = 0;
                         state.chat.agent_busy = true;
                         state.chat.scroll_offset = 0;
                         // spawn 后台 task 调用 agent.chat(); UiObserver 已在 agent 内部,
@@ -268,8 +285,26 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
                 }
             }
         }
-        Backspace => { state.chat.input.pop(); }
-        Char(c) => { state.chat.input.push(c); }
+        Backspace => {
+            let chars: Vec<char> = state.chat.input.chars().collect();
+            if state.chat.cursor > 0 && state.chat.cursor <= chars.len() {
+                let pos = state.chat.cursor - 1;
+                let mut new_input: String = chars[..pos].iter().collect();
+                new_input.extend(chars[state.chat.cursor..].iter());
+                state.chat.input = new_input;
+                state.chat.cursor -= 1;
+            }
+        }
+        Left => { state.chat.cursor = state.chat.cursor.saturating_sub(1); }
+        Right => {
+            let max = state.chat.input.chars().count();
+            state.chat.cursor = (state.chat.cursor + 1).min(max);
+        }
+        Home => { state.chat.cursor = 0; }
+        End => { state.chat.cursor = state.chat.input.chars().count(); }
+        Char(c) => {
+            insert_char(&mut state.chat.input, &mut state.chat.cursor, c);
+        }
         _ => {}
     }
     Ok(())
@@ -322,5 +357,60 @@ mod tests {
         handle_key(&mut s, key(KeyCode::Enter, KeyModifiers::empty())).unwrap();
         assert_eq!(s.chat.messages.len(), 0);
         assert!(!s.chat.input.is_empty());
+    }
+
+    #[test]
+    fn alt_enter_inserts_newline() {
+        let mut s = AppState::new();
+        s.chat.input = "hello".to_string();
+        s.chat.cursor = 5;
+        handle_key(&mut s, key(KeyCode::Enter, KeyModifiers::ALT)).unwrap();
+        assert_eq!(s.chat.input, "hello\n");
+        assert_eq!(s.chat.cursor, 6);
+        assert_eq!(s.chat.messages.len(), 0); // 不发送
+    }
+
+    #[test]
+    fn left_right_moves_cursor() {
+        let mut s = AppState::new();
+        s.chat.input = "abc".to_string();
+        s.chat.cursor = 3;
+        handle_key(&mut s, key(KeyCode::Left, KeyModifiers::empty())).unwrap();
+        assert_eq!(s.chat.cursor, 2);
+        handle_key(&mut s, key(KeyCode::Left, KeyModifiers::empty())).unwrap();
+        assert_eq!(s.chat.cursor, 1);
+        handle_key(&mut s, key(KeyCode::Right, KeyModifiers::empty())).unwrap();
+        assert_eq!(s.chat.cursor, 2);
+    }
+
+    #[test]
+    fn home_end_jump_cursor() {
+        let mut s = AppState::new();
+        s.chat.input = "abc".to_string();
+        s.chat.cursor = 2;
+        handle_key(&mut s, key(KeyCode::Home, KeyModifiers::empty())).unwrap();
+        assert_eq!(s.chat.cursor, 0);
+        handle_key(&mut s, key(KeyCode::End, KeyModifiers::empty())).unwrap();
+        assert_eq!(s.chat.cursor, 3);
+    }
+
+    #[test]
+    fn backspace_at_cursor_position() {
+        let mut s = AppState::new();
+        s.chat.input = "abc".to_string();
+        s.chat.cursor = 1; // 在 a|bc
+        handle_key(&mut s, key(KeyCode::Backspace, KeyModifiers::empty())).unwrap();
+        assert_eq!(s.chat.input, "bc");
+        assert_eq!(s.chat.cursor, 0);
+    }
+
+    #[test]
+    fn char_inserted_at_cursor() {
+        let mut s = AppState::new();
+        s.chat.input = "ac".to_string();
+        s.chat.cursor = 1; // a|c
+        handle_key(&mut s, key(KeyCode::Char('b'), KeyModifiers::empty())).unwrap();
+        assert_eq!(s.chat.input, "abc");
+        assert_eq!(s.chat.cursor, 2);
     }
 }

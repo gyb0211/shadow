@@ -32,7 +32,7 @@ impl<'a> Widget for ChatView<'a> {
         MessageList::new(&self.state.messages)
             .scroll(self.state.scroll_offset)
             .render(chunks[0], buf);
-        InputBox::new(&self.state.input, self.state.input.chars().count()).render(chunks[1], buf);
+        InputBox::new(&self.state.input, self.state.cursor).render(chunks[1], buf);
     }
 }
 

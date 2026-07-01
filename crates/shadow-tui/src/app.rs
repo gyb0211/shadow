@@ -12,6 +12,7 @@ pub enum View { Chat, Config, Memory }
 pub struct ChatState {
     pub messages: Vec<ChatMessage>,
     pub input: String,
+    pub cursor: usize,
     pub input_history: Vec<String>,
     pub scroll_offset: usize,
     pub agent_busy: bool,
@@ -84,7 +85,7 @@ impl Default for AppState {
             config_view: ConfigViewState::default(),
             memory_view: MemoryViewState::default(),
             status_top: StatusLine { text: "shadow".to_string() },
-            status_bottom: StatusLine { text: "↵ send · ⌘K palette · PgUp/PgDn scroll · /help".to_string() },
+            status_bottom: StatusLine { text: "↵ send · ⌥↵ newline · ⌘K palette · PgUp/PgDn scroll".to_string() },
             running: true,
             last_error: None,
             agent: None,
@@ -151,6 +152,7 @@ impl AppState {
             let consumed = self.dispatch_command(cmd);
             if consumed {
                 self.chat.input.clear();
+                self.chat.cursor = 0;
             }
             return consumed;
         }
