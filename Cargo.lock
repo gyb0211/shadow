@@ -1493,6 +1493,7 @@ dependencies = [
  "fuzzy-matcher",
  "parking_lot",
  "ratatui",
+ "serde_json",
  "shadow-config",
  "shadow-core",
  "shadow-log",
