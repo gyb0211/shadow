@@ -1,0 +1,10 @@
+[package]
+name = "shadow-channels"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "影子渠道 -- 消息平台集成 (CLI/Telegram/Discord...)"
+publish = false
+
+[dependencies]
+# 依赖按需添加, 初始为空

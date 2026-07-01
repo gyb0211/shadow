@@ -1,0 +1,10 @@
+[package]
+name = "shadow-plugins"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "影子插件 -- WASM 插件系统"
+publish = false
+
+[dependencies]
+# 依赖按需添加, 初始为空

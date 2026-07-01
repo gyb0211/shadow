@@ -1,0 +1,10 @@
+[package]
+name = "shadow-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "影子网关 -- HTTP/WebSocket 服务器"
+publish = false
+
+[dependencies]
+# 依赖按需添加, 初始为空

@@ -1,0 +1,10 @@
+[package]
+name = "shadow-eval"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "影子评估 -- agent 评估 harness"
+publish = false
+
+[dependencies]
+# 依赖按需添加, 初始为空

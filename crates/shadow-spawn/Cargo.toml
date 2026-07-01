@@ -1,0 +1,10 @@
+[package]
+name = "shadow-spawn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "影子 spawn 封装 -- 归因传播的 tokio::spawn"
+publish = false
+
+[dependencies]
+# 依赖按需添加, 初始为空

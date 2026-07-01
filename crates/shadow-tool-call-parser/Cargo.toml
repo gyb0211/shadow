@@ -1,0 +1,10 @@
+[package]
+name = "shadow-tool-call-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "影子工具调用解析 -- LLM 响应中提取 tool call"
+publish = false
+
+[dependencies]
+# 依赖按需添加, 初始为空

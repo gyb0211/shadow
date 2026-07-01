@@ -1,0 +1,10 @@
+[package]
+name = "shadow-hardware"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "影子硬件 -- USB/GPIO/I2C/SPI"
+publish = false
+
+[dependencies]
+# 依赖按需添加, 初始为空

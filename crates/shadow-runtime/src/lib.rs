@@ -4,5 +4,7 @@
 
 pub mod agent;
 pub mod cron;
+pub mod dispatcher;
+pub mod prompt;
 pub mod skills;
 pub mod tools;
