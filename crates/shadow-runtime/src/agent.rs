@@ -281,6 +281,9 @@ impl Agent {
             // 继续循环, 将工具结果发给 LLM
         }
 
+        // 去除 <think>...</think> 思考块 (不输出给用户, 也不存入历史)
+        let final_content = strip_think_blocks(&final_content);
+
         // 保存到历史 (只保存 user + 最终 assistant, 不保存中间 tool 消息)
         // 注: 锁必须在 block 内释放, 避免进入 async 状态机导致 future !Send
         {
@@ -487,4 +490,64 @@ fn chars_preview(s: &str, n: usize) -> String {
         out.push_str("...");
     }
     out
+}
+
+/// 去除 `<think>...</think>` 思考块 -- 模型链式推理内容不输出给用户, 也不存入历史
+///
+/// 处理:
+/// - 已闭合的 `<think>...</think>` (可多个)
+/// - 未闭合的 `<think>` (流式残余: 从标签处截断到末尾)
+fn strip_think_blocks(content: &str) -> String {
+    let mut result = content.to_string();
+    loop {
+        match result.find("<think>") {
+            Some(start) => match result[start..].find("</think>") {
+                Some(end_rel) => {
+                    let end_abs = start + end_rel + "</think>".len();
+                    result.replace_range(start..end_abs, "");
+                }
+                None => {
+                    // 未闭合 <think>: 删除到末尾
+                    result.truncate(start);
+                    break;
+                }
+            },
+            None => break,
+        }
+    }
+    result.trim().to_string()
+}
+
+#[cfg(test)]
+mod think_tests {
+    use super::*;
+
+    #[test]
+    fn strip_closed_think_block() {
+        let input = "<think>分析一下</think>答案是 42";
+        assert_eq!(strip_think_blocks(input), "答案是 42");
+    }
+
+    #[test]
+    fn strip_multiple_think_blocks() {
+        let input = "<think>第一段</think>你好<think>第二段</think>世界";
+        assert_eq!(strip_think_blocks(input), "你好世界");
+    }
+
+    #[test]
+    fn strip_unclosed_think_block() {
+        let input = "答案是 42<think>还没想完";
+        assert_eq!(strip_think_blocks(input), "答案是 42");
+    }
+
+    #[test]
+    fn no_think_block_unchanged() {
+        assert_eq!(strip_think_blocks("普通回复"), "普通回复");
+    }
+
+    #[test]
+    fn multiline_think_block() {
+        let input = "<think>\nlet me think...\ndeeply\n</think>\n\n最终答案";
+        assert_eq!(strip_think_blocks(input), "最终答案");
+    }
 }
