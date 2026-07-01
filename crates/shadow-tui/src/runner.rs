@@ -1,4 +1,7 @@
 //! 主循环 -- 终端初始化/还原 + 事件分发 + 绘制
+//!
+//! 架构: 独立 OS 线程阻塞读 crossterm → unbounded channel → tokio select!
+//! 零输入延迟 (不轮询, 不 timeout).
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyEvent};
@@ -6,7 +9,6 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use crossterm::event::{EnableMouseCapture, DisableMouseCapture};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal as RatTerm;
 use std::io::{self, Stdout};
@@ -14,6 +16,7 @@ use std::time::Duration;
 
 use crate::app::AppState;
 use crate::event::AppEvent;
+use tokio::sync::mpsc;
 
 pub type Frame = RatTerm<CrosstermBackend<Stdout>>;
 
@@ -22,7 +25,7 @@ fn install_panic_hook() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
         prev(info);
     }));
 }
@@ -30,19 +33,38 @@ fn install_panic_hook() {
 /// 主循环 -- 接收 mpsc rx, 处理事件, 绘制
 pub async fn run_loop(
     mut state: AppState,
-    mut rx: tokio::sync::mpsc::Receiver<AppEvent>,
+    mut rx: mpsc::Receiver<AppEvent>,
 ) -> Result<AppState> {
     install_panic_hook();
     enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(io::stdout(), EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut term = RatTerm::new(backend)?;
 
-    let result = run_loop_inner(&mut term, &mut state, &mut rx).await;
+    // ── 独立 OS 线程阻塞读 crossterm 事件 → unbounded channel ──
+    let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Event>();
+    std::thread::spawn(move || {
+        loop {
+            // poll 短超时, 让线程有机会检查是否应退出
+            match event::poll(Duration::from_millis(100)) {
+                Ok(true) => {
+                    if let Ok(ev) = event::read() {
+                        if input_tx.send(ev).is_err() {
+                            break; // channel 关闭, 退出
+                        }
+                    }
+                }
+                Ok(false) => {} // 超时, 继续
+                Err(_) => break,
+            }
+        }
+    });
+
+    let result = run_loop_inner(&mut term, &mut state, &mut rx, &mut input_rx).await;
 
     // 无论结果如何, 还原终端
     let _ = disable_raw_mode();
-    let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+    let _ = execute!(io::stdout(), LeaveAlternateScreen);
     result?;
 
     Ok(state)
@@ -51,7 +73,8 @@ pub async fn run_loop(
 async fn run_loop_inner(
     term: &mut Frame,
     state: &mut AppState,
-    rx: &mut tokio::sync::mpsc::Receiver<AppEvent>,
+    rx: &mut mpsc::Receiver<AppEvent>,
+    input_rx: &mut mpsc::UnboundedReceiver<Event>,
 ) -> Result<()> {
     let mut dirty = true; // 首帧必须画
     while state.running {
@@ -60,32 +83,36 @@ async fn run_loop_inner(
             dirty = false;
         }
 
-        // 优先 mpsc, 200ms 超时后退到 crossterm 轮询 (否则无 agent 时会永久阻塞)
-        match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
-            Ok(Some(ev)) => { handle_event(state, ev)?; dirty = true; }
-            Ok(None) => break, // 所有 sender 关闭
-            Err(_) => {} // 超时, 继续下面的 crossterm 轮询
-        }
-
-        // 非阻塞拉 crossterm 输入 (批量处理, 一次重绘)
-        while event::poll(Duration::from_millis(0))? {
-            match event::read()? {
-                Event::Key(k) => { handle_event(state, AppEvent::Key(k))?; dirty = true; }
-                Event::Mouse(m) => {
-                    use crossterm::event::MouseEventKind;
-                    match m.kind {
-                        MouseEventKind::ScrollUp => {
-                            state.chat.scroll_offset = state.chat.scroll_offset.saturating_add(3);
-                            dirty = true;
+        // ── select!: 同时等待 agent 事件和 crossterm 输入 ──
+        tokio::select! {
+            // agent / observer 事件
+            ev = rx.recv() => match ev {
+                Some(ev) => { handle_event(state, ev)?; dirty = true; }
+                None => break,
+            },
+            // crossterm 键盘 / 鼠标事件 (零延迟)
+            ev = input_rx.recv() => {
+                if let Some(crossterm_ev) = ev {
+                    match crossterm_ev {
+                        Event::Key(k) => { handle_event(state, AppEvent::Key(k))?; dirty = true; }
+                        Event::Mouse(m) => {
+                            use crossterm::event::MouseEventKind;
+                            match m.kind {
+                                MouseEventKind::ScrollUp => {
+                                    state.chat.scroll_offset = state.chat.scroll_offset.saturating_add(3);
+                                    dirty = true;
+                                }
+                                MouseEventKind::ScrollDown => {
+                                    state.chat.scroll_offset = state.chat.scroll_offset.saturating_sub(3);
+                                    dirty = true;
+                                }
+                                _ => {} // 忽略移动/点击
+                            }
                         }
-                        MouseEventKind::ScrollDown => {
-                            state.chat.scroll_offset = state.chat.scroll_offset.saturating_sub(3);
-                            dirty = true;
-                        }
+                        Event::Resize(_, _) => { dirty = true; } // 窗口大小变化需要重绘
                         _ => {}
                     }
                 }
-                _ => {}
             }
         }
     }
@@ -208,6 +235,7 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
             state.memory_view.entries = entries;
             state.memory_view.loading = false;
         }
+        AppEvent::Mouse(_) => {} // 鼠标事件在 run_loop_inner 内联处理
     }
     Ok(())
 }

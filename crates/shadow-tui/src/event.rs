@@ -1,12 +1,14 @@
-//! 跨线程事件 -- 后台 Agent task → 主线程 UI
+//! 跨线程事件 -- 后台 Agent task / crossterm 输入 → 主线程 UI
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyEvent, MouseEvent};
 use shadow_core::MemoryEntry;
 
 #[derive(Debug, Clone)]
 pub enum AppEvent {
     /// crossterm 键盘事件
     Key(KeyEvent),
+    /// crossterm 鼠标事件 (滚轮等)
+    Mouse(MouseEvent),
     /// 一条 assistant 回复 (完整)
     AgentMessage(String),
     /// 一次工具调用
@@ -20,7 +22,7 @@ pub enum AppEvent {
     AgentDone,
     /// Agent 错误 (provider HTTP / 网络)
     AgentError(String),
-    /// 顶部状态栏更新
+    /// LLM 瞬时状态
     Status(String),
     /// Memory 异步加载完成
     MemoryLoaded(Vec<MemoryEntry>),
