@@ -243,6 +243,14 @@ impl Agent {
                     tool: tool_call.name.clone(),
                     success: result.success,
                     duration_ms: tool_duration_ms,
+                    output_preview: {
+                        let full = if result.success {
+                            result.output.clone()
+                        } else {
+                            result.error.clone().unwrap_or_default()
+                        };
+                        chars_preview(&full, 200)
+                    },
                 });
 
                 // 将工具结果添加到消息
@@ -461,4 +469,13 @@ impl AgentBuilder {
             tool_event_callback,
         })
     }
+}
+
+/// 截断字符串到最多 n 个字符 (按 char, 非 byte), 超出加 "..."
+fn chars_preview(s: &str, n: usize) -> String {
+    let mut out: String = s.chars().take(n).collect();
+    if s.chars().count() > n {
+        out.push_str("...");
+    }
+    out
 }

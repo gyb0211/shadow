@@ -393,12 +393,12 @@ impl shadow_core::Observer for LogObserver {
                     format!("LLM 响应: model={}, duration={}ms, tokens={}", model, duration_ms, tokens)
                 );
             }
-            ObserverEvent::ToolCall { tool, success, duration_ms } => {
+            ObserverEvent::ToolCall { tool, success, duration_ms, output_preview } => {
                 let outcome = if *success { "成功" } else { "失败" };
                 shadow_log::record!(
                     INFO,
                     Action::Invoke,
-                    format!("工具调用: {} ({}, {}ms)", tool, outcome, duration_ms)
+                    format!("工具调用: {} ({}, {}ms)\n{}", tool, outcome, duration_ms, output_preview)
                 );
             }
             ObserverEvent::SessionStart { session_id } => {

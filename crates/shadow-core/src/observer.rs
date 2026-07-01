@@ -15,7 +15,7 @@ pub enum ObserverEvent {
     /// LLM 响应完成
     LlmResponse { model: String, duration_ms: u64, tokens: u64 },
     /// 工具调用
-    ToolCall { tool: String, success: bool, duration_ms: u64 },
+    ToolCall { tool: String, success: bool, duration_ms: u64, output_preview: String },
     /// 会话开始
     SessionStart { session_id: String },
     /// 会话结束
@@ -57,5 +57,25 @@ impl Observer for NoopObserver {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_call_event_carries_output_preview() {
+        let ev = ObserverEvent::ToolCall {
+            tool: "shell".to_string(),
+            success: true,
+            duration_ms: 42,
+            output_preview: "hello\nworld".to_string(),
+        };
+        if let ObserverEvent::ToolCall { output_preview, .. } = ev {
+            assert_eq!(output_preview, "hello\nworld");
+        } else {
+            panic!("wrong variant");
+        }
     }
 }
