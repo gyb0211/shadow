@@ -350,9 +350,14 @@ async fn chat_via_agent(
     agent.load_history().await?;
 
     if let Some(msg) = message {
-        // 单次对话
-        let response = agent.chat(&msg).await?;
-        println!("{response}");
+        // 单次对话 (流式输出)
+        let on_delta: std::sync::Arc<dyn shadow_runtime::agent::StreamDeltaCallback> =
+            std::sync::Arc::new(|delta: &str| {
+                print!("{delta}");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+            });
+        let _ = agent.chat_with_stream(&msg, Some(on_delta)).await?;
+        println!();
     } else {
         // 交互式对话
         println!("影子 v{} [完整版] -- 输入 /quit 退出", env!("CARGO_PKG_VERSION"));
@@ -380,9 +385,16 @@ async fn chat_via_agent(
                 continue;
             }
 
-            match agent.chat(trimmed).await {
-                Ok(response) => println!("\n{response}\n"),
-                Err(e) => eprintln!("[错误] {e}"),
+            // 流式输出: 逐字打印 LLM 回复
+            println!(); // 前置换行
+            let on_delta: std::sync::Arc<dyn shadow_runtime::agent::StreamDeltaCallback> =
+                std::sync::Arc::new(|delta: &str| {
+                    print!("{delta}");
+                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                });
+            match agent.chat_with_stream(trimmed, Some(on_delta)).await {
+                Ok(_) => println!("\n"),
+                Err(e) => eprintln!("\n[错误] {e}"),
             }
         }
     }

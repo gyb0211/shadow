@@ -15,6 +15,7 @@ use crossterm::event::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal as RatTerm;
 use std::io::{self, Stdout};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::app::AppState;
@@ -196,13 +197,46 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
     match ev {
         AppEvent::Key(k) => return handle_key(state, k),
         AppEvent::Status(s) => state.llm_status = Some(s),
+        AppEvent::AgentStreamDelta(delta) => {
+            // 流式增量: 追加到最后一条正在生成的 assistant 消息, 或创建新消息
+            let need_new = match state.chat.messages.last() {
+                Some(last) => last.role != "assistant" || !state.chat.agent_busy,
+                None => true,
+            };
+            if need_new {
+                state.chat.messages.push(shadow_core::ChatMessage {
+                    role: "assistant".into(),
+                    content: delta,
+                    tool_call_id: None,
+                    tool_calls: vec![], reasoning_content: None,
+                });
+            } else if let Some(last) = state.chat.messages.last_mut() {
+                last.content.push_str(&delta);
+            }
+            // 钉在底部时跟随最新消息
+            if state.chat.pinned_to_bottom {
+                state.chat.scroll_offset = 0;
+            }
+        }
         AppEvent::AgentMessage(msg) => {
-            state.chat.messages.push(shadow_core::ChatMessage {
-                role: "assistant".into(),
-                content: msg,
-                tool_call_id: None,
-                tool_calls: vec![], reasoning_content: None,
-            });
+            // 完整回复: 如果最后一条是正在生成的 assistant 消息, 替换内容
+            // (strip_think_blocks 可能修改了内容, 使其与增量累积的不同)
+            let replace_last = match state.chat.messages.last() {
+                Some(last) => last.role == "assistant" && state.chat.agent_busy,
+                None => false,
+            };
+            if replace_last {
+                if let Some(last) = state.chat.messages.last_mut() {
+                    last.content = msg;
+                }
+            } else {
+                state.chat.messages.push(shadow_core::ChatMessage {
+                    role: "assistant".into(),
+                    content: msg,
+                    tool_call_id: None,
+                    tool_calls: vec![], reasoning_content: None,
+                });
+            }
             // 只有钉在底部时才跟随最新消息 (参考 ZeroClaw pinned_to_bottom)
             if state.chat.pinned_to_bottom {
                 state.chat.scroll_offset = 0;
@@ -341,11 +375,19 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
                         state.chat.pinned_to_bottom = true;
                         state.chat.history_browse = None;
                         state.chat.history_draft.clear();
-                        // spawn 后台 task 调用 agent.chat(); UiObserver 已在 agent 内部,
-                        // 会通过 mpsc 推送 Status/ToolCall/Error 事件, 完成后再推 AgentMessage + AgentDone
+                        // spawn 后台 task 调用 agent.chat_with_stream(); UiObserver 已在 agent 内部,
+                        // 会通过 mpsc 推送 Status/ToolCall/Error 事件, 流式 delta 通过回调推送,
+                        // 完成后再推 AgentMessage + AgentDone
                         if let (Some(agent), Some(tx)) = (state.agent.clone(), state.tx.clone()) {
                             tokio::spawn(async move {
-                                match agent.chat(&text).await {
+                                // 流式回调: 每个 delta 通过 try_send 非阻塞发送, 避免阻塞 LLM stream
+                                let tx_for_delta = tx.clone();
+                                let on_delta: Arc<dyn shadow_runtime::agent::StreamDeltaCallback> =
+                                    Arc::new(move |delta: &str| {
+                                        let _ = tx_for_delta
+                                            .try_send(AppEvent::AgentStreamDelta(delta.to_string()));
+                                    });
+                                match agent.chat_with_stream(&text, Some(on_delta)).await {
                                     Ok(resp) => {
                                         let _ = tx.send(AppEvent::AgentMessage(resp)).await;
                                     }

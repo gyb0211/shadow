@@ -4,6 +4,8 @@ use crate::attribution::Attributable;
 use crate::attribution::Role;
 use anyhow::Result;
 use async_trait::async_trait;
+use futures::stream::BoxStream;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 /// 聊天消息
@@ -60,6 +62,30 @@ pub struct TokenUsage {
     pub total_tokens: u64,
 }
 
+/// 流式聊天块 -- SSE 增量
+///
+/// Provider::chat_stream() 返回 BoxStream<Result<ChatChunk>>,
+/// 调用方逐块消费, 实现逐字/逐词显示.
+#[derive(Debug, Clone)]
+pub enum ChatChunk {
+    /// 文本增量 (assistant 回复的逐字/逐词片段)
+    ContentDelta(String),
+    /// 工具调用增量 (arguments 可能分多次到达, 按 index 分组累积)
+    ToolCallDelta {
+        index: usize,
+        id: Option<String>,
+        name: Option<String>,
+        arguments_fragment: String,
+    },
+    /// 流结束 -- 包含完整累积结果
+    Done {
+        content: String,
+        tool_calls: Vec<ToolCall>,
+        usage: TokenUsage,
+        reasoning_content: Option<String>,
+    },
+}
+
 /// 模型提供商 trait
 ///
 /// 每个 LLM 后端实现此 trait (OpenAI/Anthropic/Ollama...)
@@ -72,6 +98,27 @@ pub trait Provider: Attributable {
 
     /// 同步聊天
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse>;
+
+    /// 流式聊天 -- 返回 BoxStream, 逐块推送 ChatChunk
+    ///
+    /// 默认实现: 调用 chat() 获取完整响应, 包装成单个 Done chunk.
+    /// 支持 SSE 的 provider 应覆写此方法.
+    async fn chat_stream(
+        &self,
+        request: ChatRequest,
+    ) -> Result<BoxStream<'static, Result<ChatChunk>>> {
+        let response = self.chat(request).await?;
+        let stream = futures::stream::once(async move {
+            Ok(ChatChunk::Done {
+                content: response.content,
+                tool_calls: response.tool_calls,
+                usage: response.usage,
+                reasoning_content: response.reasoning_content,
+            })
+        })
+        .boxed();
+        Ok(stream)
+    }
 
     /// 列出可用模型
     async fn list_models(&self) -> Result<Vec<String>>;

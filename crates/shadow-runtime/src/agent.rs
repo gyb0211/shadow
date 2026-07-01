@@ -5,10 +5,13 @@
 //! - Shadow: ~10 字段, 目标 ~300 行
 
 use shadow_core::{
-    Attributable, AutonomyLevel, ChatMessage, ChatRequest, Memory, Provider,
-    Observer, ObserverEvent, Role, Session, SessionStore, Tool, ToolCall, ToolResult,
+    Attributable, AutonomyLevel, ChatChunk, ChatMessage, ChatRequest, ChatResponse, Memory,
+    Provider, Observer, ObserverEvent, Role, Session, SessionStore, TokenUsage, Tool, ToolCall,
+    ToolResult,
 };
 use anyhow::Result;
+use futures::stream::BoxStream;
+use futures::StreamExt;
 use parking_lot::Mutex;
 use shadow_log::Action;
 use std::sync::Arc;
@@ -31,6 +34,14 @@ pub trait ToolEventCallback: Fn(&str, &str) + Send + Sync {}
 
 // 为所有满足 Fn(&str, &str) + Send + Sync 的类型自动实现 ToolEventCallback
 impl<T> ToolEventCallback for T where T: Fn(&str, &str) + Send + Sync {}
+
+/// 流式文本增量回调 trait -- TUI/CLI 通过此回调接收逐字增量
+///
+/// 参数: 文本增量片段 (delta)
+pub trait StreamDeltaCallback: Fn(&str) + Send + Sync {}
+
+// 为所有满足 Fn(&str) + Send + Sync 的类型自动实现 StreamDeltaCallback
+impl<T> StreamDeltaCallback for T where T: Fn(&str) + Send + Sync {}
 
 /// Agent 配置
 #[derive(Debug, Clone)]
@@ -113,15 +124,26 @@ impl Agent {
         }
     }
 
-    /// 单轮对话 (含工具调用循环)
+    /// 单轮对话 (含工具调用循环) -- 不带流式回调
+    ///
+    /// 等价于 `chat_with_stream(user_message, None)`
+    pub async fn chat(&self, user_message: &str) -> Result<String> {
+        self.chat_with_stream(user_message, None).await
+    }
+
+    /// 单轮对话 (含工具调用循环) -- 带流式增量回调
     ///
     /// 流程:
     /// 1. 截断过长的历史 (上下文窗口管理)
     /// 2. 构建消息 (system + history + user)
-    /// 3. 调用 LLM
+    /// 3. 调用 LLM (流式 -- 每个 ContentDelta 调用 on_delta 回调)
     /// 4. 若响应包含 tool_calls, 执行工具, 将结果追加到消息, 回到步骤 3
     /// 5. 若无 tool_calls, 保存历史并返回最终内容
-    pub async fn chat(&self, user_message: &str) -> Result<String> {
+    pub async fn chat_with_stream(
+        &self,
+        user_message: &str,
+        on_delta: Option<Arc<dyn StreamDeltaCallback>>,
+    ) -> Result<String> {
         // 记录会话开始
         shadow_log::record!(INFO, Action::Start, "agent chat 开始");
 
@@ -202,9 +224,10 @@ impl Agent {
                 tools: self.tools.iter().map(|t| t.spec()).collect(),
             };
 
-            // 调用 provider
+            // 调用 provider (流式)
             let start = std::time::Instant::now();
-            let response = self.provider.chat(request).await?;
+            let stream = self.provider.chat_stream(request).await?;
+            let response = consume_stream(stream, on_delta.as_ref()).await?;
             let duration_ms = start.elapsed().as_millis() as u64;
 
             // 记录 LLM 响应
@@ -622,6 +645,52 @@ fn strip_think_blocks(content: &str) -> String {
         }
     }
     result.trim().to_string()
+}
+
+/// 消费流式 ChatChunk 流, 聚合为完整 ChatResponse
+///
+/// 对每个 ContentDelta 调用 on_delta 回调 (如果提供),
+/// 从 Done chunk 获取完整累积结果.
+async fn consume_stream(
+    mut stream: BoxStream<'static, Result<ChatChunk>>,
+    on_delta: Option<&Arc<dyn StreamDeltaCallback>>,
+) -> Result<ChatResponse> {
+    let mut content = String::new();
+    let mut tool_calls = Vec::new();
+    let mut usage = TokenUsage::default();
+    let mut reasoning_content = None;
+
+    while let Some(chunk_result) = stream.next().await {
+        match chunk_result? {
+            ChatChunk::ContentDelta(delta) => {
+                if let Some(cb) = on_delta {
+                    cb(&delta);
+                }
+                content.push_str(&delta);
+            }
+            ChatChunk::ToolCallDelta { .. } => {
+                // 工具调用增量已在 provider 内部累积, Done chunk 中包含完整结果
+            }
+            ChatChunk::Done {
+                content: done_content,
+                tool_calls: done_tool_calls,
+                usage: done_usage,
+                reasoning_content: done_reasoning,
+            } => {
+                content = done_content;
+                tool_calls = done_tool_calls;
+                usage = done_usage;
+                reasoning_content = done_reasoning;
+            }
+        }
+    }
+
+    Ok(ChatResponse {
+        content,
+        tool_calls,
+        usage,
+        reasoning_content,
+    })
 }
 
 #[cfg(test)]

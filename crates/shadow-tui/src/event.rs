@@ -9,6 +9,8 @@ pub enum AppEvent {
     Key(KeyEvent),
     /// crossterm 鼠标事件 (滚轮等)
     Mouse(MouseEvent),
+    /// 流式文本增量 (逐字/逐词片段)
+    AgentStreamDelta(String),
     /// 一条 assistant 回复 (完整)
     AgentMessage(String),
     /// 一次工具调用
