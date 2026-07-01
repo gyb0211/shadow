@@ -8,6 +8,7 @@ members = [
     "crates/shadow-runtime",   # 运行时: agent loop
     "crates/shadow-providers", # LLM provider 实现
     "crates/shadow-memory",    # 记忆后端实现
+    "crates/shadow-tui",       # TUI dashboard
 ]
 
 [workspace.package]
@@ -23,6 +24,7 @@ shadow-log = { path = "crates/shadow-log" }
 shadow-runtime = { path = "crates/shadow-runtime" }
 shadow-providers = { path = "crates/shadow-providers" }
 shadow-memory = { path = "crates/shadow-memory" }
+shadow-tui = { path = "crates/shadow-tui" }
 
 # 核心依赖
 anyhow = "1.0"
@@ -59,6 +61,9 @@ shadow-memory.workspace = true
 # ── Runtime 层 (可选, 默认开启) ──
 shadow-runtime = { workspace = true, optional = true }
 
+# ── TUI 层 (可选, 默认开启) ──
+shadow-tui = { workspace = true, optional = true }
+
 # ── 外部依赖 ──
 anyhow.workspace = true
 async-trait.workspace = true
@@ -69,11 +74,14 @@ serde_json.workspace = true
 uuid.workspace = true
 
 [features]
-default = ["runtime"]
+default = ["runtime", "tui"]
 
 # 完整运行时: Agent loop + AgentBuilder + Observer
 # 关闭此 feature 构建 kernel-only 二进制 (~最小内核)
-runtime = ["dep:shadow-runtime"]
+runtime = ["dep:shadow-runtime", "tui"]
+
+# TUI dashboard
+tui = ["dep:shadow-tui"]
 
 [profile.release]
 opt-level = "z"

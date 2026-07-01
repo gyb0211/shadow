@@ -1,0 +1,22 @@
+[package]
+name = "shadow-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "影子 TUI -- ratatui dashboard (chat + config + memory)"
+
+[dependencies]
+shadow-core.workspace = true
+shadow-runtime.workspace = true
+shadow-config.workspace = true
+shadow-log.workspace = true
+ratatui = "0.28"
+crossterm = "0.28"
+tokio.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
+fuzzy-matcher = "0.3"
+
+[dev-dependencies]
+tempfile.workspace = true
