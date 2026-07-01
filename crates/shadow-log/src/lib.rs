@@ -26,10 +26,19 @@ pub mod __private {
 }
 
 /// 安装全局 subscriber (终端 + LogCaptureLayer)
+///
+/// TUI 模式下 stderr 被 AlternateScreen 隐藏, 但 JSONL 文件仍写入.
+/// LogCaptureLayer 使用独立过滤器 (shadow_log_event=info),
+/// 不受全局 verbose/warn 级别限制, 确保 record! 事件始终持久化.
 pub fn install_subscriber(verbose: bool) {
     use tracing_subscriber::prelude::*;
 
-    let capture = LogCaptureLayer;
+    let capture = LogCaptureLayer.with_filter(
+        tracing_subscriber::filter::Targets::new()
+            .with_target("shadow_log_event", tracing::Level::INFO)
+            .with_target("shadow_log_attribution", tracing::Level::INFO),
+    );
+
     let fmt = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_target(false)
