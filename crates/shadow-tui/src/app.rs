@@ -20,7 +20,7 @@ impl View {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ChatState {
     pub messages: Vec<ChatMessage>,
     pub input: String,
@@ -32,6 +32,47 @@ pub struct ChatState {
     pub history_draft: String,
     pub scroll_offset: usize,
     pub agent_busy: bool,
+    /// 是否钉在底部 (跟随最新消息). 参考 ZeroClaw pinned_to_bottom.
+    /// 滚动向上时设为 false, 新消息到来时只有 pinned_to_bottom=true 才自动跳底.
+    pub pinned_to_bottom: bool,
+}
+
+impl Default for ChatState {
+    fn default() -> Self {
+        Self {
+            messages: Vec::new(),
+            input: String::new(),
+            cursor: 0,
+            input_history: Vec::new(),
+            history_browse: None,
+            history_draft: String::new(),
+            scroll_offset: 0,
+            agent_busy: false,
+            pinned_to_bottom: true, // 默认钉在底部, 跟随最新消息
+        }
+    }
+}
+
+impl ChatState {
+    /// 计算输入框显示行数: 1 行起步, 按换行符数增长, 上限 3
+    pub fn input_height(&self) -> u16 {
+        let lines = self.input.split('\n').count();
+        lines.min(3).max(1) as u16
+    }
+
+    /// 向上滚动 (远离底部). 参考 ZeroClaw scroll_up(): pinned_to_bottom = false
+    pub fn scroll_up(&mut self, lines: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_add(lines);
+        self.pinned_to_bottom = false;
+    }
+
+    /// 向下滚动 (靠近底部). 参考 ZeroClaw scroll_down(): 到底时 pinned_to_bottom = true
+    pub fn scroll_down(&mut self, lines: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+        if self.scroll_offset == 0 {
+            self.pinned_to_bottom = true;
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -152,9 +193,9 @@ impl AppState {
             ));
         }
 
-        // ── 第 2 行: 提示 / 错误 ──
-        data.hint = "↵ send · ⌥↵ newline · ↑↓ history · ⌘K palette · scroll: mouse wheel · ^L clear"
-            .to_string();
+        data.hint =
+            "↵ send · ⌥↵ newline · ↑↓ history · PgUp/PgDn scroll · ⌘K palette · ^L clear"
+                .to_string();
         data.error = self.last_error.clone();
 
         data
@@ -309,5 +350,59 @@ mod tests {
         let data = s.status_data();
         assert_eq!(data.error.as_deref(), Some("broken"));
         assert!(!data.hint.is_empty());
+    }
+
+    #[test]
+    fn input_height_single_line() {
+        let s = ChatState::default();
+        assert_eq!(s.input_height(), 1);
+    }
+
+    #[test]
+    fn input_height_empty_is_one() {
+        let s = ChatState::default();
+        assert_eq!(s.input_height(), 1);
+    }
+
+    #[test]
+    fn input_height_multiline_caps_at_three() {
+        let mut s = ChatState::default();
+        s.input = "line1\nline2\nline3\nline4\nline5".to_string();
+        assert_eq!(s.input_height(), 3);
+    }
+
+    #[test]
+    fn input_height_two_lines() {
+        let mut s = ChatState::default();
+        s.input = "hello\nworld".to_string();
+        assert_eq!(s.input_height(), 2);
+    }
+
+    #[test]
+    fn scroll_up_sets_unpinned() {
+        let mut s = ChatState::default();
+        assert!(s.pinned_to_bottom); // 默认钉在底部
+        s.scroll_up(5);
+        assert!(!s.pinned_to_bottom);
+        assert_eq!(s.scroll_offset, 5);
+    }
+
+    #[test]
+    fn scroll_down_to_bottom_sets_pinned() {
+        let mut s = ChatState::default();
+        s.scroll_up(10);
+        assert!(!s.pinned_to_bottom);
+        s.scroll_down(10); // 滚回底部
+        assert!(s.pinned_to_bottom);
+        assert_eq!(s.scroll_offset, 0);
+    }
+
+    #[test]
+    fn scroll_down_partial_stays_unpinned() {
+        let mut s = ChatState::default();
+        s.scroll_up(10);
+        s.scroll_down(3); // 只滚 3 行, 还没到底
+        assert!(!s.pinned_to_bottom);
+        assert_eq!(s.scroll_offset, 7);
     }
 }

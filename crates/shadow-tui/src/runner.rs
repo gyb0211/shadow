@@ -98,14 +98,14 @@ async fn run_loop_inner(
                         Event::Mouse(m) => {
                             use crossterm::event::MouseEventKind;
                             match m.kind {
-                                MouseEventKind::ScrollUp => {
-                                    state.chat.scroll_offset = state.chat.scroll_offset.saturating_add(3);
-                                    dirty = true;
-                                }
-                                MouseEventKind::ScrollDown => {
-                                    state.chat.scroll_offset = state.chat.scroll_offset.saturating_sub(3);
-                                    dirty = true;
-                                }
+                            MouseEventKind::ScrollUp => {
+                                state.chat.scroll_up(3);
+                                dirty = true;
+                            }
+                            MouseEventKind::ScrollDown => {
+                                state.chat.scroll_down(3);
+                                dirty = true;
+                            }
                                 _ => {} // 忽略移动/点击
                             }
                         }
@@ -136,17 +136,19 @@ fn draw(term: &mut Frame, state: &AppState) -> Result<()> {
             area,
         );
 
-        // 三段布局: main(可变高) + input(固定高) + status(固定高 2 行)
+        // 三段布局: main(可变高, 滚动) + input(动态高 1-3 + 顶边框 1) + status(固定 2)
+        // 参考 ZeroClaw input_bar.rs: 动态计算 input_height = visible_rows + border
+        let input_content_h = state.chat.input_height(); // 1-3
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(1),    // main
-                Constraint::Length(5), // input (多行输入预留 + 上下边界线)
-                Constraint::Length(2), // status (两行)
+                Constraint::Min(1),                  // main: 消息列表, 占满剩余空间
+                Constraint::Length(input_content_h + 1), // input: 内容行 + 顶边框 1 行
+                Constraint::Length(2),               // status: 固定 2 行
             ])
             .split(area);
 
-        // ── main: 视图内容 ──
+        // ── main: 视图内容 (可滚动) ──
         match state.view {
             crate::app::View::Chat => {
                 f.render_widget(ChatView::new(&state.chat), chunks[0]);
@@ -159,9 +161,9 @@ fn draw(term: &mut Frame, state: &AppState) -> Result<()> {
             }
         }
 
-        // ── input: 带上下边界线的输入框 ──
+        // ── input: 顶部分隔线 + 输入框 (无底边框, 紧接 status) ──
         let input_block = Block::default()
-            .borders(Borders::TOP | Borders::BOTTOM)
+            .borders(Borders::TOP)
             .border_style(Style::default().fg(theme::dim()))
             .style(Style::default().bg(theme::bg()));
         let input_inner = input_block.inner(chunks[1]);
@@ -198,7 +200,10 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
                 tool_call_id: None,
                 tool_calls: vec![], reasoning_content: None,
             });
-            state.chat.scroll_offset = 0;
+            // 只有钉在底部时才跟随最新消息 (参考 ZeroClaw pinned_to_bottom)
+            if state.chat.pinned_to_bottom {
+                state.chat.scroll_offset = 0;
+            }
         }
         AppEvent::AgentToolCall {
             name,
@@ -213,7 +218,9 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
                 tool_call_id: None,
                 tool_calls: vec![], reasoning_content: None,
             });
-            state.chat.scroll_offset = 0;
+            if state.chat.pinned_to_bottom {
+                state.chat.scroll_offset = 0;
+            }
             if !success {
                 state.last_error = Some(format!("tool {name} failed"));
             }
@@ -297,9 +304,18 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
         Char('l') if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
             state.chat.messages.clear();
             state.chat.scroll_offset = 0;
+            state.chat.pinned_to_bottom = true;
             state.last_error = None;
         }
         Esc => { /* 退出当前 view? 暂不处理 */ }
+        PageUp => {
+            // 向上滚动 10 行 (参考 ZeroClaw scroll_up)
+            state.chat.scroll_up(10);
+        }
+        PageDown => {
+            // 向下滚动 10 行 (参考 ZeroClaw scroll_down)
+            state.chat.scroll_down(10);
+        }
         Enter => {
             // Alt+Enter = 插入换行 (多行输入)
             if k.modifiers.contains(crossterm::event::KeyModifiers::ALT) {
@@ -319,6 +335,7 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
                         state.chat.cursor = 0;
                         state.chat.agent_busy = true;
                         state.chat.scroll_offset = 0;
+                        state.chat.pinned_to_bottom = true;
                         state.chat.history_browse = None;
                         state.chat.history_draft.clear();
                         // spawn 后台 task 调用 agent.chat(); UiObserver 已在 agent 内部,
