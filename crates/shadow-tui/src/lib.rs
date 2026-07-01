@@ -1,6 +1,7 @@
 //! shadow TUI -- ratatui dashboard
 
 pub mod event;
+pub mod terminal;
 pub mod theme;
 
 pub fn run_tui(_config: shadow_config::Config) -> anyhow::Result<()> {
