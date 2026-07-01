@@ -53,28 +53,34 @@ async fn run_loop_inner(
     state: &mut AppState,
     rx: &mut tokio::sync::mpsc::Receiver<AppEvent>,
 ) -> Result<()> {
+    let mut dirty = true; // 首帧必须画
     while state.running {
-        draw(term, state)?;
+        if dirty {
+            draw(term, state)?;
+            dirty = false;
+        }
 
         // 优先 mpsc, 200ms 超时后退到 crossterm 轮询 (否则无 agent 时会永久阻塞)
         match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
-            Ok(Some(ev)) => handle_event(state, ev)?,
+            Ok(Some(ev)) => { handle_event(state, ev)?; dirty = true; }
             Ok(None) => break, // 所有 sender 关闭
             Err(_) => {} // 超时, 继续下面的 crossterm 轮询
         }
 
-        // 非阻塞拉 crossterm 输入 (避免阻塞 mpsc)
+        // 非阻塞拉 crossterm 输入 (批量处理, 一次重绘)
         while event::poll(Duration::from_millis(0))? {
             match event::read()? {
-                Event::Key(k) => handle_event(state, AppEvent::Key(k))?,
+                Event::Key(k) => { handle_event(state, AppEvent::Key(k))?; dirty = true; }
                 Event::Mouse(m) => {
                     use crossterm::event::MouseEventKind;
                     match m.kind {
                         MouseEventKind::ScrollUp => {
                             state.chat.scroll_offset = state.chat.scroll_offset.saturating_add(3);
+                            dirty = true;
                         }
                         MouseEventKind::ScrollDown => {
                             state.chat.scroll_offset = state.chat.scroll_offset.saturating_sub(3);
+                            dirty = true;
                         }
                         _ => {}
                     }
