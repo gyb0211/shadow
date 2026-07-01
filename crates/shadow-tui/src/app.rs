@@ -14,6 +14,10 @@ pub struct ChatState {
     pub input: String,
     pub cursor: usize,
     pub input_history: Vec<String>,
+    /// 浏览历史时的索引 (None = 不在浏览模式)
+    pub history_browse: Option<usize>,
+    /// 浏览历史前暂存的草稿
+    pub history_draft: String,
     pub scroll_offset: usize,
     pub agent_busy: bool,
 }

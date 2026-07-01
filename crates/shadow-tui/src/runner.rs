@@ -262,6 +262,8 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
                         state.chat.cursor = 0;
                         state.chat.agent_busy = true;
                         state.chat.scroll_offset = 0;
+                        state.chat.history_browse = None;
+                        state.chat.history_draft.clear();
                         // spawn 后台 task 调用 agent.chat(); UiObserver 已在 agent 内部,
                         // 会通过 mpsc 推送 Status/ToolCall/Error 事件, 完成后再推 AgentMessage + AgentDone
                         if let (Some(agent), Some(tx)) = (state.agent.clone(), state.tx.clone()) {
@@ -299,6 +301,43 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
         Right => {
             let max = state.chat.input.chars().count();
             state.chat.cursor = (state.chat.cursor + 1).min(max);
+        }
+        Up => {
+            let hist = &state.chat.input_history;
+            if !hist.is_empty() {
+                match state.chat.history_browse {
+                    None => {
+                        state.chat.history_draft = state.chat.input.clone();
+                        state.chat.history_browse = Some(hist.len() - 1);
+                    }
+                    Some(0) => {} // 已在最旧
+                    Some(idx) => {
+                        state.chat.history_browse = Some(idx - 1);
+                    }
+                }
+                if let Some(idx) = state.chat.history_browse {
+                    state.chat.input = state.chat.input_history[idx].clone();
+                    state.chat.cursor = state.chat.input.chars().count();
+                }
+            }
+        }
+        Down => {
+            let hist_len = state.chat.input_history.len();
+            match state.chat.history_browse {
+                None => {} // 不在浏览模式
+                Some(idx) if idx + 1 >= hist_len => {
+                    // 回到草稿
+                    state.chat.input = state.chat.history_draft.clone();
+                    state.chat.cursor = state.chat.input.chars().count();
+                    state.chat.history_browse = None;
+                    state.chat.history_draft.clear();
+                }
+                Some(idx) => {
+                    state.chat.history_browse = Some(idx + 1);
+                    state.chat.input = state.chat.input_history[idx + 1].clone();
+                    state.chat.cursor = state.chat.input.chars().count();
+                }
+            }
         }
         Home => { state.chat.cursor = 0; }
         End => { state.chat.cursor = state.chat.input.chars().count(); }
@@ -412,5 +451,39 @@ mod tests {
         handle_key(&mut s, key(KeyCode::Char('b'), KeyModifiers::empty())).unwrap();
         assert_eq!(s.chat.input, "abc");
         assert_eq!(s.chat.cursor, 2);
+    }
+
+    #[test]
+    fn up_arrow_recalls_last_input() {
+        let mut s = AppState::new();
+        s.chat.input_history = vec!["hello".into(), "world".into()];
+        s.chat.input = "draft".into();
+        handle_key(&mut s, key(KeyCode::Up, KeyModifiers::empty())).unwrap();
+        assert_eq!(s.chat.input, "world"); // 最后一条
+        assert_eq!(s.chat.history_browse, Some(1));
+        assert_eq!(s.chat.history_draft, "draft");
+    }
+
+    #[test]
+    fn up_again_goes_older() {
+        let mut s = AppState::new();
+        s.chat.input_history = vec!["hello".into(), "world".into()];
+        s.chat.history_browse = Some(1);
+        s.chat.input = "world".into();
+        handle_key(&mut s, key(KeyCode::Up, KeyModifiers::empty())).unwrap();
+        assert_eq!(s.chat.input, "hello");
+        assert_eq!(s.chat.history_browse, Some(0));
+    }
+
+    #[test]
+    fn down_arrow_restores_draft() {
+        let mut s = AppState::new();
+        s.chat.input_history = vec!["hello".into()];
+        s.chat.history_browse = Some(0);
+        s.chat.history_draft = "my draft".into();
+        s.chat.input = "hello".into();
+        handle_key(&mut s, key(KeyCode::Down, KeyModifiers::empty())).unwrap();
+        assert_eq!(s.chat.input, "my draft");
+        assert_eq!(s.chat.history_browse, None);
     }
 }
