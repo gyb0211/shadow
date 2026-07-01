@@ -6,7 +6,7 @@
 
 use shadow_core::{
     Attributable, AutonomyLevel, ChatMessage, ChatRequest, Memory, Provider,
-    Observer, ObserverEvent, Role, Tool, ToolCall, ToolResult,
+    Observer, ObserverEvent, Role, Session, SessionStore, Tool, ToolCall, ToolResult,
 };
 use anyhow::Result;
 use parking_lot::Mutex;
@@ -76,6 +76,10 @@ pub struct Agent {
     pub history: Mutex<Vec<ChatMessage>>,
     /// 工具事件回调 (可选) -- CLI 通过此回调接收工具执行通知
     pub tool_event_callback: Option<Arc<dyn ToolEventCallback>>,
+    /// 会话存储 (可选) -- 用于持久化对话历史
+    pub session_store: Option<Arc<dyn SessionStore>>,
+    /// 当前会话 ID (内存中维护, 通过 list() 修改时间动态确定)
+    current_session_id: Mutex<Option<String>>,
 }
 
 impl Attributable for Agent {
@@ -304,6 +308,44 @@ impl Agent {
             });
         }
 
+        // 保存到 session store (追加新的 user + assistant 消息)
+        if let Some(store) = &self.session_store {
+            // 获取或生成会话 ID
+            let session_id = {
+                let mut sid = self.current_session_id.lock();
+                if sid.is_none() {
+                    *sid = Some(uuid::Uuid::new_v4().to_string());
+                }
+                sid.clone()
+            };
+            if let Some(id) = session_id {
+                let session = Session {
+                    id,
+                    messages: vec![
+                        ChatMessage {
+                            role: "user".to_string(),
+                            content: user_message.to_string(),
+                            tool_call_id: None,
+                            ..Default::default()
+                        },
+                        ChatMessage {
+                            role: "assistant".to_string(),
+                            content: final_content.clone(),
+                            tool_call_id: None,
+                            ..Default::default()
+                        },
+                    ],
+                };
+                if let Err(e) = store.save(&session).await {
+                    shadow_log::record!(
+                        WARN,
+                        Action::Fail,
+                        format!("保存会话失败: {e}")
+                    );
+                }
+            }
+        }
+
         shadow_log::record!(INFO, Action::Complete, "agent chat 完成");
 
         Ok(final_content)
@@ -392,9 +434,61 @@ impl Agent {
         }
     }
 
-    /// 清空历史
-    pub fn clear_history(&self) {
+    /// 清空历史 (同时删除 session store 中的当前会话)
+    pub async fn clear_history(&self) {
         self.history.lock().clear();
+
+        // 同时清除 session store 中的当前会话
+        if let Some(store) = &self.session_store {
+            let sid = self.current_session_id.lock().take();
+            if let Some(id) = sid {
+                if let Err(e) = store.delete(&id).await {
+                    shadow_log::record!(
+                        WARN,
+                        Action::Fail,
+                        format!("删除会话失败: {e}")
+                    );
+                }
+            }
+        }
+    }
+
+    /// 从 session store 加载最近的会话历史到 self.history
+    ///
+    /// 通过 list() 按修改时间降序排序, 取第一个 (最近修改的) 会话.
+    /// 如果没有已保存的会话, 不做任何操作.
+    pub async fn load_history(&self) -> Result<()> {
+        let Some(store) = &self.session_store else {
+            return Ok(());
+        };
+
+        let sessions = store.list().await?;
+        if sessions.is_empty() {
+            return Ok(());
+        }
+
+        // list() 按修改时间降序排序, 第一个是最新的
+        let latest_id = &sessions[0];
+        if let Some(session) = store.load(latest_id).await? {
+            {
+                let mut history = self.history.lock();
+                history.clear();
+                history.extend(session.messages);
+            }
+            let mut sid = self.current_session_id.lock();
+            *sid = Some(session.id);
+        }
+
+        Ok(())
+    }
+
+    /// 返回当前会话 ID
+    ///
+    /// 会话 ID 在 load_history() 时从最新修改的会话确定,
+    /// 或在首次 chat() 时生成新的 UUID.
+    #[must_use]
+    pub fn current_session_id(&self) -> Option<String> {
+        self.current_session_id.lock().clone()
     }
 }
 
@@ -408,6 +502,7 @@ pub struct AgentBuilder {
     observer: Option<Arc<dyn Observer>>,
     config: Option<AgentConfig>,
     tool_event_callback: Option<Arc<dyn ToolEventCallback>>,
+    session_store: Option<Arc<dyn SessionStore>>,
 }
 
 impl AgentBuilder {
@@ -456,6 +551,12 @@ impl AgentBuilder {
         self
     }
 
+    /// 设置会话存储 (用于持久化对话历史)
+    pub fn session_store(mut self, store: Arc<dyn SessionStore>) -> Self {
+        self.session_store = Some(store);
+        self
+    }
+
     /// 构建 Agent
     pub fn build(self) -> Result<Agent> {
         let config = self.config.unwrap_or_default();
@@ -471,6 +572,7 @@ impl AgentBuilder {
             .unwrap_or_else(|| Arc::new(shadow_core::NoopObserver));
         let tools = self.tools.unwrap_or_default();
         let tool_event_callback = self.tool_event_callback;
+        let session_store = self.session_store;
 
         Ok(Agent {
             alias,
@@ -481,6 +583,8 @@ impl AgentBuilder {
             config,
             history: Mutex::new(Vec::new()),
             tool_event_callback,
+            session_store,
+            current_session_id: Mutex::new(None),
         })
     }
 }

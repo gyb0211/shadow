@@ -28,7 +28,7 @@ pub use channel::{Channel, ChannelMessage, CliChannel, SendMessage};
 pub use memory::{Memory, MemoryEntry, NoneMemory};
 pub use observer::{NoopObserver, Observer, ObserverEvent};
 pub use provider::{ChatMessage, ChatRequest, ChatResponse, Provider, TokenUsage, ToolCall, DefaultProvider};
-pub use session_store::{Session, SessionStore};
+pub use session_store::{JsonlSessionStore, Session, SessionStore};
 pub use tool::{Tool, ToolResult, ToolSpec, ToolAttribution};
 
 /// 代理自主级别

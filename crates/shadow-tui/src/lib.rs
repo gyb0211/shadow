@@ -38,6 +38,15 @@ pub async fn run_tui(config: Config) -> Result<()> {
     state.model_name = config.agent.model.clone();
     match build_agent(&config, observer) {
         Ok(agent) => {
+            // 加载历史会话 (从 session store 恢复)
+            if let Err(e) = agent.load_history().await {
+                eprintln!("加载历史会话失败: {e}");
+            }
+            // 从 agent 历史初始化聊天消息
+            {
+                let history = agent.history.lock();
+                state.chat.messages = history.clone();
+            }
             state.agent = Some(Arc::new(agent));
             state.tx = Some(tx);
         }
@@ -93,6 +102,11 @@ fn build_agent(
 
     let tools = shadow_runtime::tools::default_tools();
 
+    // 创建会话存储 (JSONL 文件持久化)
+    let session_store: Arc<dyn shadow_core::SessionStore> = Arc::new(
+        shadow_core::JsonlSessionStore::new(shadow_config::config_dir()),
+    );
+
     let agent = shadow_runtime::agent::Agent::builder()
         .alias(&agent_config.alias)
         .provider(provider)
@@ -100,6 +114,7 @@ fn build_agent(
         .observer(observer)
         .tools(tools)
         .config(agent_config)
+        .session_store(session_store)
         .build()?;
 
     Ok(agent)

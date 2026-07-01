@@ -1409,6 +1409,8 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
  "tracing",
  "uuid",
 ]
@@ -1480,6 +1482,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

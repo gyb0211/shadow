@@ -330,6 +330,11 @@ async fn chat_via_agent(
     // 注册默认工具集
     let tools = shadow_runtime::tools::default_tools();
 
+    // 创建会话存储 (JSONL 文件持久化)
+    let session_store: std::sync::Arc<dyn shadow_core::SessionStore> = std::sync::Arc::new(
+        shadow_core::JsonlSessionStore::new(shadow_config::config_dir()),
+    );
+
     let agent = shadow_runtime::agent::Agent::builder()
         .alias(&agent_config.alias)
         .provider(provider)
@@ -338,7 +343,11 @@ async fn chat_via_agent(
         .tools(tools)
         .tool_event_callback(callback)
         .config(agent_config)
+        .session_store(session_store)
         .build()?;
+
+    // 加载历史会话 (从 session store 恢复)
+    agent.load_history().await?;
 
     if let Some(msg) = message {
         // 单次对话
@@ -366,7 +375,7 @@ async fn chat_via_agent(
                 break;
             }
             if trimmed == "/clear" {
-                agent.clear_history();
+                agent.clear_history().await;
                 println!("[历史已清空]");
                 continue;
             }
