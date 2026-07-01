@@ -61,13 +61,13 @@ impl<'a> Widget for ConfigView<'a> {
             let y = area.top() + i as u16;
             if y >= area.bottom() { break; }
             let style = if i == self.selected {
-                Style::default().fg(theme::TEXT).bg(theme::TOOL_DIM)
+                Style::default().fg(theme::text()).bg(theme::tool_dim())
             } else {
-                Style::default().fg(theme::DIM)
+                Style::default().fg(theme::dim())
             };
             let line = Line::from(vec![
                 Span::styled(format!("{path:<40} "), style),
-                Span::styled(value.clone(), Style::default().fg(theme::TEXT)),
+                Span::styled(value.clone(), Style::default().fg(theme::text())),
             ]);
             let _ = buf.set_line(area.left(), y, &line, area.width);
         }

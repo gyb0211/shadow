@@ -121,34 +121,34 @@ impl AppState {
         // ── 左侧: 别名 · 视图 · 模型 ──
         data.push_left(StatusSegment::new(
             self.agent_alias.as_str(),
-            theme::ACCENT,
+            theme::accent(),
         ));
         data.push_left(StatusSegment::new(
             self.view.label(),
-            theme::DIM,
+            theme::dim(),
         ));
         if !self.model_name.is_empty() {
             data.push_left(StatusSegment::new(
                 self.model_name.as_str(),
-                theme::TOOL_TEXT,
+                theme::tool_text(),
             ));
         }
         if self.chat.agent_busy {
-            data.push_left(StatusSegment::new("⏳", theme::ASSISTANT));
+            data.push_left(StatusSegment::new("⏳", theme::assistant()));
         }
         if let Some(llm) = &self.llm_status {
-            data.push_left(StatusSegment::new(llm.as_str(), theme::TOOL_TEXT));
+            data.push_left(StatusSegment::new(llm.as_str(), theme::tool_text()));
         }
 
         // ── 右侧: 消息数 · 滚动位置 ──
         data.push_right(StatusSegment::new(
             format!("msg {}", self.chat.messages.len()),
-            theme::DIM,
+            theme::dim(),
         ));
         if self.chat.scroll_offset > 0 {
             data.push_right(StatusSegment::new(
                 format!("↑{}", self.chat.scroll_offset),
-                theme::ACCENT,
+                theme::accent(),
             ));
         }
 

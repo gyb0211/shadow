@@ -80,15 +80,15 @@ impl<'a> Widget for MessageList<'a> {
             }
 
             let (label, color) = match msg.role.as_str() {
-                "user" => ("user ❯ ".to_string(), theme::USER),
-                "assistant" => ("assistant ❯ ".to_string(), theme::ASSISTANT),
-                "tool" => ("tool ❯ ".to_string(), theme::TOOL_TEXT),
-                _ => (msg.role.clone(), theme::DIM),
+                "user" => ("user ❯ ".to_string(), theme::user()),
+                "assistant" => ("assistant ❯ ".to_string(), theme::assistant()),
+                "tool" => ("tool ❯ ".to_string(), theme::tool_text()),
+                _ => (msg.role.clone(), theme::dim()),
             };
 
-            let label_style = Style::default().fg(color).bg(theme::BG);
-            let content_style = Style::default().fg(theme::TEXT).bg(theme::BG);
-            let dim_style = Style::default().fg(theme::DIM).bg(theme::BG);
+            let label_style = Style::default().fg(color).bg(theme::bg());
+            let content_style = Style::default().fg(theme::text()).bg(theme::bg());
+            let dim_style = Style::default().fg(theme::dim()).bg(theme::bg());
 
             let mut content_lines = msg.content.lines();
             match content_lines.next() {
@@ -115,7 +115,7 @@ impl<'a> Widget for MessageList<'a> {
                 };
                 lines.push(Line::from(vec![
                     Span::styled("  ┌─ ", dim_style),
-                    Span::styled(tc.name.clone(), Style::default().fg(theme::TOOL_DIM).bg(theme::BG)),
+                    Span::styled(tc.name.clone(), Style::default().fg(theme::tool_dim()).bg(theme::bg())),
                     Span::styled(format!("  {}", preview), dim_style),
                 ]));
             }
@@ -139,7 +139,7 @@ impl<'a> Widget for MessageList<'a> {
         let visible_lines: Vec<Line<'_>> = display_lines[start..end].to_vec();
 
         Paragraph::new(visible_lines)
-            .style(Style::default().bg(theme::BG))
+            .style(Style::default().bg(theme::bg()))
             .render(area, buf);
 
         // ── 滚动指示条 ──
@@ -157,8 +157,8 @@ impl<'a> Widget for MessageList<'a> {
                 if y < area.bottom() {
                     if let Some(cell) = buf.cell_mut((area.right() - 1, y)) {
                         cell.set_char('┃');
-                        cell.set_fg(theme::DIM);
-                        cell.set_bg(theme::BG);
+                        cell.set_fg(theme::dim());
+                        cell.set_bg(theme::bg());
                     }
                 }
             }
@@ -191,7 +191,7 @@ mod tests {
         let messages = vec![msg("user", "hi")];
         let buf = render_to_buffer(MessageList::new(&messages), 40, 1);
         let cell = buf.cell((0, 0)).unwrap();
-        assert_eq!(cell.fg, theme::USER);
+        assert_eq!(cell.fg, theme::user());
     }
 
     #[test]
@@ -199,7 +199,7 @@ mod tests {
         let messages = vec![msg("assistant", "hello")];
         let buf = render_to_buffer(MessageList::new(&messages), 40, 1);
         let cell = buf.cell((0, 0)).unwrap();
-        assert_eq!(cell.fg, theme::ASSISTANT);
+        assert_eq!(cell.fg, theme::assistant());
     }
 
     #[test]
@@ -207,14 +207,14 @@ mod tests {
         let messages = vec![msg("tool", "/tmp/foo")];
         let buf = render_to_buffer(MessageList::new(&messages), 40, 1);
         let cell = buf.cell((0, 0)).unwrap();
-        assert_eq!(cell.fg, theme::TOOL_TEXT);
+        assert_eq!(cell.fg, theme::tool_text());
     }
 
     #[test]
     fn multiline_content_spans_multiple_rows() {
         let messages = vec![msg("assistant", "第一行\n第二行\n第三行")];
         let buf = render_to_buffer(MessageList::new(&messages), 40, 5);
-        assert_eq!(buf.cell((0, 0)).unwrap().fg, theme::ASSISTANT);
+        assert_eq!(buf.cell((0, 0)).unwrap().fg, theme::assistant());
         assert_eq!(buf.cell((0, 1)).unwrap().symbol(), "第");
         assert_eq!(buf.cell((0, 2)).unwrap().symbol(), "第");
     }
@@ -223,7 +223,7 @@ mod tests {
     fn empty_content_still_renders_label() {
         let messages = vec![msg("user", "")];
         let buf = render_to_buffer(MessageList::new(&messages), 40, 1);
-        assert_eq!(buf.cell((0, 0)).unwrap().fg, theme::USER);
+        assert_eq!(buf.cell((0, 0)).unwrap().fg, theme::user());
     }
 
     #[test]
@@ -257,8 +257,8 @@ mod tests {
     fn gap_between_messages() {
         let messages = vec![msg("user", "a"), msg("assistant", "b")];
         let buf = render_to_buffer(MessageList::new(&messages), 40, 5);
-        assert_eq!(buf.cell((0, 0)).unwrap().fg, theme::USER);
-        assert_eq!(buf.cell((0, 2)).unwrap().fg, theme::ASSISTANT);
+        assert_eq!(buf.cell((0, 0)).unwrap().fg, theme::user());
+        assert_eq!(buf.cell((0, 2)).unwrap().fg, theme::assistant());
     }
 
     #[test]

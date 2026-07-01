@@ -132,7 +132,7 @@ fn draw(term: &mut Frame, state: &AppState) -> Result<()> {
 
         // 统一背景色: 整屏先填 BG
         f.render_widget(
-            Block::default().style(Style::default().bg(theme::BG)),
+            Block::default().style(Style::default().bg(theme::bg())),
             area,
         );
 
@@ -162,8 +162,8 @@ fn draw(term: &mut Frame, state: &AppState) -> Result<()> {
         // ── input: 带上下边界线的输入框 ──
         let input_block = Block::default()
             .borders(Borders::TOP | Borders::BOTTOM)
-            .border_style(Style::default().fg(theme::DIM))
-            .style(Style::default().bg(theme::BG));
+            .border_style(Style::default().fg(theme::dim()))
+            .style(Style::default().bg(theme::bg()));
         let input_inner = input_block.inner(chunks[1]);
         f.render_widget(input_block, chunks[1]);
         f.render_widget(

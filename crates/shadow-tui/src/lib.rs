@@ -27,6 +27,9 @@ use tokio::sync::mpsc;
 /// 3. 把 Arc<Agent> + mpsc::Sender 注入 AppState
 /// 4. 进入主循环
 pub async fn run_tui(config: Config) -> Result<()> {
+    // 初始化主题 -- 检测终端背景色 (Dark/Light)
+    crate::theme::init();
+
     let (tx, rx) = mpsc::channel::<AppEvent>(256);
     let observer = UiObserver::arc(tx.clone());
 

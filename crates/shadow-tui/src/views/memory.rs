@@ -33,12 +33,12 @@ impl<'a> MemoryView<'a> {
 impl<'a> Widget for MemoryView<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // 第 0 行: 搜索框
-        let qstyle = Style::default().fg(theme::ACCENT);
+        let qstyle = Style::default().fg(theme::accent());
         let _ = buf.set_line(
             area.left(), area.top(),
             &Line::from(vec![
                 Span::styled("/ ", qstyle),
-                Span::styled(self.state.query.clone(), Style::default().fg(theme::TEXT)),
+                Span::styled(self.state.query.clone(), Style::default().fg(theme::text())),
             ]),
             area.width,
         );
@@ -48,7 +48,7 @@ impl<'a> Widget for MemoryView<'a> {
         if items.is_empty() && !self.state.entries.is_empty() {
             let _ = buf.set_line(
                 area.left(), area.top() + 1,
-                &Line::from(Span::styled("(无匹配)", Style::default().fg(theme::DIM))),
+                &Line::from(Span::styled("(无匹配)", Style::default().fg(theme::dim()))),
                 area.width,
             );
             return;
@@ -60,8 +60,8 @@ impl<'a> Widget for MemoryView<'a> {
             let _ = buf.set_line(
                 area.left(), y,
                 &Line::from(vec![
-                    Span::styled(format!("{} ", entry.key), Style::default().fg(theme::USER)),
-                    Span::styled(preview, Style::default().fg(theme::DIM)),
+                    Span::styled(format!("{} ", entry.key), Style::default().fg(theme::user())),
+                    Span::styled(preview, Style::default().fg(theme::dim())),
                 ]),
                 area.width,
             );

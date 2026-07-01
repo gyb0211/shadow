@@ -74,9 +74,9 @@ impl<'a> StatusBar<'a> {
 impl<'a> Widget for StatusBar<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // 统一背景色: 整个区域先填 BG
-        buf.set_style(area, Style::default().bg(theme::BG));
+        buf.set_style(area, Style::default().bg(theme::bg()));
 
-        let sep = Span::styled(" · ", Style::default().fg(theme::DIM).bg(theme::BG));
+        let sep = Span::styled(" · ", Style::default().fg(theme::dim()).bg(theme::bg()));
 
         // ── 第 1 行: left + right ──
         if area.height >= 1 {
@@ -85,7 +85,7 @@ impl<'a> Widget for StatusBar<'a> {
                 if i > 0 { spans.push(sep.clone()); }
                 spans.push(Span::styled(
                     seg.text.clone(),
-                    Style::default().fg(seg.color).bg(theme::BG),
+                    Style::default().fg(seg.color).bg(theme::bg()),
                 ));
             }
             let left_line = Line::from(spans);
@@ -98,7 +98,7 @@ impl<'a> Widget for StatusBar<'a> {
                     if i > 0 { right_spans.insert(0, sep.clone()); }
                     right_spans.push(Span::styled(
                         seg.text.clone(),
-                        Style::default().fg(seg.color).bg(theme::BG),
+                        Style::default().fg(seg.color).bg(theme::bg()),
                     ));
                 }
                 let right_line = Line::from(right_spans);
@@ -115,13 +115,13 @@ impl<'a> Widget for StatusBar<'a> {
             let y = area.top() + 1;
             if let Some(err) = &self.data.error {
                 let line = Line::from(vec![
-                    Span::styled("⚠ ", Style::default().fg(theme::ERROR).bg(theme::BG)),
-                    Span::styled(err.clone(), Style::default().fg(theme::ERROR).bg(theme::BG)),
+                    Span::styled("⚠ ", Style::default().fg(theme::error()).bg(theme::bg())),
+                    Span::styled(err.clone(), Style::default().fg(theme::error()).bg(theme::bg())),
                 ]);
                 let _ = buf.set_line(area.left(), y, &line, area.width);
             } else if !self.data.hint.is_empty() {
                 let line = Line::from(vec![
-                    Span::styled(self.data.hint.clone(), Style::default().fg(theme::DIM).bg(theme::BG)),
+                    Span::styled(self.data.hint.clone(), Style::default().fg(theme::dim()).bg(theme::bg())),
                 ]);
                 let _ = buf.set_line(area.left(), y, &line, area.width);
             }
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn left_segment_rendered() {
         let mut data = StatusBarData::new();
-        data.push_left(StatusSegment::new("shadow", theme::TEXT));
+        data.push_left(StatusSegment::new("shadow", theme::text()));
         let buf = render(&data, 40, 2);
         let s: String = (0..6).map(|x| buf.cell((x, 0)).unwrap().symbol().chars().next().unwrap()).collect();
         assert_eq!(s, "shadow");
@@ -151,8 +151,8 @@ mod tests {
     #[test]
     fn multiple_left_segments_separated_by_dot() {
         let mut data = StatusBarData::new();
-        data.push_left(StatusSegment::new("a", theme::TEXT));
-        data.push_left(StatusSegment::new("b", theme::TEXT));
+        data.push_left(StatusSegment::new("a", theme::text()));
+        data.push_left(StatusSegment::new("b", theme::text()));
         let buf = render(&data, 40, 2);
         // "a · b"
         assert_eq!(buf.cell((0, 0)).unwrap().symbol(), "a");
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn right_segment_at_right_edge() {
         let mut data = StatusBarData::new();
-        data.push_right(StatusSegment::new("OK", theme::ACCENT));
+        data.push_right(StatusSegment::new("OK", theme::accent()));
         let buf = render(&data, 40, 2);
         assert_eq!(buf.cell((38, 0)).unwrap().symbol(), "O");
         assert_eq!(buf.cell((39, 0)).unwrap().symbol(), "K");
@@ -185,6 +185,6 @@ mod tests {
         // 第 2 行应显示 ⚠ boom!
         assert_eq!(buf.cell((0, 1)).unwrap().symbol(), "⚠");
         let cell = buf.cell((2, 1)).unwrap();
-        assert_eq!(cell.fg, theme::ERROR);
+        assert_eq!(cell.fg, theme::error());
     }
 }

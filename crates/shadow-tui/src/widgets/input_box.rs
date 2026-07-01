@@ -24,9 +24,9 @@ impl<'a> InputBox<'a> {
 
 impl<'a> Widget for InputBox<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let prompt_style = Style::default().fg(theme::USER);
-        let text_style = Style::default().fg(theme::TEXT);
-        let cursor_style = Style::default().fg(theme::ACCENT);
+        let prompt_style = Style::default().fg(theme::user());
+        let text_style = Style::default().fg(theme::text());
+        let cursor_style = Style::default().fg(theme::accent());
 
         // 按 \n 拆行; 计算光标在哪一行哪一列
         let chars: Vec<char> = self.text.chars().collect();

@@ -35,19 +35,19 @@ impl<'a> Widget for CommandPalette<'a> {
         for yy in layer.top()..layer.bottom() {
             for xx in layer.left()..layer.right() {
                 if let Some(cell) = buf.cell_mut((xx, yy)) {
-                    cell.set_char(' ').set_style(Style::default().bg(theme::BG));
+                    cell.set_char(' ').set_style(Style::default().bg(theme::bg()));
                 }
             }
         }
 
         // 查询行
-        let qstyle = Style::default().fg(theme::ACCENT);
+        let qstyle = Style::default().fg(theme::accent());
         let _ = buf.set_line(
             layer.left(),
             layer.top(),
             &Line::from(vec![
                 Span::styled("> ", qstyle),
-                Span::styled(self.query.to_string(), Style::default().fg(theme::TEXT)),
+                Span::styled(self.query.to_string(), Style::default().fg(theme::text())),
             ]),
             layer.width,
         );
@@ -57,9 +57,9 @@ impl<'a> Widget for CommandPalette<'a> {
             let yy = layer.top() + 1 + i as u16;
             if yy >= layer.bottom() { break; }
             let style = if i == self.selected {
-                Style::default().fg(theme::TEXT).bg(theme::TOOL_DIM)
+                Style::default().fg(theme::text()).bg(theme::tool_dim())
             } else {
-                Style::default().fg(theme::DIM)
+                Style::default().fg(theme::dim())
             };
             let _ = buf.set_line(
                 layer.left(),
@@ -102,7 +102,7 @@ mod tests {
         for y in 0..24 {
             for x in 0..80 {
                 let cell = buf.cell((x, y)).unwrap();
-                if cell.bg == theme::TOOL_DIM || cell.fg == theme::TOOL_DIM {
+                if cell.bg == theme::tool_dim() || cell.fg == theme::tool_dim() {
                     found = true; break;
                 }
             }
