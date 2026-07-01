@@ -9,6 +9,9 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use crossterm::event::{
+    EnableMouseCapture, DisableMouseCapture,
+};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal as RatTerm;
 use std::io::{self, Stdout};
@@ -25,7 +28,7 @@ fn install_panic_hook() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
         prev(info);
     }));
 }
@@ -37,7 +40,7 @@ pub async fn run_loop(
 ) -> Result<AppState> {
     install_panic_hook();
     enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen)?;
+    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut term = RatTerm::new(backend)?;
 
@@ -64,7 +67,7 @@ pub async fn run_loop(
 
     // 无论结果如何, 还原终端
     let _ = disable_raw_mode();
-    let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
     result?;
 
     Ok(state)
