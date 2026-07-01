@@ -41,6 +41,12 @@ const fn mode_label() -> &'static str {
     }
 }
 
+/// 检测 stdin 是否为 TTY
+fn is_terminal() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// 启动对话 (交互式或单次)
@@ -48,6 +54,10 @@ enum Commands {
         /// 单次消息 (不进入交互模式)
         #[arg(short, long)]
         message: Option<String>,
+
+        /// 强制行式 (不走 TUI)
+        #[arg(short = 'P', long, default_value_t = false)]
+        plain: bool,
     },
 
     /// 配置管理
@@ -102,8 +112,21 @@ async fn main() -> Result<()> {
     let mut config = shadow_config::load_or_init()?;
 
     match cli.command {
-        Commands::Chat { message } => {
-            chat_command(config, message).await?;
+        Commands::Chat { message, plain } => {
+            if message.is_none() && !plain && is_terminal() {
+                // TUI 模式 (默认)
+                #[cfg(feature = "tui")]
+                {
+                    shadow_tui::run_tui(config).await?;
+                    return Ok(());
+                }
+                #[cfg(not(feature = "tui"))]
+                {
+                    chat_command(config, message).await?;
+                }
+            } else {
+                chat_command(config, message).await?;
+            }
         }
 
         Commands::Config { action } => {
