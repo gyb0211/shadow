@@ -1,12 +1,24 @@
 //! AppState -- 中心状态机, 纯逻辑无 IO
 
 use crate::event::AppEvent;
+use crate::widgets::status_bar::{StatusBarData, StatusSegment};
+use crate::theme;
 use shadow_core::{ChatMessage, MemoryEntry};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum View { Chat, Config, Memory }
+
+impl View {
+    pub fn label(&self) -> &'static str {
+        match self {
+            View::Chat => "chat",
+            View::Config => "config",
+            View::Memory => "memory",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct ChatState {
@@ -40,11 +52,6 @@ pub struct PaletteState {
     pub selected: usize,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct StatusLine {
-    pub text: String,
-}
-
 /// 预定义命令
 pub const COMMANDS: &[&str] = &[
     "chat", "config", "memory",
@@ -58,10 +65,14 @@ pub struct AppState {
     pub chat: ChatState,
     pub config_view: ConfigViewState,
     pub memory_view: MemoryViewState,
-    pub status_top: StatusLine,
-    pub status_bottom: StatusLine,
     pub running: bool,
     pub last_error: Option<String>,
+    /// LLM 请求/响应瞬时状态 (状态栏显示)
+    pub llm_status: Option<String>,
+    /// Agent 别名 (状态栏显示)
+    pub agent_alias: String,
+    /// 模型名 (状态栏显示)
+    pub model_name: String,
     /// 后台 Agent (TUI 启动时注入; None = 无 agent, Enter 不触发对话)
     pub agent: Option<Arc<shadow_runtime::agent::Agent>>,
     /// mpsc 发送端 (用于向主循环推送 Agent 事件)
@@ -76,6 +87,7 @@ impl std::fmt::Debug for AppState {
             .field("chat", &self.chat)
             .field("running", &self.running)
             .field("last_error", &self.last_error)
+            .field("model_name", &self.model_name)
             .finish()
     }
 }
@@ -88,10 +100,11 @@ impl Default for AppState {
             chat: ChatState::default(),
             config_view: ConfigViewState::default(),
             memory_view: MemoryViewState::default(),
-            status_top: StatusLine { text: "shadow".to_string() },
-            status_bottom: StatusLine { text: "↵ send · ⌥↵ newline · ⌘K palette · PgUp/PgDn scroll".to_string() },
             running: true,
             last_error: None,
+            llm_status: None,
+            agent_alias: "shadow".to_string(),
+            model_name: String::new(),
             agent: None,
             tx: None,
         }
@@ -100,6 +113,52 @@ impl Default for AppState {
 
 impl AppState {
     pub fn new() -> Self { Self::default() }
+
+    /// 收集状态栏数据 (插件化: 各模块贡献 segment)
+    pub fn status_data(&self) -> StatusBarData {
+        let mut data = StatusBarData::new();
+
+        // ── 左侧: 别名 · 视图 · 模型 ──
+        data.push_left(StatusSegment::new(
+            self.agent_alias.as_str(),
+            theme::ACCENT,
+        ));
+        data.push_left(StatusSegment::new(
+            self.view.label(),
+            theme::DIM,
+        ));
+        if !self.model_name.is_empty() {
+            data.push_left(StatusSegment::new(
+                self.model_name.as_str(),
+                theme::TOOL_TEXT,
+            ));
+        }
+        if self.chat.agent_busy {
+            data.push_left(StatusSegment::new("⏳", theme::ASSISTANT));
+        }
+        if let Some(llm) = &self.llm_status {
+            data.push_left(StatusSegment::new(llm.as_str(), theme::TOOL_TEXT));
+        }
+
+        // ── 右侧: 消息数 · 滚动位置 ──
+        data.push_right(StatusSegment::new(
+            format!("msg {}", self.chat.messages.len()),
+            theme::DIM,
+        ));
+        if self.chat.scroll_offset > 0 {
+            data.push_right(StatusSegment::new(
+                format!("↑{}", self.chat.scroll_offset),
+                theme::ACCENT,
+            ));
+        }
+
+        // ── 第 2 行: 提示 / 错误 ──
+        data.hint = "↵ send · ⌥↵ newline · ↑↓ history · ⌘K palette · PgUp/PgDn scroll · ^L clear"
+            .to_string();
+        data.error = self.last_error.clone();
+
+        data
+    }
 
     /// 打开命令面板
     pub fn open_palette(&mut self) {
@@ -223,5 +282,32 @@ mod tests {
         s.execute_palette();
         assert_eq!(s.view, View::Chat);
         assert!(s.palette.is_none());
+    }
+
+    #[test]
+    fn status_data_includes_alias_and_view() {
+        let s = AppState::new();
+        let data = s.status_data();
+        assert!(!data.left.is_empty());
+        // 第一段是别名
+        assert_eq!(data.left[0].text, "shadow");
+    }
+
+    #[test]
+    fn status_data_shows_busy_indicator() {
+        let mut s = AppState::new();
+        s.chat.agent_busy = true;
+        let data = s.status_data();
+        let texts: Vec<_> = data.left.iter().map(|seg| seg.text.as_str()).collect();
+        assert!(texts.contains(&"⏳"));
+    }
+
+    #[test]
+    fn status_data_error_overrides_hint() {
+        let mut s = AppState::new();
+        s.last_error = Some("broken".into());
+        let data = s.status_data();
+        assert_eq!(data.error.as_deref(), Some("broken"));
+        assert!(!data.hint.is_empty());
     }
 }

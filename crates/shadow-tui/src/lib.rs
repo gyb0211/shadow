@@ -31,6 +31,8 @@ pub async fn run_tui(config: Config) -> Result<()> {
     let observer = UiObserver::arc(tx.clone());
 
     let mut state = AppState::new();
+    state.agent_alias = config.agent.alias.clone();
+    state.model_name = config.agent.model.clone();
     match build_agent(&config, observer) {
         Ok(agent) => {
             state.agent = Some(Arc::new(agent));

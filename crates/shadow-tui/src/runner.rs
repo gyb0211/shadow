@@ -75,55 +75,50 @@ async fn run_loop_inner(
 fn draw(term: &mut Frame, state: &AppState) -> Result<()> {
     use ratatui::layout::{Constraint, Direction, Layout};
     use crate::views::{ChatView, ConfigView, MemoryView};
-    use crate::widgets::{CommandPalette, StatusBar};
+    use crate::widgets::{CommandPalette, InputBox, StatusBar};
 
     term.draw(|f| {
         let area = f.area();
 
-        // 整屏分: 顶 status / 中 view / 底 status
+        // 三段布局: main(可变高) + input(固定高) + status(固定高 2 行)
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
-                Constraint::Min(1),
-                Constraint::Length(1),
+                Constraint::Min(1),    // main
+                Constraint::Length(5), // input (多行输入预留)
+                Constraint::Length(2), // status (两行)
             ])
             .split(area);
 
-        // 顶
-        f.render_widget(
-            StatusBar::new(&state.status_top.text, "⌘K"),
-            chunks[0],
-        );
-
-        // 中
+        // ── main: 视图内容 ──
         match state.view {
             crate::app::View::Chat => {
-                f.render_widget(ChatView::new(&state.chat), chunks[1]);
+                f.render_widget(ChatView::new(&state.chat), chunks[0]);
             }
             crate::app::View::Config => {
-                f.render_widget(ConfigView::new(&shadow_config::Config::default(), 0), chunks[1]);
-                // 注: 实际应传持久化的 config 引用, 这里简化 (Task 17 集成时改)
+                f.render_widget(ConfigView::new(&shadow_config::Config::default(), 0), chunks[0]);
             }
             crate::app::View::Memory => {
-                f.render_widget(MemoryView::new(&state.memory_view), chunks[1]);
+                f.render_widget(MemoryView::new(&state.memory_view), chunks[0]);
             }
         }
 
-        // 底
-        let busy_label = if state.chat.agent_busy { "⏳ " } else { "" };
-        let right = format!("{}hist {}/{}", busy_label, state.chat.messages.len(), 50);
+        // ── input: 输入框 ──
         f.render_widget(
-            StatusBar::new(&state.status_bottom.text, &right),
-            chunks[2],
+            InputBox::new(&state.chat.input, state.chat.cursor),
+            chunks[1],
         );
 
-        // palette 浮层
+        // ── status: 两行插件化状态栏 ──
+        let status_data = state.status_data();
+        f.render_widget(StatusBar::new(&status_data), chunks[2]);
+
+        // palette 浮层 (覆盖 main 区域)
         if let Some(p) = &state.palette {
             let items = state.palette_items();
             f.render_widget(
                 CommandPalette::new(&p.query, &items, p.selected),
-                chunks[1],
+                chunks[0],
             );
         }
     })?;
@@ -133,7 +128,7 @@ fn draw(term: &mut Frame, state: &AppState) -> Result<()> {
 fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
     match ev {
         AppEvent::Key(k) => return handle_key(state, k),
-        AppEvent::Status(s) => state.status_top.text = s,
+        AppEvent::Status(s) => state.llm_status = Some(s),
         AppEvent::AgentMessage(msg) => {
             state.chat.messages.push(shadow_core::ChatMessage {
                 role: "assistant".into(),
