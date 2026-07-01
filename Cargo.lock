@@ -3,19 +3,6 @@
 version = 4
 
 [[package]]
-name = "agent-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "serde",
- "serde_json",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1183,13 +1170,13 @@ dependencies = [
 name = "shadow"
 version = "0.1.0"
 dependencies = [
- "agent-core",
  "anyhow",
  "async-trait",
  "clap",
  "serde",
  "serde_json",
  "shadow-config",
+ "shadow-core",
  "shadow-log",
  "shadow-memory",
  "shadow-providers",
@@ -1209,15 +1196,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "shadow-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "shadow-log"
 version = "0.1.0"
 dependencies = [
- "agent-core",
  "anyhow",
  "chrono",
  "parking_lot",
  "serde",
  "serde_json",
+ "shadow-core",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1228,13 +1228,13 @@ dependencies = [
 name = "shadow-memory"
 version = "0.1.0"
 dependencies = [
- "agent-core",
  "anyhow",
  "async-trait",
  "chrono",
  "rusqlite",
  "serde",
  "serde_json",
+ "shadow-core",
  "shadow-log",
  "tempfile",
  "tokio",
@@ -1246,12 +1246,12 @@ dependencies = [
 name = "shadow-providers"
 version = "0.1.0"
 dependencies = [
- "agent-core",
  "anyhow",
  "async-trait",
  "reqwest",
  "serde",
  "serde_json",
+ "shadow-core",
  "shadow-log",
  "tokio",
  "tracing",
@@ -1261,7 +1261,6 @@ dependencies = [
 name = "shadow-runtime"
 version = "0.1.0"
 dependencies = [
- "agent-core",
  "anyhow",
  "async-trait",
  "chrono",
@@ -1271,6 +1270,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shadow-config",
+ "shadow-core",
  "shadow-log",
  "tempfile",
  "tokio",

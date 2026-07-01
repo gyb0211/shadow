@@ -6,7 +6,7 @@ license.workspace = true
 description = "影子统一日志面 -- record! 宏 + JSONL 持久化 + 广播"
 
 [dependencies]
-agent-core.workspace = true
+shadow-core.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -7,7 +7,7 @@ pub mod markdown;
 pub mod sqlite;
 pub mod strategy;
 
-use agent_core::Memory;
+use shadow_core::Memory;
 use anyhow::Result;
 use std::sync::Arc;
 

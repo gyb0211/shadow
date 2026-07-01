@@ -1,6 +1,6 @@
 //! 空记忆后端 -- 不存储任何记忆
 
-use agent_core::{Attributable, Memory, MemoryEntry, Role};
+use shadow_core::{Attributable, Memory, MemoryEntry, Role};
 use anyhow::Result;
 use async_trait::async_trait;
 

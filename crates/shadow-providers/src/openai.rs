@@ -3,8 +3,8 @@
 //! 实现 OpenAI Chat Completions API 的 tool calling 功能.
 //! 将 agent-core 的 ToolSpec 转换为 API 格式, 解析响应中的 tool_calls.
 
-use agent_core::{
-    Attributable, ChatRequest, ChatResponse, ModelProvider, Role, TokenUsage, ToolCall,
+use shadow_core::{
+    Attributable, ChatRequest, ChatResponse, Provider, Role, TokenUsage, ToolCall,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -57,7 +57,7 @@ impl Attributable for OpenAiProvider {
 }
 
 #[async_trait]
-impl ModelProvider for OpenAiProvider {
+impl Provider for OpenAiProvider {
     fn provider_type(&self) -> &str {
         &self.provider_type
     }

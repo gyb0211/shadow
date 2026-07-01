@@ -55,9 +55,10 @@ pub struct TokenUsage {
 /// 模型提供商 trait
 ///
 /// 每个 LLM 后端实现此 trait (OpenAI/Anthropic/Ollama...)
-/// 通过工厂函数按字符串 key 注册
+/// 通过工厂函数按字符串 key 注册。
+/// 借鉴 ZeroClaw ModelProvider, 重命名自 agent-core。
 #[async_trait]
-pub trait ModelProvider: Attributable {
+pub trait Provider: Attributable {
     /// 提供商类型名 (如 "openai", "anthropic")
     fn provider_type(&self) -> &str;
 
@@ -100,7 +101,7 @@ impl Attributable for DefaultProvider {
 }
 
 #[async_trait]
-impl ModelProvider for DefaultProvider {
+impl Provider for DefaultProvider {
     fn provider_type(&self) -> &str {
         "default"
     }

@@ -23,8 +23,8 @@ macro_rules! record {
 macro_rules! attribution_span {
     ($thing:expr) => {{
         let thing = $thing;
-        let role = agent_core::Attributable::role(thing);
-        let alias = agent_core::Attributable::alias(thing);
+        let role = shadow_core::Attributable::role(thing);
+        let alias = shadow_core::Attributable::alias(thing);
         $crate::__private::tracing::info_span!(
             target: "shadow_log_attribution",
             "shadow_attribution",

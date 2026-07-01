@@ -4,7 +4,7 @@
 
 pub mod openai;
 
-use agent_core::ModelProvider;
+use shadow_core::Provider;
 use anyhow::Result;
 use std::sync::Arc;
 
@@ -13,10 +13,10 @@ pub fn create_provider(
     provider_type: &str,
     api_key: Option<&str>,
     base_url: Option<&str>,
-) -> Result<Arc<dyn ModelProvider>> {
+) -> Result<Arc<dyn Provider>> {
     match provider_type {
         "openai" | "openrouter" | "ollama" | "compatible" => {
-            openai::OpenAiProvider::new(provider_type, api_key, base_url).map(|p| Arc::new(p) as Arc<dyn ModelProvider>)
+            openai::OpenAiProvider::new(provider_type, api_key, base_url).map(|p| Arc::new(p) as Arc<dyn Provider>)
         }
         _ => anyhow::bail!("未知的 provider 类型: {provider_type}"),
     }

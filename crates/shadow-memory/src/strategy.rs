@@ -4,7 +4,7 @@
 //! - load_context: recall 检索相关记忆, 格式化为上下文文本
 //! - consolidate_turn: 把对话轮次存为一条 MemoryEntry
 
-use agent_core::{Memory, MemoryEntry};
+use shadow_core::{Memory, MemoryEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Utc;

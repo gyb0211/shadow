@@ -1,6 +1,6 @@
 //! Markdown 记忆后端 -- 每条记忆存为一个 .md 文件
 
-use agent_core::{Attributable, Memory, MemoryEntry, Role};
+use shadow_core::{Attributable, Memory, MemoryEntry, Role};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Utc;

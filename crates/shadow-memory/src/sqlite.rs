@@ -6,7 +6,7 @@
 //!
 //! FTS 索引通过触发器自动同步, 业务代码只需操作主表
 
-use agent_core::{Attributable, Memory, MemoryEntry, Role};
+use shadow_core::{Attributable, Memory, MemoryEntry, Role};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

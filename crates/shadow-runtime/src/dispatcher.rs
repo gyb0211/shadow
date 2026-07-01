@@ -4,7 +4,7 @@
 //! - NativeToolDispatcher: 原生 API 工具调用 (OpenAI/Anthropic)
 //! - XmlToolDispatcher: XML 文本协议 (<tool_call> 标签)
 
-use agent_core::{ChatMessage, ChatResponse, ToolCall, ToolResult};
+use shadow_core::{ChatMessage, ChatResponse, ToolCall, ToolResult};
 
 /// 工具协议分发器 -- 隔离不同 LLM provider 的工具调用格式差异
 pub trait ToolDispatcher: Send + Sync {
@@ -158,7 +158,7 @@ impl ToolDispatcher for XmlToolDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_core::TokenUsage;
+    use shadow_core::TokenUsage;
 
     /// 构造测试用 ChatResponse
     fn make_response(content: &str, tool_calls: Vec<ToolCall>) -> ChatResponse {

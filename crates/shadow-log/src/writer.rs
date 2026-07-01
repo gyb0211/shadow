@@ -19,7 +19,7 @@ static WRITER: OnceLock<Option<Arc<WriterState>>> = OnceLock::new();
 
 /// 初始化写入器
 pub fn init_from_config(workspace_dir: &Path, max_entries: usize) {
-    let path = workspace_dir.join("state").join("runtime-trace.jsonl");
+    let path = workspace_dir.join("logs").join("runtime-trace.jsonl");
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }

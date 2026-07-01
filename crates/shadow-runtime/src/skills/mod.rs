@@ -38,7 +38,7 @@ pub mod skill_tool;
 
 pub use skill_tool::SkillShellTool;
 
-use agent_core::Tool;
+use shadow_core::Tool;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

@@ -4,7 +4,7 @@
 //! - 5 个基础 section: DateTime / Identity / ToolHonesty / Safety / Workspace
 //! - SystemPromptBuilder 按 priority 排序后拼接
 
-use agent_core::AutonomyLevel;
+use shadow_core::AutonomyLevel;
 use chrono::Local;
 use std::path::PathBuf;
 

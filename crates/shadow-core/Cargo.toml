@@ -1,9 +1,9 @@
 [package]
-name = "agent-core"
+name = "shadow-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "影子核心层 -- trait 定义与共享类型"
+description = "影子核心 trait 层 -- Provider/Memory/Tool/Channel/Observer/AgentRuntime/SessionStore"
 
 [dependencies]
 anyhow.workspace = true

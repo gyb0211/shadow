@@ -5,7 +5,7 @@
 //! - 命令模板中的 `{arg_name}` 占位符会被模型提供的参数值替换
 //! - 锁定的参数 (command 模板和 arg 名称) 不可被模型覆盖
 
-use agent_core::{Attributable, Role, Tool, ToolResult};
+use shadow_core::{Attributable, Role, Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};

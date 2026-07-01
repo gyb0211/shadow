@@ -162,13 +162,13 @@ async fn chat_command(
 /// kernel-only 模式: 直连 provider, 最简对话
 #[cfg(not(feature = "runtime"))]
 async fn chat_direct(
-    provider: std::sync::Arc<dyn agent_core::ModelProvider>,
-    _memory: std::sync::Arc<dyn agent_core::Memory>,
+    provider: std::sync::Arc<dyn shadow_core::Provider>,
+    _memory: std::sync::Arc<dyn shadow_core::Memory>,
     model: String,
     temperature: f64,
     message: Option<String>,
 ) -> Result<()> {
-    use agent_core::{ChatMessage, ChatRequest, ModelProvider};
+    use shadow_core::{ChatMessage, ChatRequest, Provider};
 
     let system = ChatMessage {
         role: "system".to_string(),
@@ -263,8 +263,8 @@ async fn chat_direct(
 /// 完整版: 通过 Agent (带历史/observer/工具)
 #[cfg(feature = "runtime")]
 async fn chat_via_agent(
-    provider: std::sync::Arc<dyn agent_core::ModelProvider>,
-    memory: std::sync::Arc<dyn agent_core::Memory>,
+    provider: std::sync::Arc<dyn shadow_core::Provider>,
+    memory: std::sync::Arc<dyn shadow_core::Memory>,
     config: &shadow_config::Config,
     resolved: &shadow_config::ResolvedProvider,
     model: String,
@@ -277,9 +277,9 @@ async fn chat_via_agent(
         model,
         temperature: Some(temperature),
         autonomy: match config.agent.autonomy.as_str() {
-            "full" => agent_core::AutonomyLevel::Full,
-            "read_only" => agent_core::AutonomyLevel::ReadOnly,
-            _ => agent_core::AutonomyLevel::Supervised,
+            "full" => shadow_core::AutonomyLevel::Full,
+            "read_only" => shadow_core::AutonomyLevel::ReadOnly,
+            _ => shadow_core::AutonomyLevel::Supervised,
         },
         workspace_dir: shadow_config::config_dir(),
         max_iterations: config.agent.max_iterations,
@@ -288,7 +288,7 @@ async fn chat_via_agent(
     };
 
     // 创建观察者 (日志观察者, 捕获事件到 JSONL)
-    let observer: std::sync::Arc<dyn agent_core::Observer> =
+    let observer: std::sync::Arc<dyn shadow_core::Observer> =
         std::sync::Arc::new(LogObserver);
 
     // 工具执行回调 -- CLI 实时显示工具调用
@@ -364,9 +364,9 @@ async fn chat_via_agent(
 struct LogObserver;
 
 #[cfg(feature = "runtime")]
-impl agent_core::Attributable for LogObserver {
-    fn role(&self) -> agent_core::Role {
-        agent_core::Role::System
+impl shadow_core::Attributable for LogObserver {
+    fn role(&self) -> shadow_core::Role {
+        shadow_core::Role::System
     }
     fn alias(&self) -> &str {
         "log-observer"
@@ -375,9 +375,9 @@ impl agent_core::Attributable for LogObserver {
 
 #[cfg(feature = "runtime")]
 #[async_trait::async_trait]
-impl agent_core::Observer for LogObserver {
-    fn record_event(&self, event: &agent_core::ObserverEvent) {
-        use agent_core::ObserverEvent;
+impl shadow_core::Observer for LogObserver {
+    fn record_event(&self, event: &shadow_core::ObserverEvent) {
+        use shadow_core::ObserverEvent;
         match event {
             ObserverEvent::LlmRequest { model, message_count } => {
                 shadow_log::record!(

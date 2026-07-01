@@ -4,8 +4,8 @@
 //! - ZeroClaw: 30+ 字段, 7874 行
 //! - Shadow: ~10 字段, 目标 ~300 行
 
-use agent_core::{
-    Attributable, AutonomyLevel, ChatMessage, ChatRequest, Memory, ModelProvider,
+use shadow_core::{
+    Attributable, AutonomyLevel, ChatMessage, ChatRequest, Memory, Provider,
     Observer, ObserverEvent, Role, Tool, ToolCall, ToolResult,
 };
 use anyhow::Result;
@@ -68,7 +68,7 @@ impl Default for AgentConfig {
 /// Agent -- 核心代理
 pub struct Agent {
     pub alias: String,
-    pub provider: Arc<dyn ModelProvider>,
+    pub provider: Arc<dyn Provider>,
     pub tools: Vec<Box<dyn Tool>>,
     pub memory: Arc<dyn Memory>,
     pub observer: Arc<dyn Observer>,
@@ -380,7 +380,7 @@ impl Agent {
 #[derive(Default)]
 pub struct AgentBuilder {
     alias: Option<String>,
-    provider: Option<Arc<dyn ModelProvider>>,
+    provider: Option<Arc<dyn Provider>>,
     tools: Option<Vec<Box<dyn Tool>>>,
     memory: Option<Arc<dyn Memory>>,
     observer: Option<Arc<dyn Observer>>,
@@ -393,7 +393,7 @@ impl AgentBuilder {
         self.alias = Some(alias.into());
         self
     }
-    pub fn provider(mut self, provider: Arc<dyn ModelProvider>) -> Self {
+    pub fn provider(mut self, provider: Arc<dyn Provider>) -> Self {
         self.provider = Some(provider);
         self
     }
@@ -443,10 +443,10 @@ impl AgentBuilder {
             .ok_or_else(|| anyhow::anyhow!("缺少 provider, 请通过 .provider() 设置"))?;
         let memory = self
             .memory
-            .unwrap_or_else(|| Arc::new(agent_core::NoneMemory));
+            .unwrap_or_else(|| Arc::new(shadow_core::NoneMemory));
         let observer = self
             .observer
-            .unwrap_or_else(|| Arc::new(agent_core::NoopObserver));
+            .unwrap_or_else(|| Arc::new(shadow_core::NoopObserver));
         let tools = self.tools.unwrap_or_default();
         let tool_event_callback = self.tool_event_callback;
 

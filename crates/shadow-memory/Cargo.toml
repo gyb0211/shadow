@@ -6,7 +6,7 @@ license.workspace = true
 description = "影子记忆后端实现"
 
 [dependencies]
-agent-core.workspace = true
+shadow-core.workspace = true
 shadow-log.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true

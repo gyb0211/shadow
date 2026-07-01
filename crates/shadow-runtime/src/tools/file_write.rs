@@ -1,6 +1,6 @@
 //! FileWrite 工具 -- 写入文件内容
 
-use agent_core::{tool_attribution, Attributable, Tool, ToolResult};
+use shadow_core::{tool_attribution, Attributable, Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};

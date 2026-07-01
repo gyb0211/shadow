@@ -13,7 +13,7 @@ pub use file_read::FileReadTool;
 pub use file_write::FileWriteTool;
 pub use shell::ShellTool;
 
-use agent_core::Tool;
+use shadow_core::Tool;
 
 /// 创建默认工具集 -- 返回所有内置工具
 pub fn default_tools() -> Vec<Box<dyn Tool>> {
