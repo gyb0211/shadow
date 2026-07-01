@@ -106,6 +106,7 @@ impl Provider for OpenAiProvider {
                     content,
                     tool_call_id: m.tool_call_id.clone(),
                     tool_calls,
+                    reasoning_content: m.reasoning_content.clone(),
                 }
             })
             .collect();
@@ -150,7 +151,13 @@ impl Provider for OpenAiProvider {
             .context("解析 LLM 响应失败")?;
 
         let choice = api_resp.choices.first().context("LLM 响应无 choices")?;
-        let content = choice.message.content.clone().unwrap_or_default();
+        let reasoning_content = choice.message.reasoning_content.clone();
+
+        // content 为空时退化到 reasoning_content (有些思考模型只填 reasoning_content)
+        let content = match &choice.message.content {
+            Some(c) if !c.is_empty() => c.clone(),
+            _ => reasoning_content.clone().unwrap_or_default(),
+        };
 
         // 解析 tool_calls
         let tool_calls: Vec<ToolCall> = choice
@@ -182,6 +189,7 @@ impl Provider for OpenAiProvider {
             content,
             tool_calls,
             usage,
+            reasoning_content,
         })
     }
 
@@ -213,6 +221,9 @@ struct ApiMessage {
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<ApiToolCall>>,
+    /// 思考模型要求 assistant tool-call 历史消息回传 reasoning_content
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_content: Option<String>,
 }
 
 /// 请求中的工具调用 (assistant 消息携带)
@@ -259,6 +270,9 @@ struct ApiChoice {
 #[derive(Deserialize)]
 struct ApiChoiceMessage {
     content: Option<String>,
+    /// 思考模型 (DeepSeek-R1 等) 返回的推理内容, 与 content 分离
+    #[serde(default)]
+    reasoning_content: Option<String>,
     #[serde(default)]
     tool_calls: Option<Vec<ApiToolCallResponse>>,
 }

@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 /// 聊天消息
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,      // "system" / "user" / "assistant" / "tool"
     pub content: String,
@@ -16,6 +16,11 @@ pub struct ChatMessage {
     /// assistant 消息携带的工具调用 (发给 LLM 时序列化)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
+    /// 思考模型的原始推理内容 (DeepSeek-R1, GLM-4.7 等)
+    /// 从 provider 响应的 reasoning_content 字段解析; 回传给 API 时原样发送,
+    /// 因为部分 provider 拒绝缺少此字段的 tool-call 历史.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 /// 聊天请求
@@ -34,6 +39,9 @@ pub struct ChatResponse {
     pub content: String,
     pub tool_calls: Vec<ToolCall>,
     pub usage: TokenUsage,
+    /// 思考模型的原始推理内容 (DeepSeek-R1 等 API 返回的 reasoning_content 字段)
+    /// 与 content 分离, 不直接显示给用户, 但回传时需要带上.
+    pub reasoning_content: Option<String>,
 }
 
 /// 工具调用

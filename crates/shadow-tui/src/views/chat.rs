@@ -44,7 +44,7 @@ mod tests {
         let mut state = ChatState::default();
         state.messages.push(ChatMessage {
             role: "user".into(), content: "hi".into(),
-            tool_call_id: None, tool_calls: vec![],
+            tool_call_id: None, tool_calls: vec![], reasoning_content: None,
         });
         state.input = "draft".to_string();
 

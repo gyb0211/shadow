@@ -91,6 +91,7 @@ mod tests {
                 content: "ok".into(),
                 tool_calls: vec![],
                 usage: TokenUsage::default(),
+                reasoning_content: None,
             })
         }
         async fn list_models(&self) -> Result<Vec<String>> {

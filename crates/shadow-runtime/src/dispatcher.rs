@@ -50,7 +50,7 @@ impl ToolDispatcher for NativeToolDispatcher {
             role: "tool".to_string(),
             content,
             tool_call_id: None,
-            tool_calls: vec![],
+            ..Default::default()
         }
     }
 
@@ -145,7 +145,7 @@ impl ToolDispatcher for XmlToolDispatcher {
             role: "user".to_string(),
             content,
             tool_call_id: None,
-            tool_calls: vec![],
+            ..Default::default()
         }
     }
 
@@ -166,6 +166,7 @@ mod tests {
             content: content.to_string(),
             tool_calls,
             usage: TokenUsage::default(),
+            reasoning_content: None,
         }
     }
 

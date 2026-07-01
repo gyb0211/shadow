@@ -149,7 +149,7 @@ impl Agent {
             role: "system".to_string(),
             content: self.system_prompt().to_string(),
             tool_call_id: None,
-            tool_calls: vec![],
+            ..Default::default()
         }];
 
         // 加载历史 (锁在 block 内释放, 避免 future !Send)
@@ -163,7 +163,7 @@ impl Agent {
             role: "user".to_string(),
             content: user_message.to_string(),
             tool_call_id: None,
-            tool_calls: vec![],
+            ..Default::default()
         });
 
         // 工具调用循环
@@ -220,17 +220,19 @@ impl Agent {
                     role: "assistant".to_string(),
                     content: response.content.clone(),
                     tool_call_id: None,
-                    tool_calls: vec![],
+                    ..Default::default()
                 });
                 break;
             }
 
-            // 有工具调用: 先添加 assistant 消息 (含 tool_calls)
+            // 有工具调用: 先添加 assistant 消息 (含 tool_calls + reasoning_content)
+            // 注: reasoning_content 必须回传, 部分 provider 拒绝缺少此字段的 tool-call 历史
             messages.push(ChatMessage {
                 role: "assistant".to_string(),
                 content: response.content.clone(),
                 tool_call_id: None,
                 tool_calls: response.tool_calls.clone(),
+                reasoning_content: response.reasoning_content.clone(),
             });
 
             // 执行每个工具调用
@@ -274,7 +276,7 @@ impl Agent {
                     role: "tool".to_string(),
                     content: tool_content,
                     tool_call_id: Some(tool_call.id.clone()),
-                    tool_calls: vec![],
+                    ..Default::default()
                 });
             }
 
@@ -292,13 +294,13 @@ impl Agent {
                 role: "user".to_string(),
                 content: user_message.to_string(),
                 tool_call_id: None,
-                tool_calls: vec![],
+                ..Default::default()
             });
             history.push(ChatMessage {
                 role: "assistant".to_string(),
                 content: final_content.clone(),
                 tool_call_id: None,
-                tool_calls: vec![],
+                ..Default::default()
             });
         }
 

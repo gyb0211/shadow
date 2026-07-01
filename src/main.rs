@@ -197,7 +197,7 @@ async fn chat_direct(
         role: "system".to_string(),
         content: "你是一个有用的 AI 助手.".to_string(),
         tool_call_id: None,
-        tool_calls: vec![],
+        tool_calls: vec![], reasoning_content: None,
     };
 
     if let Some(msg) = message {
@@ -206,7 +206,7 @@ async fn chat_direct(
             role: "user".to_string(),
             content: msg,
             tool_call_id: None,
-            tool_calls: vec![],
+            tool_calls: vec![], reasoning_content: None,
         };
         let request = ChatRequest {
             messages: vec![system, user],
@@ -250,7 +250,7 @@ async fn chat_direct(
                 role: "user".to_string(),
                 content: trimmed.to_string(),
                 tool_call_id: None,
-                tool_calls: vec![],
+                tool_calls: vec![], reasoning_content: None,
             });
 
             let request = ChatRequest {
@@ -267,7 +267,7 @@ async fn chat_direct(
                         role: "assistant".to_string(),
                         content: response.content.clone(),
                         tool_call_id: None,
-                        tool_calls: vec![],
+                        tool_calls: vec![], reasoning_content: None,
                     });
                     println!("\n{}\n", response.content);
                 }

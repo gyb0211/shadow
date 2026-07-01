@@ -137,7 +137,7 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
                 role: "assistant".into(),
                 content: msg,
                 tool_call_id: None,
-                tool_calls: vec![],
+                tool_calls: vec![], reasoning_content: None,
             });
         }
         AppEvent::AgentToolCall {
@@ -151,7 +151,7 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
                 role: "tool".into(),
                 content,
                 tool_call_id: None,
-                tool_calls: vec![],
+                tool_calls: vec![], reasoning_content: None,
             });
             if !success {
                 state.last_error = Some(format!("tool {name} failed"));
@@ -166,7 +166,7 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
                 role: "assistant".into(),
                 content: format!("[错误] {e}"),
                 tool_call_id: None,
-                tool_calls: vec![],
+                tool_calls: vec![], reasoning_content: None,
             });
             state.chat.agent_busy = false;
         }
@@ -230,7 +230,7 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
                         state.chat.input_history.push(text.clone());
                         state.chat.messages.push(shadow_core::ChatMessage {
                             role: "user".into(), content: text.clone(),
-                            tool_call_id: None, tool_calls: vec![],
+                            tool_call_id: None, tool_calls: vec![], reasoning_content: None,
                         });
                         state.chat.input.clear();
                         state.chat.agent_busy = true;
