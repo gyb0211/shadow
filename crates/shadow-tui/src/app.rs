@@ -153,7 +153,7 @@ impl AppState {
         }
 
         // ── 第 2 行: 提示 / 错误 ──
-        data.hint = "↵ send · ⌥↵ newline · ↑↓ history · ⌘K palette · PgUp/PgDn scroll · ^L clear"
+        data.hint = "↵ send · ⌥↵ newline · ↑↓ history · ⌘K palette · scroll: mouse wheel · ^L clear"
             .to_string();
         data.error = self.last_error.clone();
 

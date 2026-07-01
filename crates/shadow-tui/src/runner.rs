@@ -6,6 +6,7 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use crossterm::event::{EnableMouseCapture, DisableMouseCapture};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal as RatTerm;
 use std::io::{self, Stdout};
@@ -21,7 +22,7 @@ fn install_panic_hook() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
         prev(info);
     }));
 }
@@ -33,7 +34,7 @@ pub async fn run_loop(
 ) -> Result<AppState> {
     install_panic_hook();
     enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen)?;
+    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut term = RatTerm::new(backend)?;
 
@@ -41,7 +42,7 @@ pub async fn run_loop(
 
     // 无论结果如何, 还原终端
     let _ = disable_raw_mode();
-    let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
     result?;
 
     Ok(state)
@@ -64,8 +65,21 @@ async fn run_loop_inner(
 
         // 非阻塞拉 crossterm 输入 (避免阻塞 mpsc)
         while event::poll(Duration::from_millis(0))? {
-            if let Event::Key(k) = event::read()? {
-                handle_event(state, AppEvent::Key(k))?;
+            match event::read()? {
+                Event::Key(k) => handle_event(state, AppEvent::Key(k))?,
+                Event::Mouse(m) => {
+                    use crossterm::event::MouseEventKind;
+                    match m.kind {
+                        MouseEventKind::ScrollUp => {
+                            state.chat.scroll_offset = state.chat.scroll_offset.saturating_add(3);
+                        }
+                        MouseEventKind::ScrollDown => {
+                            state.chat.scroll_offset = state.chat.scroll_offset.saturating_sub(3);
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -252,12 +266,6 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
             state.last_error = None;
         }
         Esc => { /* 退出当前 view? 暂不处理 */ }
-        PageUp => {
-            state.chat.scroll_offset = state.chat.scroll_offset.saturating_add(5);
-        }
-        PageDown => {
-            state.chat.scroll_offset = state.chat.scroll_offset.saturating_sub(5);
-        }
         Enter => {
             // Alt+Enter = 插入换行 (多行输入)
             if k.modifiers.contains(crossterm::event::KeyModifiers::ALT) {

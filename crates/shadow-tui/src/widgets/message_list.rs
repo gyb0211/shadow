@@ -1,7 +1,6 @@
 //! MessageList widget -- 渲染消息流
 //!
-//! 用 ratatui Paragraph + Wrap 做软换行 (长行自动折到下一行, 不截断).
-//! 自动滚到底部 (最新消息可见).
+//! 手动预折行 + 切片渲染 (不依赖 Paragraph::scroll/Wrap, 后者组合不可靠).
 //!
 //! 角色配色:
 //!   user      ❯ 蓝 (USER)
@@ -12,7 +11,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget, Wrap};
+use ratatui::widgets::{Paragraph, Widget};
 
 use crate::theme;
 use shadow_core::ChatMessage;
@@ -34,12 +33,48 @@ impl<'a> MessageList<'a> {
     }
 }
 
+/// 将一条 Line 按终端宽度拆成多条 (保留样式)
+fn wrap_line(line: &Line<'static>, width: usize) -> Vec<Line<'static>> {
+    let line_width = line.width();
+    if width == 0 || line_width <= width {
+        return vec![line.clone()];
+    }
+
+    // 展开为 (char, style) 序列
+    let mut chars: Vec<(char, Style)> = Vec::new();
+    for span in line.spans.iter() {
+        for c in span.content.chars() {
+            chars.push((c, span.style));
+        }
+    }
+
+    let mut result = Vec::new();
+    for chunk in chars.chunks(width) {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        let mut buf = String::new();
+        let mut cur_style = chunk[0].1;
+        for &(c, style) in chunk {
+            if style != cur_style {
+                if !buf.is_empty() {
+                    spans.push(Span::styled(std::mem::take(&mut buf), cur_style));
+                }
+                cur_style = style;
+            }
+            buf.push(c);
+        }
+        if !buf.is_empty() {
+            spans.push(Span::styled(buf, cur_style));
+        }
+        result.push(Line::from(spans));
+    }
+    result
+}
+
 impl<'a> Widget for MessageList<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         for (idx, msg) in self.messages.iter().enumerate() {
-            // 消息间距 (除第一条)
             if idx > 0 {
                 lines.push(Line::from(""));
             }
@@ -55,7 +90,6 @@ impl<'a> Widget for MessageList<'a> {
             let content_style = Style::default().fg(theme::TEXT).bg(theme::BG);
             let dim_style = Style::default().fg(theme::DIM).bg(theme::BG);
 
-            // 按 \n 拆行; 第一行带标签
             let mut content_lines = msg.content.lines();
             match content_lines.next() {
                 Some(first) => {
@@ -72,10 +106,8 @@ impl<'a> Widget for MessageList<'a> {
                 lines.push(Line::from(vec![Span::styled(text.to_string(), content_style)]));
             }
 
-            // tool_calls: 名称 + 参数预览
             for tc in &msg.tool_calls {
-                let args_preview = serde_json::to_string(&tc.arguments)
-                    .unwrap_or_default();
+                let args_preview = serde_json::to_string(&tc.arguments).unwrap_or_default();
                 let preview = if args_preview.len() > 80 {
                     format!("{}...", &args_preview[..80])
                 } else {
@@ -89,40 +121,46 @@ impl<'a> Widget for MessageList<'a> {
             }
         }
 
-        // 计算实际显示行数 (考虑 Wrap 软换行)
+        // ── 预折行: 按终端宽度拆分, 得到精确的显示行列表 ──
         let width = area.width as usize;
-        let total_display: usize = lines
-            .iter()
-            .map(|l| {
-                let w = l.width();
-                if w == 0 || width == 0 {
-                    1
-                } else {
-                    ((w + width - 1) / width).max(1)
-                }
-            })
-            .sum();
+        let mut display_lines: Vec<Line<'static>> = Vec::new();
+        for line in &lines {
+            for wrapped in wrap_line(line, width) {
+                display_lines.push(wrapped);
+            }
+        }
 
-        // 自动滚到底部 (最新消息可见); scroll_from_bottom > 0 时向上翻
+        // ── 切片: 只渲染可见窗口 ──
         let visible = area.height as usize;
-        let bottom_offset = total_display.saturating_sub(visible);
-        let scroll = bottom_offset.saturating_sub(self.scroll_from_bottom);
+        let total = display_lines.len();
+        let bottom_offset = total.saturating_sub(visible);
+        let start = bottom_offset.saturating_sub(self.scroll_from_bottom);
+        let end = (start + visible).min(total);
+        let visible_lines: Vec<Line<'_>> = display_lines[start..end].to_vec();
 
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((scroll as u16, 0))
+        Paragraph::new(visible_lines)
             .style(Style::default().bg(theme::BG))
             .render(area, buf);
 
-        // 滚动指示条 (右侧, scroll_from_bottom > 0 时显示)
-        if self.scroll_from_bottom > 0 && total_display > visible && area.width > 0 {
-            let ratio = scroll as f64 / bottom_offset as f64;
-            let thumb_y = area.top() + (ratio * visible as f64) as u16;
-            let thumb_y = thumb_y.min(area.bottom() - 1);
-            if let Some(cell) = buf.cell_mut((area.right() - 1, thumb_y)) {
-                cell.set_char('┃');
-                cell.set_fg(theme::DIM);
-                cell.set_bg(theme::BG);
+        // ── 滚动指示条 ──
+        if total > visible && area.width > 0 {
+            let scroll_pos = start;
+            let bar_height = ((visible * visible) as f64 / total as f64).ceil() as u16;
+            let bar_height = bar_height.max(1).min(visible as u16);
+            let bar_top = if bottom_offset == 0 {
+                0
+            } else {
+                (scroll_pos as f64 / bottom_offset as f64 * (visible as f64 - bar_height as f64)) as u16
+            };
+            for i in 0..bar_height {
+                let y = area.top() + bar_top + i;
+                if y < area.bottom() {
+                    if let Some(cell) = buf.cell_mut((area.right() - 1, y)) {
+                        cell.set_char('┃');
+                        cell.set_fg(theme::DIM);
+                        cell.set_bg(theme::BG);
+                    }
+                }
             }
         }
     }
@@ -189,21 +227,18 @@ mod tests {
     }
 
     #[test]
-    fn long_line_soft_wraps_not_truncated() {
-        // 60 字符宽区域, 100 字符内容 -- 软换行后第 2 行应有内容 (非空格)
+    fn long_line_wraps_not_truncated() {
         let long = "a".repeat(100);
         let messages = vec![msg("user", &long)];
         let buf = render_to_buffer(MessageList::new(&messages), 60, 3);
-        // 第 2 行不应是空白 (被 Wrap 到了下一行)
         let row1_content: String = (0..60)
             .map(|x| buf.cell((x, 1)).map(|c| c.symbol().to_string()).unwrap_or_default())
             .collect();
-        assert!(row1_content.contains('a'), "第 2 行应包含软换行内容");
+        assert!(row1_content.contains('a'), "第 2 行应包含折行内容");
     }
 
     #[test]
     fn auto_scroll_shows_latest_message() {
-        // 3 行高度, 5 条消息 -- 最后一条应在可见区域
         let messages = vec![
             msg("user", "1"),
             msg("assistant", "2"),
@@ -212,7 +247,6 @@ mod tests {
             msg("user", "latest"),
         ];
         let buf = render_to_buffer(MessageList::new(&messages), 40, 3);
-        // 底部应能看到 "latest" 的某个字符
         let bottom_row: String = (0..40)
             .map(|x| buf.cell((x, 2)).map(|c| c.symbol().to_string()).unwrap_or_default())
             .collect();
@@ -223,46 +257,36 @@ mod tests {
     fn gap_between_messages() {
         let messages = vec![msg("user", "a"), msg("assistant", "b")];
         let buf = render_to_buffer(MessageList::new(&messages), 40, 5);
-        // 第 0 行: user, 第 1 行: 空行间距, 第 2 行: assistant
         assert_eq!(buf.cell((0, 0)).unwrap().fg, theme::USER);
         assert_eq!(buf.cell((0, 2)).unwrap().fg, theme::ASSISTANT);
     }
 
     #[test]
-    fn scroll_indicator_shown_when_scrolled_up() {
-        // 10 条消息, 3 行可见, scroll_from_bottom=3 → 右侧应出现 ┃
+    fn scroll_up_shows_older_messages() {
+        // 10 条消息, 3 行可见, scroll_from_bottom=5 → 不应看到最新消息
         let messages: Vec<ChatMessage> = (0..10)
-            .map(|i| msg("user", &format!("msg {i}")))
+            .map(|i| msg("user", &format!("msg{i}")))
             .collect();
-        let widget = MessageList::new(&messages).scroll(3);
-        let buf = render_to_buffer(widget, 40, 3);
-        // 右侧某行应有 ┃
-        let right_col: String = (0..3)
-            .map(|y| buf.cell((39, y)).map(|c| c.symbol().to_string()).unwrap_or_default())
-            .collect();
-        assert!(right_col.contains('┃'), "滚动时应显示指示条, got: {right_col:?}");
-    }
-
-    #[test]
-    fn scroll_indicator_absent_when_at_bottom() {
-        let messages: Vec<ChatMessage> = (0..10)
-            .map(|i| msg("user", &format!("msg {i}")))
-            .collect();
-        let widget = MessageList::new(&messages); // scroll_from_bottom=0
-        let buf = render_to_buffer(widget, 40, 3);
-        let right_col: String = (0..3)
-            .map(|y| buf.cell((39, y)).map(|c| c.symbol().to_string()).unwrap_or_default())
-            .collect();
-        assert!(!right_col.contains('┃'), "在底部时不应显示指示条");
+        let buf = render_to_buffer(MessageList::new(&messages).scroll(5), 40, 3);
+        // 可见区域至少应有一条消息
+        let mut all = String::new();
+        for y in 0..3 {
+            for x in 0..40 {
+                if let Some(c) = buf.cell((x, y)) {
+                    all.push_str(c.symbol());
+                }
+            }
+        }
+        assert!(all.contains("msg"), "滚动后可见区域应有消息, got: {all:?}");
+        // 不应包含 msg9 (最新的, 在底部)
+        assert!(!all.contains("msg9"), "滚动向上后不应看到最新消息 msg9");
     }
 
     #[test]
     fn wrapped_long_message_auto_scrolls_correctly() {
-        // 100 字符内容在 20 宽区域 = 5 显示行; 3 行可见 → 需要滚动 2 行才能看到末尾
         let long = "a".repeat(100);
         let messages = vec![msg("assistant", &long)];
         let buf = render_to_buffer(MessageList::new(&messages), 20, 3);
-        // 底部行应能看到 'a' (说明滚动到了内容末尾)
         let bottom_char = buf.cell((0, 2)).map(|c| c.symbol().to_string()).unwrap_or_default();
         assert_eq!(bottom_char, "a", "长消息末尾应通过自动滚动可见");
     }
