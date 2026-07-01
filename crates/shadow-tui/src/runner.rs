@@ -236,6 +236,11 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
         Char('c') if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
             state.running = false;
         }
+        Char('l') if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+            state.chat.messages.clear();
+            state.chat.scroll_offset = 0;
+            state.last_error = None;
+        }
         Esc => { /* 退出当前 view? 暂不处理 */ }
         PageUp => {
             state.chat.scroll_offset = state.chat.scroll_offset.saturating_add(5);
@@ -353,6 +358,7 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
 mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, KeyEventKind, KeyEventState};
+    use shadow_core::ChatMessage;
 
     fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
         KeyEvent {
@@ -373,6 +379,19 @@ mod tests {
         let mut s = AppState::new();
         handle_key(&mut s, key(KeyCode::Char('c'), KeyModifiers::CONTROL)).unwrap();
         assert!(!s.running);
+    }
+
+    #[test]
+    fn ctrl_l_clears_messages() {
+        let mut s = AppState::new();
+        s.chat.messages.push(ChatMessage {
+            role: "user".into(), content: "hi".into(),
+            tool_call_id: None, tool_calls: vec![], reasoning_content: None,
+        });
+        s.last_error = Some("err".into());
+        handle_key(&mut s, key(KeyCode::Char('l'), KeyModifiers::CONTROL)).unwrap();
+        assert!(s.chat.messages.is_empty());
+        assert!(s.last_error.is_none());
     }
 
     #[test]
