@@ -1,5 +1,6 @@
 //! shadow TUI -- ratatui dashboard
 
+pub mod app;
 pub mod event;
 pub mod terminal;
 pub mod theme;
