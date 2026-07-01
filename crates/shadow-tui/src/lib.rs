@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod event;
+pub mod observer;
 pub mod terminal;
 pub mod theme;
 pub mod widgets;
