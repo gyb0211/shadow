@@ -16,3 +16,7 @@ Thumbs.db
 
 # Shadow 运行时数据
 ~/.shadow/
+
+
+# Superpowers brainstorm visual companion
+.superpowers/
