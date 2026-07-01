@@ -47,15 +47,32 @@ impl<'a> Widget for MessageList<'a> {
                 _ => (msg.role.as_str(), theme::DIM),
             };
 
-            // 标签 + 内容
             let label_style = Style::default().fg(color).bg(theme::BG);
             let content_style = Style::default().fg(theme::TEXT).bg(theme::BG);
-            let line = Line::from(vec![
-                Span::styled(label.to_string(), label_style),
-                Span::styled(msg.content.clone(), content_style),
-            ]);
-            let _ = buf.set_line(area.left(), y, &line, area.width);
-            y += 1;
+
+            // 按 content 内的实际换行拆行: 第一行带标签, 后续行无标签
+            for (i, text) in msg.content.lines().enumerate() {
+                if y >= area.bottom() {
+                    break;
+                }
+                let line = if i == 0 {
+                    Line::from(vec![
+                        Span::styled(label, label_style),
+                        Span::styled(text, content_style),
+                    ])
+                } else {
+                    Line::from(vec![Span::styled(text, content_style)])
+                };
+                let _ = buf.set_line(area.left(), y, &line, area.width);
+                y += 1;
+            }
+
+            // content 为空时至少渲染标签行
+            if msg.content.is_empty() && y < area.bottom() {
+                let line = Line::from(vec![Span::styled(label, label_style)]);
+                let _ = buf.set_line(area.left(), y, &line, area.width);
+                y += 1;
+            }
 
             // tool_calls 框线 (assistant 消息附带)
             for tc in &msg.tool_calls {
@@ -117,5 +134,25 @@ mod tests {
         let buf = render_to_buffer(MessageList::new(&messages), 40, 1);
         let cell = buf.cell((0, 0)).unwrap();
         assert_eq!(cell.fg, theme::TOOL_TEXT);
+    }
+
+    #[test]
+    fn multiline_content_spans_multiple_rows() {
+        let messages = vec![msg("assistant", "第一行\n第二行\n第三行")];
+        let buf = render_to_buffer(MessageList::new(&messages), 40, 5);
+        // 第一行: 标签 "assistant ❯ " + "第一行"
+        assert_eq!(buf.cell((0, 0)).unwrap().fg, theme::ASSISTANT);
+        // 第二行: 无标签, 纯 content "第二行"
+        assert_eq!(buf.cell((0, 1)).unwrap().symbol(), "第");
+        // 第三行: "第三行"
+        assert_eq!(buf.cell((0, 2)).unwrap().symbol(), "第");
+    }
+
+    #[test]
+    fn empty_content_still_renders_label() {
+        let messages = vec![msg("user", "")];
+        let buf = render_to_buffer(MessageList::new(&messages), 40, 1);
+        // 标签行应存在
+        assert_eq!(buf.cell((0, 0)).unwrap().fg, theme::USER);
     }
 }
