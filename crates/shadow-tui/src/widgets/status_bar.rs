@@ -73,7 +73,10 @@ impl<'a> StatusBar<'a> {
 
 impl<'a> Widget for StatusBar<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let sep = Span::styled(" · ", Style::default().fg(theme::DIM));
+        // 统一背景色: 整个区域先填 BG
+        buf.set_style(area, Style::default().bg(theme::BG));
+
+        let sep = Span::styled(" · ", Style::default().fg(theme::DIM).bg(theme::BG));
 
         // ── 第 1 行: left + right ──
         if area.height >= 1 {

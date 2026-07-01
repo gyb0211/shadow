@@ -74,18 +74,27 @@ async fn run_loop_inner(
 
 fn draw(term: &mut Frame, state: &AppState) -> Result<()> {
     use ratatui::layout::{Constraint, Direction, Layout};
+    use ratatui::widgets::{Block, Borders};
+    use ratatui::style::Style;
     use crate::views::{ChatView, ConfigView, MemoryView};
     use crate::widgets::{CommandPalette, InputBox, StatusBar};
+    use crate::theme;
 
     term.draw(|f| {
         let area = f.area();
+
+        // 统一背景色: 整屏先填 BG
+        f.render_widget(
+            Block::default().style(Style::default().bg(theme::BG)),
+            area,
+        );
 
         // 三段布局: main(可变高) + input(固定高) + status(固定高 2 行)
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Min(1),    // main
-                Constraint::Length(5), // input (多行输入预留)
+                Constraint::Length(5), // input (多行输入预留 + 上下边界线)
                 Constraint::Length(2), // status (两行)
             ])
             .split(area);
@@ -103,10 +112,16 @@ fn draw(term: &mut Frame, state: &AppState) -> Result<()> {
             }
         }
 
-        // ── input: 输入框 ──
+        // ── input: 带上下边界线的输入框 ──
+        let input_block = Block::default()
+            .borders(Borders::TOP | Borders::BOTTOM)
+            .border_style(Style::default().fg(theme::DIM))
+            .style(Style::default().bg(theme::BG));
+        let input_inner = input_block.inner(chunks[1]);
+        f.render_widget(input_block, chunks[1]);
         f.render_widget(
             InputBox::new(&state.chat.input, state.chat.cursor),
-            chunks[1],
+            input_inner,
         );
 
         // ── status: 两行插件化状态栏 ──
