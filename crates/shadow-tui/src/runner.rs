@@ -72,11 +72,57 @@ async fn run_loop_inner(
 }
 
 fn draw(term: &mut Frame, state: &AppState) -> Result<()> {
-    let _ = term.draw(|f| {
+    use ratatui::layout::{Constraint, Direction, Layout};
+    use crate::views::{ChatView, ConfigView, MemoryView};
+    use crate::widgets::{CommandPalette, StatusBar};
+
+    term.draw(|f| {
         let area = f.area();
-        // 占位: 实际布局各 Task 16 联动
-        let _ = state;
-        let _ = area;
+
+        // 整屏分: 顶 status / 中 view / 底 status
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
+            .split(area);
+
+        // 顶
+        f.render_widget(
+            StatusBar::new(&state.status_top.text, "⌘K"),
+            chunks[0],
+        );
+
+        // 中
+        match state.view {
+            crate::app::View::Chat => {
+                f.render_widget(ChatView::new(&state.chat), chunks[1]);
+            }
+            crate::app::View::Config => {
+                f.render_widget(ConfigView::new(&shadow_config::Config::default(), 0), chunks[1]);
+                // 注: 实际应传持久化的 config 引用, 这里简化 (Task 17 集成时改)
+            }
+            crate::app::View::Memory => {
+                f.render_widget(MemoryView::new(&state.memory_view), chunks[1]);
+            }
+        }
+
+        // 底
+        f.render_widget(
+            StatusBar::new(&state.status_bottom.text, &format!("hist {}/{}", state.chat.messages.len(), 50)),
+            chunks[2],
+        );
+
+        // palette 浮层
+        if let Some(p) = &state.palette {
+            let items = state.palette_items();
+            f.render_widget(
+                CommandPalette::new(&p.query, &items, p.selected),
+                chunks[1],
+            );
+        }
     })?;
     Ok(())
 }
@@ -131,8 +177,118 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
     Ok(())
 }
 
-fn handle_key(state: &mut AppState, _k: KeyEvent) -> Result<()> {
-    // 实际按键处理在 Task 16 联动时补全
-    let _ = state;
+fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
+    use crossterm::event::KeyCode::*;
+
+    // palette 模式
+    if state.palette.is_some() {
+        match k.code {
+            Esc => state.close_palette(),
+            Enter => { state.execute_palette(); }
+            Up => {
+                if let Some(p) = state.palette.as_mut() {
+                    if p.selected > 0 { p.selected -= 1; }
+                }
+            }
+            Down => {
+                let max = state.palette_items().len().saturating_sub(1);
+                if let Some(p) = state.palette.as_mut() {
+                    p.selected = (p.selected + 1).min(max);
+                }
+            }
+            Backspace => {
+                if let Some(p) = state.palette.as_mut() {
+                    p.query.pop();
+                }
+            }
+            Char(c) => {
+                let q = state.palette.as_ref().map(|p| p.query.clone()).unwrap_or_default();
+                let mut new_q = q;
+                new_q.push(c);
+                state.update_palette_query(&new_q);
+            }
+            _ => {}
+        }
+        return Ok(());
+    }
+
+    // 普通模式
+    match k.code {
+        Char('k') if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+            state.open_palette();
+        }
+        Char('c') if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+            state.running = false;
+        }
+        Esc => { /* 退出当前 view? 暂不处理 */ }
+        Enter => {
+            if !state.chat.agent_busy {
+                if !state.try_slash_input() {
+                    let text = state.chat.input.clone();
+                    if !text.trim().is_empty() {
+                        state.chat.input_history.push(text.clone());
+                        state.chat.messages.push(shadow_core::ChatMessage {
+                            role: "user".into(), content: text,
+                            tool_call_id: None, tool_calls: vec![],
+                        });
+                        state.chat.input.clear();
+                        state.chat.agent_busy = true;
+                        // 实际 spawn agent 在 Task 17 集成时
+                    }
+                }
+            }
+        }
+        Backspace => { state.chat.input.pop(); }
+        Char(c) => { state.chat.input.push(c); }
+        _ => {}
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, KeyEventKind, KeyEventState};
+
+    fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent {
+            code, modifiers: mods, kind: KeyEventKind::Press, state: KeyEventState::NONE,
+        }
+    }
+
+    #[test]
+    fn ctrl_k_opens_palette() {
+        let mut s = AppState::new();
+        assert!(s.palette.is_none());
+        handle_key(&mut s, key(KeyCode::Char('k'), KeyModifiers::CONTROL)).unwrap();
+        assert!(s.palette.is_some());
+    }
+
+    #[test]
+    fn ctrl_c_quits() {
+        let mut s = AppState::new();
+        handle_key(&mut s, key(KeyCode::Char('c'), KeyModifiers::CONTROL)).unwrap();
+        assert!(!s.running);
+    }
+
+    #[test]
+    fn enter_pushes_user_message_when_not_busy() {
+        let mut s = AppState::new();
+        s.chat.input = "hello".to_string();
+        handle_key(&mut s, key(KeyCode::Enter, KeyModifiers::empty())).unwrap();
+        assert_eq!(s.chat.messages.len(), 1);
+        assert_eq!(s.chat.messages[0].role, "user");
+        assert!(s.chat.input.is_empty());
+        assert!(s.chat.agent_busy);
+    }
+
+    #[test]
+    fn enter_ignored_when_busy() {
+        let mut s = AppState::new();
+        s.chat.input = "hello".to_string();
+        s.chat.agent_busy = true;
+        handle_key(&mut s, key(KeyCode::Enter, KeyModifiers::empty())).unwrap();
+        assert_eq!(s.chat.messages.len(), 0);
+        assert!(!s.chat.input.is_empty());
+    }
 }
