@@ -21,7 +21,6 @@ use tracing::Instrument;
 /// 当前主路径用 `ProviderDispatchRef` (零开销借用). 保留此 Arc-backed 版本
 /// 供 Phase 2 Reliable 层 / 异步任务所有权场景使用.
 pub struct ProviderDispatch {
-    #[allow(dead_code)]
     inner: Arc<dyn ModelProvider>,
 }
 
@@ -40,6 +39,97 @@ impl ProviderDispatch {
     #[must_use]
     pub fn from_ref(inner: &dyn ModelProvider) -> ProviderDispatchRef<'_> {
         ProviderDispatchRef { inner }
+    }
+
+    /// 借用为 ProviderDispatchRef -- 所有方法零开销委托
+    #[must_use]
+    pub fn as_ref(&self) -> ProviderDispatchRef<'_> {
+        ProviderDispatchRef {
+            inner: self.inner.as_ref(),
+        }
+    }
+
+    /// 单轮对话 (无历史, 可带 system prompt)
+    pub async fn chat_with_system(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<String> {
+        self.as_ref()
+            .chat_with_system(system_prompt, message, model, temperature)
+            .await
+    }
+
+    /// 带历史的单轮对话 (返回纯文本)
+    pub async fn chat_with_history(
+        &self,
+        messages: &[ChatMessage],
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<String> {
+        self.as_ref()
+            .chat_with_history(messages, model, temperature)
+            .await
+    }
+
+    /// 完整 ChatRequest (含 tools) -- 返回 ChatResponse (含 tool_calls/usage)
+    pub async fn chat(
+        &self,
+        request: ChatRequest<'_>,
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<ChatResponse> {
+        self.as_ref().chat(request, model, temperature).await
+    }
+
+    /// 带工具的对话
+    pub async fn chat_with_tools(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[serde_json::Value],
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<ChatResponse> {
+        self.as_ref()
+            .chat_with_tools(messages, tools, model, temperature)
+            .await
+    }
+
+    /// 流式对话 -- span 通过 unfold 在每次 poll 时 enter, 保证流处理过程在归因 span 内
+    pub fn stream_chat(
+        &self,
+        request: ChatRequest<'_>,
+        model: &str,
+        temperature: Option<f64>,
+        options: StreamOptions,
+    ) -> BoxStream<'static, StreamResult<StreamEvent>> {
+        self.as_ref()
+            .stream_chat(request, model, temperature, options)
+    }
+
+    pub fn stream_chat_with_system(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: Option<f64>,
+        options: StreamOptions,
+    ) -> BoxStream<'static, StreamResult<StreamEvent>> {
+        self.as_ref()
+            .stream_chat_with_system(system_prompt, message, model, temperature, options)
+    }
+
+    pub fn stream_chat_with_history(
+        &self,
+        messages: &[ChatMessage],
+        model: &str,
+        temperature: Option<f64>,
+        options: StreamOptions,
+    ) -> BoxStream<'static, StreamResult<StreamEvent>> {
+        self.as_ref()
+            .stream_chat_with_history(messages, model, temperature, options)
     }
 }
 
