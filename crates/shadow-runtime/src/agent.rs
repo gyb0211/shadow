@@ -5,10 +5,11 @@
 //! - Shadow: ~10 字段, 目标 ~300 行
 
 use shadow_core::{
-    Attributable, AutonomyLevel, ChatChunk, ChatMessage, ChatRequest, ChatResponse, Memory,
+    Attributable, AutonomyLevel, ChatMessage, ChatRequest, ChatResponse, Memory,
     ModelProvider, Observer, ObserverEvent, Role, Session, SessionStore, TokenUsage, Tool, ToolCall,
-    ToolResult,
+    ToolResult, ToolSpec,
 };
+use shadow_core::provider::{StreamEvent, StreamOptions, StreamResult};
 use anyhow::Result;
 use futures::stream::BoxStream;
 use futures::StreamExt;
@@ -216,26 +217,31 @@ impl Agent {
                 message_count: messages.len(),
             });
 
-            // 构建请求
+            // 构建请求 (ChatRequest 借用 messages 和 tools_vec)
+            let tools_vec: Vec<ToolSpec> = self.tools.iter().map(|t| t.spec()).collect();
             let request = ChatRequest {
-                messages: messages.clone(),
-                model: self.config.model.clone(),
-                temperature: self.config.temperature,
-                max_tokens: None,
-                tools: self.tools.iter().map(|t| t.spec()).collect(),
+                messages: &messages,
+                tools: if tools_vec.is_empty() { None } else { Some(&tools_vec) },
             };
 
-            // 调用 provider (流式)
+            // 调用 provider (流式) -- stream_chat 非 async, 直接返回 BoxStream
             let start = std::time::Instant::now();
-            let stream = self.provider.chat_stream(request).await?;
+            let stream = self.provider.stream_chat(
+                request,
+                &self.config.model,
+                self.config.temperature,
+                StreamOptions::new(true),
+            );
             let response = consume_stream(stream, on_delta.as_ref()).await?;
             let duration_ms = start.elapsed().as_millis() as u64;
 
-            // 记录 LLM 响应
+            // 记录 LLM 响应 (TokenUsage 字段名已改: input/output/cached_input)
+            let total_tokens = response.usage.input_tokens.unwrap_or(0)
+                + response.usage.output_tokens.unwrap_or(0);
             self.observer.record_event(&ObserverEvent::LlmResponse {
                 model: self.config.model.clone(),
                 duration_ms,
-                tokens: response.usage.total_tokens,
+                tokens: total_tokens,
             });
 
             // 判断是否有工具调用
@@ -414,8 +420,10 @@ impl Agent {
                 // 获取工具超时配置 -- None 表示不限制
                 let timeout = t.timeout();
 
-                // 执行工具 (带超时控制)
-                let exec_future = t.execute(tool_call.arguments.clone());
+                // 执行工具 (带超时控制) -- arguments 现在是 JSON 字符串, 需解析回 Value
+                let args_value = serde_json::from_str::<serde_json::Value>(&tool_call.arguments)
+                    .unwrap_or(serde_json::Value::Null);
+                let exec_future = t.execute(args_value);
 
                 let result = match timeout {
                     Some(d) => {
@@ -469,15 +477,15 @@ impl Agent {
         // 同时清除 session store 中的当前会话
         if let Some(store) = &self.session_store {
             let sid = self.current_session_id.lock().take();
-            if let Some(id) = sid {
-                if let Err(e) = store.delete(&id).await {
-                    shadow_log::record!(
-                        WARN,
-                        Action::Fail,
-                        format!("删除会话失败: {e}")
+            if let Some(id) = sid
+                && let Err(e) = store.delete(&id).await
+            {
+                shadow_log::record!(
+                    WARN,
+                    Action::Fail,
+                    format!("删除会话失败: {e}")
                     );
                 }
-            }
         }
     }
 
@@ -626,43 +634,69 @@ fn chars_preview(s: &str, n: usize) -> String {
     out
 }
 
-/// 消费流式 ChatChunk 流, 聚合为完整 ChatResponse
+/// 消费流式 StreamEvent 流, 聚合为完整 ChatResponse
 ///
-/// 对每个 ContentDelta 调用 on_delta 回调 (如果提供),
-/// 从 Done chunk 获取完整累积结果.
+/// - TextDelta: 累积文本增量, 调 on_delta 回调
+/// - ToolCallDelta: 按 id (或 name) 累积工具调用, 合并 arguments 片段
+/// - Usage: 提取 token 用量
+/// - Final: 流结束
 async fn consume_stream(
-    mut stream: BoxStream<'static, Result<ChatChunk>>,
+    mut stream: BoxStream<'static, StreamResult<StreamEvent>>,
     on_delta: Option<&Arc<dyn StreamDeltaCallback>>,
 ) -> Result<ChatResponse> {
     let mut content = String::new();
-    let mut tool_calls = Vec::new();
+    let mut reasoning_content: Option<String> = None;
+    // 用 id (空则 name) 做 key 累积工具调用 -- provider 可能分多次发送 arguments 片段
+    let mut tool_calls_map: std::collections::BTreeMap<String, ToolCall> =
+        std::collections::BTreeMap::new();
     let mut usage = TokenUsage::default();
-    let mut reasoning_content = None;
 
-    while let Some(chunk_result) = stream.next().await {
-        match chunk_result? {
-            ChatChunk::ContentDelta(delta) => {
-                if let Some(cb) = on_delta {
-                    cb(&delta);
+    while let Some(event_result) = stream.next().await {
+        match event_result? {
+            StreamEvent::TextDelta(chunk) => {
+                if !chunk.delta.is_empty() {
+                    if let Some(cb) = on_delta {
+                        cb(&chunk.delta);
+                    }
+                    content.push_str(&chunk.delta);
                 }
-                content.push_str(&delta);
+                if let Some(r) = chunk.reasoning {
+                    reasoning_content = Some(r);
+                }
             }
-            ChatChunk::ToolCallDelta { .. } => {
-                // 工具调用增量已在 provider 内部累积, Done chunk 中包含完整结果
+            StreamEvent::ToolCallDelta(tc) => {
+                // 按 id 累积 (空 id 退化为 name, 再退化为序号)
+                let key = if !tc.id.is_empty() {
+                    tc.id.clone()
+                } else if !tc.name.is_empty() {
+                    tc.name.clone()
+                } else {
+                    format!("tool_{}", tool_calls_map.len())
+                };
+                let entry = tool_calls_map.entry(key).or_insert_with(|| ToolCall {
+                    id: tc.id.clone(),
+                    name: tc.name.clone(),
+                    arguments: String::new(),
+                    extra_content: None,
+                });
+                entry.arguments.push_str(&tc.arguments);
+                if !tc.name.is_empty() && entry.name.is_empty() {
+                    entry.name = tc.name.clone();
+                }
+                if !tc.id.is_empty() && entry.id.is_empty() {
+                    entry.id = tc.id.clone();
+                }
             }
-            ChatChunk::Done {
-                content: done_content,
-                tool_calls: done_tool_calls,
-                usage: done_usage,
-                reasoning_content: done_reasoning,
-            } => {
-                content = done_content;
-                tool_calls = done_tool_calls;
-                usage = done_usage;
-                reasoning_content = done_reasoning;
+            StreamEvent::Usage(u) => {
+                usage = u;
             }
+            StreamEvent::Final => break,
+            // PreExecutedToolCall / PreExecutedToolResult 暂不处理 (provider 优化路径)
+            _ => {}
         }
     }
+
+    let tool_calls: Vec<ToolCall> = tool_calls_map.into_values().collect();
 
     Ok(ChatResponse {
         content,

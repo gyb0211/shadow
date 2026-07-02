@@ -93,7 +93,12 @@ impl XmlToolDispatcher {
                 let arguments = val.get("arguments").cloned().unwrap_or(serde_json::Value::Null);
                 // XML 协议无 id, 用序号生成
                 let id = format!("xml-{}", calls.len());
-                calls.push(ToolCall { id, name, arguments });
+                calls.push(ToolCall {
+                    id,
+                    name,
+                    arguments: arguments.to_string(),
+                    extra_content: None,
+                });
             }
 
             // 继续查找剩余文本
@@ -177,7 +182,8 @@ mod tests {
         let tool_call = ToolCall {
             id: "call-1".to_string(),
             name: "search".to_string(),
-            arguments: serde_json::json!({"query": "rust"}),
+            arguments: r#"{"query":"rust"}"#.to_string(),
+            extra_content: None,
         };
         let response = make_response("正在搜索...", vec![tool_call.clone()]);
 
@@ -186,7 +192,8 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].id, "call-1");
         assert_eq!(calls[0].name, "search");
-        assert_eq!(calls[0].arguments["query"], "rust");
+        let args: serde_json::Value = serde_json::from_str(&calls[0].arguments).unwrap();
+        assert_eq!(args["query"], "rust");
         assert!(dispatcher.should_send_tool_specs());
     }
 
@@ -200,7 +207,8 @@ mod tests {
         let (text, calls) = dispatcher.parse_response(&response);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "search");
-        assert_eq!(calls[0].arguments["query"], "rust");
+        let args: serde_json::Value = serde_json::from_str(&calls[0].arguments).unwrap();
+        assert_eq!(args["query"], "rust");
         // 文本中不应再包含 tool_call 标签
         assert!(!text.contains("<tool_call>"));
         assert!(text.contains("我来帮你搜索"));

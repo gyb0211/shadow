@@ -109,12 +109,10 @@ impl Tool for ShellTool {
 ///
 /// 返回命中的规则字符串 (用于错误提示), 未命中返回 None
 fn detect_dangerous(command: &str) -> Option<&'static str> {
-    for pattern in DANGEROUS_PATTERNS {
-        if command.contains(pattern) {
-            return Some(pattern);
-        }
-    }
-    None
+    DANGEROUS_PATTERNS
+        .iter()
+        .find(|pattern| command.contains(*pattern))
+        .copied()
 }
 
 /// 截断超长 stdout -- 超过 MAX_STDOUT_BYTES 时只保留前部分并附加提示

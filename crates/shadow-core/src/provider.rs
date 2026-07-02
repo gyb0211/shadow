@@ -99,8 +99,21 @@ impl StreamOptions {
 
 pub type StreamResult<T> = std::result::Result<T, StreamError>;
 
+/// 流式错误 -- 当前为空枚举 (所有错误通过 StreamEvent::TextDelta(is_final) 传递)
+///
+/// 实现 Error/Display 以便消费者用 `?` 转换到 anyhow::Error. 由于无变体,
+/// 实际不可构造, 所有方法体都是 `match self {}` (exhaustive on empty enum).
 #[derive(Debug)]
 pub enum StreamError {}
+
+impl std::fmt::Display for StreamError {
+    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 不可构造 (空枚举), 用 *self 解引用后 exhaustive match
+        match *self {}
+    }
+}
+
+impl std::error::Error for StreamError {}
 
 /// 聊天消息
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

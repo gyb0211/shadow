@@ -70,10 +70,10 @@ impl Tool for FileWriteTool {
 
         // 确保父目录存在
         let target = std::path::Path::new(path);
-        if let Some(parent) = target.parent() {
-            if !parent.as_os_str().is_empty() {
-                tokio::fs::create_dir_all(parent).await.ok();
-            }
+        if let Some(parent) = target.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            tokio::fs::create_dir_all(parent).await.ok();
         }
 
         if append {
