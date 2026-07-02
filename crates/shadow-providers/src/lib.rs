@@ -9,9 +9,10 @@
 
 pub mod openai;
 pub mod router;
+pub mod dispatch;
 
 pub use openai::OpenAiCompat;
-pub use router::Router;
+pub use router::RouterModelProvider;
 
 use shadow_core::{ModelProvider, ModelProviderRuntimeOptions};
 use anyhow::Result;
@@ -20,7 +21,7 @@ use std::sync::Arc;
 /// 工厂函数 -- 按 (alias, family) 创建 provider
 ///
 /// - `alias`: 完整别名 (如 "openai.default") -- 用于 Attributable::alias()
-/// - `family`: 家族名 (如 "openai" / "openrouter" / "ollama" / "compatible") -- 决定 base_url 和 provider_type()
+/// - `family`: 家族名 (如 "openai" / "openrouter" / "ollama" / "compatible") -- 决定 base_url
 /// - `api_key`: API key (None 时不发 auth header, 兼容 ollama)
 /// - `base_url`: 自定义 base_url (None 时按 family 选默认)
 /// - `opts`: 运行时选项 (auth_style / timeout / extra_headers / ...)
@@ -46,6 +47,7 @@ pub fn create_provider(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shadow_core::Attributable;
 
     #[test]
     fn factory_creates_provider_for_known_family() {
@@ -57,7 +59,7 @@ mod tests {
             ModelProviderRuntimeOptions::default(),
         )
         .unwrap();
-        assert_eq!(p.provider_type(), "openai");
+        assert_eq!(p.alias(), "openai.default");
     }
 
     #[test]
@@ -70,7 +72,7 @@ mod tests {
             ModelProviderRuntimeOptions::default(),
         )
         .unwrap();
-        assert_eq!(p.provider_type(), "compatible");
+        assert_eq!(p.alias(), "custom.glm2");
     }
 
     #[test]

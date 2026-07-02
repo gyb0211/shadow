@@ -27,24 +27,22 @@ pub use attribution::{Attributable, Role};
 pub use channel::{Channel, ChannelMessage, CliChannel, SendMessage};
 pub use memory::{Memory, MemoryEntry, NoneMemory};
 pub use observer::{NoopObserver, Observer, ObserverEvent};
-pub use provider::{AuthStyle, ChatChunk, ChatMessage, ChatRequest, ChatResponse, DefaultProvider, ModelProvider, ModelProviderRuntimeOptions, TokenUsage, ToolCall};
+pub use provider::{
+    AuthStyle, ChatMessage, ChatRequest, ChatResponse, ModelProvider, ModelProviderRuntimeOptions,
+    TokenUsage, ToolCall,
+};
 pub use session_store::{JsonlSessionStore, Session, SessionStore};
-pub use tool::{Tool, ToolResult, ToolSpec, ToolAttribution};
+pub use tool::{Tool, ToolAttribution, ToolResult, ToolSpec};
 
 /// 代理自主级别
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AutonomyLevel {
     /// 完全自主, 无需审批
     Full,
     /// 受监督, 敏感操作需审批
+    #[default]
     Supervised,
     /// 只读, 写操作被拒绝
     ReadOnly,
-}
-
-impl Default for AutonomyLevel {
-    fn default() -> Self {
-        Self::Supervised
-    }
 }

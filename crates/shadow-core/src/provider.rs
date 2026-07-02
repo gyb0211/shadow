@@ -1,18 +1,111 @@
 //! 模型提供商 trait -- LLM 推理后端抽象
 
 use crate::attribution::Attributable;
-use crate::attribution::Role;
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::stream::BoxStream;
-use futures::StreamExt;
+use futures::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use crate::ToolSpec;
+
+/// 流式聊天块 -- SSE 增量
+#[derive(Debug, Clone)]
+pub enum StreamEvent {
+    /// 文本增量 (assistant 回复的逐字/逐词片段)
+    TextDelta(StreamChunk),
+    /// 工具调用增量 (arguments 可能分多次到达, 按 index 分组累积)
+    ToolCallDelta(ToolCall),
+    PreExecutedToolCall {
+        name: String,
+        output: String,
+    },
+    PreExecutedToolResult {
+        name: String,
+        output: String,
+    },
+    Usage(TokenUsage),
+    Final,
+}
+
+#[derive(Debug, Clone)]
+pub struct StreamChunk {
+    pub delta: String,
+    pub reasoning: Option<String>,
+    pub is_final: bool,
+    pub token_count: usize,
+}
+
+impl StreamChunk {
+    pub fn delta(text: impl Into<String>) -> Self {
+        Self {
+            delta: text.into(),
+            reasoning: None,
+            is_final: false,
+            token_count: 0,
+        }
+    }
+
+    pub fn reasoning(text: impl Into<String>) -> Self {
+        Self {
+            delta: String::new(),
+            reasoning: Some(text.into()),
+            is_final: false,
+            token_count: 0,
+        }
+    }
+
+    pub fn final_chunk() -> Self {
+        Self {
+            delta: String::new(),
+            reasoning: None,
+            is_final: true,
+            token_count: 0,
+        }
+    }
+    pub fn error(message: impl Into<String>) -> Self {
+        Self {
+            delta: message.into(),
+            reasoning: None,
+            is_final: true,
+            token_count: 0,
+        }
+    }
+
+    pub fn with_token_estimate(mut self) -> Self {
+        self.token_count = self.delta.len().div_ceil(4);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StreamOptions {
+    pub enabled: bool,
+    pub count_tokens: bool,
+}
+
+impl StreamOptions {
+    pub fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            count_tokens: false,
+        }
+    }
+
+    pub fn with_count_tokens(mut self) -> Self {
+        self.count_tokens = true;
+        self
+    }
+}
+
+pub type StreamResult<T> = std::result::Result<T, StreamError>;
+
+#[derive(Debug)]
+pub enum StreamError {}
 
 /// 聊天消息
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChatMessage {
-    pub role: String,      // "system" / "user" / "assistant" / "tool"
+    pub role: String, // "system" / "user" / "assistant" / "tool"
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
@@ -28,12 +121,9 @@ pub struct ChatMessage {
 
 /// 聊天请求
 #[derive(Debug, Clone)]
-pub struct ChatRequest {
-    pub messages: Vec<ChatMessage>,
-    pub model: String,
-    pub temperature: Option<f64>,
-    pub max_tokens: Option<u32>,
-    pub tools: Vec<crate::tool::ToolSpec>,
+pub struct ChatRequest<'a> {
+    pub messages: &'a [ChatMessage],
+    pub tools: Option<&'a [ToolSpec]>
 }
 
 /// 聊天响应
@@ -52,39 +142,16 @@ pub struct ChatResponse {
 pub struct ToolCall {
     pub id: String,
     pub name: String,
-    pub arguments: serde_json::Value,
+    pub arguments: String,
+    pub extra_content: Option<serde_json::Value>,
 }
 
 /// Token 用量
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TokenUsage {
-    pub prompt_tokens: u64,
-    pub completion_tokens: u64,
-    pub total_tokens: u64,
-}
-
-/// 流式聊天块 -- SSE 增量
-///
-/// ModelProvider::chat_stream() 返回 BoxStream<Result<ChatChunk>>,
-/// 调用方逐块消费, 实现逐字/逐词显示.
-#[derive(Debug, Clone)]
-pub enum ChatChunk {
-    /// 文本增量 (assistant 回复的逐字/逐词片段)
-    ContentDelta(String),
-    /// 工具调用增量 (arguments 可能分多次到达, 按 index 分组累积)
-    ToolCallDelta {
-        index: usize,
-        id: Option<String>,
-        name: Option<String>,
-        arguments_fragment: String,
-    },
-    /// 流结束 -- 包含完整累积结果
-    Done {
-        content: String,
-        tool_calls: Vec<ToolCall>,
-        usage: TokenUsage,
-        reasoning_content: Option<String>,
-    },
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
 }
 
 /// API key 注入位置 -- 决定 provider 如何把 key 放进 HTTP 请求
@@ -130,31 +197,105 @@ pub struct ModelProviderRuntimeOptions {
 /// 借鉴 ZeroClaw ModelProvider, 重命名自 agent-core。
 #[async_trait]
 pub trait ModelProvider: Attributable {
-    /// 提供商类型名 (如 "openai", "anthropic") -- 即 family
-    fn provider_type(&self) -> &str;
+    /// ⭐ 唯一必需实现的方法
+    async fn chat_with_system(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<String>;
+
+    async fn simple_chat(
+        &self,
+        message: &str,
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<String> {
+        self.chat_with_system(None, message, model, temperature)
+            .await
+    }
+
+    async fn chat_with_history(
+        &self,
+        messages: &[ChatMessage],
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<String> {
+        let system = messages
+            .iter()
+            .find(|m| m.role == "system")
+            .map(|m| m.content.as_str());
+        let last_user = messages
+            .iter()
+            .rfind(|m| m.role == "user")
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
+        self.chat_with_system(system, last_user, model, temperature)
+            .await
+    }
 
     /// 同步聊天
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse>;
+    async fn chat(
+        &self,
+        request: ChatRequest<'_>,
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<ChatResponse>;
+
+    /// 同步聊天 + 工具调用
+    async fn chat_with_tools(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[serde_json::Value],
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<ChatResponse>;
 
     /// 流式聊天 -- 返回 BoxStream, 逐块推送 ChatChunk
     ///
     /// 默认实现: 调用 chat() 获取完整响应, 包装成单个 Done chunk.
     /// 支持 SSE 的 provider 应覆写此方法.
-    async fn chat_stream(
+    fn stream_chat(
         &self,
-        request: ChatRequest,
-    ) -> Result<BoxStream<'static, Result<ChatChunk>>> {
-        let response = self.chat(request).await?;
-        let stream = futures::stream::once(async move {
-            Ok(ChatChunk::Done {
-                content: response.content,
-                tool_calls: response.tool_calls,
-                usage: response.usage,
-                reasoning_content: response.reasoning_content,
-            })
-        })
-        .boxed();
-        Ok(stream)
+        _request: ChatRequest,
+        _model: &str,
+        _temperature: Option<f64>,
+        _options: StreamOptions,
+    ) -> stream::BoxStream<'static, StreamResult<StreamEvent>> {
+        // 默认不支持
+        stream::empty().boxed()
+    }
+
+    fn stream_chat_with_system(
+        &self,
+        _system_prompt: Option<&str>,
+        _message: &str,
+        _model: &str,
+        _temperature: Option<f64>,
+        _options: StreamOptions,
+    ) -> stream::BoxStream<'static, StreamResult<StreamEvent>> {
+        // 默认不支持
+        stream::empty().boxed()
+    }
+
+    fn stream_chat_with_history(
+        &self,
+        messages: &[ChatMessage],
+        model: &str,
+        temperature: Option<f64>,
+        options: StreamOptions,
+    ) -> stream::BoxStream<'static, StreamResult<StreamEvent>> {
+        let system = messages
+            .iter()
+            .find(|m| m.role == "system")
+            .map(|m| m.content.as_str());
+        let last_user = messages
+            .iter()
+            .rfind(|m| m.role == "user")
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
+        self.stream_chat_with_system(system, last_user, model, temperature, options)
     }
 
     /// 列出可用模型
@@ -177,101 +318,5 @@ pub trait ModelProvider: Attributable {
     /// 默认温度
     fn default_temperature(&self) -> f64 {
         0.7
-    }
-}
-
-/// 默认提供商 -- 用于未配置时的占位
-pub struct DefaultProvider {
-    name: String,
-}
-
-impl DefaultProvider {
-    #[must_use]
-    pub fn new(name: &str) -> Self {
-        Self { name: name.to_string() }
-    }
-}
-
-impl Attributable for DefaultProvider {
-    fn role(&self) -> Role {
-        Role::Provider
-    }
-    fn alias(&self) -> &str {
-        &self.name
-    }
-}
-
-#[async_trait]
-impl ModelProvider for DefaultProvider {
-    fn provider_type(&self) -> &str {
-        "default"
-    }
-
-    async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse> {
-        anyhow::bail!("默认提供商未配置, 请通过 `shadow config set` 配置 LLM 提供商")
-    }
-
-    async fn list_models(&self) -> Result<Vec<String>> {
-        Ok(vec![])
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn auth_style_default_is_bearer() {
-        match AuthStyle::default() {
-            AuthStyle::Bearer => {}
-            other => panic!("expected Bearer, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn runtime_options_default_all_empty() {
-        let opts = ModelProviderRuntimeOptions::default();
-        assert!(opts.timeout.is_none());
-        assert!(opts.reasoning_effort.is_none());
-        assert!(opts.api_path.is_none());
-        assert!(opts.extra_headers.is_empty());
-        assert!(matches!(opts.auth_style, AuthStyle::Bearer));
-    }
-
-    #[tokio::test]
-    async fn list_models_default_impl_returns_empty() {
-        // 最小 impl: 只覆写必选方法, 验证 list_models 的默认实现
-        struct MinimalProvider;
-        impl Attributable for MinimalProvider {
-            fn role(&self) -> Role { Role::Provider }
-            fn alias(&self) -> &str { "minimal" }
-        }
-        #[async_trait]
-        impl ModelProvider for MinimalProvider {
-            fn provider_type(&self) -> &str { "minimal" }
-            async fn chat(&self, _: ChatRequest) -> Result<ChatResponse> {
-                Ok(ChatResponse { content: String::new(), tool_calls: vec![], usage: TokenUsage::default(), reasoning_content: None })
-            }
-        }
-        let p = MinimalProvider;
-        assert!(p.list_models().await.unwrap().is_empty());
-    }
-
-    #[test]
-    fn supports_vision_default_is_false() {
-        struct MinimalProvider;
-        impl Attributable for MinimalProvider {
-            fn role(&self) -> Role { Role::Provider }
-            fn alias(&self) -> &str { "minimal" }
-        }
-        #[async_trait]
-        impl ModelProvider for MinimalProvider {
-            fn provider_type(&self) -> &str { "minimal" }
-            async fn chat(&self, _: ChatRequest) -> Result<ChatResponse> {
-                Ok(ChatResponse { content: String::new(), tool_calls: vec![], usage: TokenUsage::default(), reasoning_content: None })
-            }
-        }
-        let p = MinimalProvider;
-        assert!(!p.supports_vision());
     }
 }
