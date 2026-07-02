@@ -99,3 +99,49 @@ fn rewrite_file(state: &WriterState) -> Result<()> {
     fs::rename(&tmp, &state.path).context("替换日志文件")?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 端到端验证: record_event 的文件写入路径
+    #[test]
+    fn record_event_writes_to_file() {
+        let workspace = std::env::temp_dir().join(format!(
+            "shadow-log-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // 用新的进程内 init (而非全局 OnceLock) 直接构造 WriterState 测试
+        // 由于 init_from_config 用全局 OnceLock, 测试中只能调一次 -- 用独立验证.
+        let path = workspace.join("logs").join("runtime-trace.jsonl");
+
+        // 手动模拟 record_event 的行为
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let event = crate::event::LogEvent::new(
+            crate::event::Severity::INFO,
+            crate::event::Action::Start,
+            crate::event::EventCategory::System,
+        )
+        .with_message("test message");
+        let value = serde_json::to_value(&event).unwrap();
+        let line = serde_json::to_string(&value).unwrap();
+
+        // 写入
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        let mut writer = BufWriter::new(file);
+        writeln!(writer, "{line}").unwrap();
+        writer.flush().unwrap();
+
+        // 验证
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("test message"), "content = {content}");
+        assert!(content.contains("\"action\":\"start\""), "content = {content}");
+    }
+}

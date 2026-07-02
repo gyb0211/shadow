@@ -33,28 +33,30 @@ pub mod __private {
 pub fn install_subscriber(verbose: bool) {
     use tracing_subscriber::prelude::*;
 
+    // LogCaptureLayer -- 独立 per-layer filter, 始终捕获 record! / attribution
     let capture = LogCaptureLayer.with_filter(
         tracing_subscriber::filter::Targets::new()
             .with_target("shadow_log_event", tracing::Level::INFO)
             .with_target("shadow_log_attribution", tracing::Level::INFO),
     );
 
+    // 终端层 (stderr) 的过滤器 -- 受 verbose / RUST_LOG 控制
+    let base = if verbose { "debug" } else { "warn" };
+    let fmt_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(base));
+
     let fmt = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_target(false)
-        .compact();
+        .compact()
+        .with_filter(fmt_filter);
 
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| {
-            if verbose {
-                tracing_subscriber::EnvFilter::new("debug")
-            } else {
-                tracing_subscriber::EnvFilter::new("warn")
-            }
-        });
-
+    // 关键: fmt_filter 只挂在 fmt 层, 不挂全局. 这样 LogCaptureLayer 的 per-layer
+    // filter 才能真正独立工作 -- 无论 RUST_LOG/warn 默认值如何, record! 事件始终
+    // 被捕获并写入 JSONL. (之前 fmt_filter 挂在 registry 级别, 导致 INFO 级
+    // record! 被 warn 默认值先拦截, 永远到不了 capture layer -- 这就是日志写不
+    // 出来的根因.)
     tracing_subscriber::registry()
-        .with(filter)
         .with(fmt)
         .with(capture)
         .init();
