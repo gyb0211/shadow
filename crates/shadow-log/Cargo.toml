@@ -3,7 +3,7 @@ name = "shadow-log"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "影子统一日志面 -- record! 宏 + JSONL 持久化 + 广播"
+description = "影子统一日志面 -- record! 宏 + JSONL 持久化 + 广播 + 读取器"
 
 [dependencies]
 shadow-core.workspace = true
@@ -16,3 +16,6 @@ tokio.workspace = true
 uuid.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

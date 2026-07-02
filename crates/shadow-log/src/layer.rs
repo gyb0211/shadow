@@ -1,4 +1,9 @@
 //! LogCaptureLayer -- 捕获 record! 事件, 组装 LogEvent, 写入
+//!
+//! 参考 ZeroClaw layer.rs:
+//! - 捕获 target=shadow_log_event 的事件
+//! - 从 visit 中提取 action, message, shadow_attrs (归因字段)
+//! - 组装 LogEvent 后调 record_event
 
 use crate::event::{Action, EventCategory, LogEvent, Severity};
 use crate::writer::record_event;
@@ -46,6 +51,19 @@ impl<S: Subscriber> Layer<S> for LogCaptureLayer {
             log_event = log_event.with_message(msg);
         }
 
+        // 解析归因字段 (shadow_attrs JSON 字符串)
+        if let Some(ref attrs_json) = visitor.attrs {
+            if let Ok(attrs) = serde_json::from_str::<serde_json::Value>(attrs_json) {
+                if let Some(obj) = attrs.as_object() {
+                    for (key, val) in obj {
+                        if let Some(s) = val.as_str() {
+                            log_event = log_event.with_attr(key, s);
+                        }
+                    }
+                }
+            }
+        }
+
         record_event(log_event);
     }
 }
@@ -54,6 +72,8 @@ impl<S: Subscriber> Layer<S> for LogCaptureLayer {
 struct EventVisitor {
     action: Option<String>,
     message: Option<String>,
+    /// record! 宏的归因字段 (JSON 字符串)
+    attrs: Option<String>,
 }
 
 impl Visit for EventVisitor {
@@ -61,6 +81,7 @@ impl Visit for EventVisitor {
         match field.name() {
             "shadow_action" => self.action = Some(value.to_string()),
             "message" => self.message = Some(value.to_string()),
+            "shadow_attrs" => self.attrs = Some(value.to_string()),
             _ => {}
         }
     }
@@ -71,7 +92,35 @@ impl Visit for EventVisitor {
         match field.name() {
             "shadow_action" => self.action = Some(s),
             "message" => self.message = Some(s),
+            "shadow_attrs" => self.attrs = Some(s),
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::{Action, EventCategory, LogEvent, Severity};
+
+    #[test]
+    fn log_event_with_attribution() {
+        let event = LogEvent::new(Severity::Info, Action::Send, EventCategory::Provider)
+            .with_message("LLM 请求")
+            .with_attr("model", "MiniMax-M2.7")
+            .with_attr("agent", "shadow");
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("MiniMax-M2.7"));
+        assert!(json.contains("shadow"));
+        assert!(json.contains("send"));
+    }
+
+    #[test]
+    fn log_event_with_outcome() {
+        let event = LogEvent::new(Severity::Warn, Action::Fail, EventCategory::Tool)
+            .with_message("tool failed")
+            .with_outcome(crate::event::EventOutcome::Failure);
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("failure"));
     }
 }
