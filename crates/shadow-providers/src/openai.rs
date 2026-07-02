@@ -194,6 +194,7 @@ impl Provider for OpenAiProvider {
             let mut content = String::new();
             let mut reasoning_content = String::new();
             let mut usage = TokenUsage::default();
+            let mut in_think_block = false;
 
             while let Some(result) = byte_stream.next().await {
                 match result {
@@ -221,6 +222,7 @@ impl Provider for OpenAiProvider {
                                 &mut tool_calls_map,
                                 &mut reasoning_content,
                                 &mut usage,
+                                &mut in_think_block,
                             ) {
                                 None => {
                                     // 收到 [DONE] -- 发送最终 Done chunk
@@ -479,6 +481,83 @@ fn convert_tools(tools: &[shadow_core::ToolSpec]) -> Vec<ApiTool> {
         .collect()
 }
 
+/// 雪花字符 (U+2744), 部分 provider 用此标记思考内容
+const THINK_SNOWFLAKE: &str = "\u{2744}";
+
+/// 将 content 增量拆分为 ContentDelta 和 ReasoningDelta
+///
+/// 处理两种思考标签格式:
+/// 1. `<think`/`</think` (标准格式, 如 MiniMax)
+/// 2. 雪花字符 U+2744 (部分模型使用, 开闭标签相同)
+///
+/// 使用 `in_think_block` 跟踪当前是否在思考块内, 支持跨 chunk 的状态维护.
+fn split_think_content(text: &str, in_think_block: &mut bool) -> Vec<ChatChunk> {
+    let mut chunks = Vec::new();
+    let mut remaining = text;
+
+    while !remaining.is_empty() {
+        if *in_think_block {
+            // 在思考块内: 查找结束标签 </think 或 雪花字符
+            let end_pos = remaining
+                .find("</think")
+                .map(|pos| (pos, "</think".len(), false))
+                .or_else(|| {
+                    remaining
+                        .find(THINK_SNOWFLAKE)
+                        .map(|pos| (pos, THINK_SNOWFLAKE.len(), true))
+                });
+
+            if let Some((pos, tag_len, is_snowflake)) = end_pos {
+                // 结束标签之前的内容是 ReasoningDelta
+                if pos > 0 {
+                    chunks.push(ChatChunk::ReasoningDelta(remaining[..pos].to_string()));
+                }
+                // 跳过结束标签
+                remaining = &remaining[pos + tag_len..];
+                // 跳过可选的 > (仅对 </think 标签)
+                if !is_snowflake && remaining.starts_with('>') {
+                    remaining = &remaining[1..];
+                }
+                *in_think_block = false;
+            } else {
+                // 没有结束标签, 全部是 ReasoningDelta
+                chunks.push(ChatChunk::ReasoningDelta(remaining.to_string()));
+                remaining = "";
+            }
+        } else {
+            // 不在思考块内: 查找开始标签 <think 或 雪花字符
+            let start_pos = remaining
+                .find("<think")
+                .map(|pos| (pos, "<think".len(), false))
+                .or_else(|| {
+                    remaining
+                        .find(THINK_SNOWFLAKE)
+                        .map(|pos| (pos, THINK_SNOWFLAKE.len(), true))
+                });
+
+            if let Some((pos, tag_len, is_snowflake)) = start_pos {
+                // 开始标签之前的内容是 ContentDelta
+                if pos > 0 {
+                    chunks.push(ChatChunk::ContentDelta(remaining[..pos].to_string()));
+                }
+                // 跳过开始标签
+                remaining = &remaining[pos + tag_len..];
+                // 跳过可选的 > (仅对 <think 标签)
+                if !is_snowflake && remaining.starts_with('>') {
+                    remaining = &remaining[1..];
+                }
+                *in_think_block = true;
+            } else {
+                // 没有开始标签, 全部是 ContentDelta
+                chunks.push(ChatChunk::ContentDelta(remaining.to_string()));
+                remaining = "";
+            }
+        }
+    }
+
+    chunks
+}
+
 /// 处理单行 SSE data payload -- 解析 JSON, 更新累积器, 返回需要发送的 chunks
 ///
 /// 返回值:
@@ -490,6 +569,7 @@ fn process_sse_data(
     tool_calls_map: &mut std::collections::BTreeMap<usize, ToolCallAccum>,
     reasoning_content: &mut String,
     usage: &mut TokenUsage,
+    in_think_block: &mut bool,
 ) -> Option<Vec<ChatChunk>> {
     // [DONE] 标记 -- 返回 None 表示流结束
     if data == "[DONE]" {
@@ -523,17 +603,26 @@ fn process_sse_data(
         return Some(chunks);
     };
 
-    // 文本增量
+    // 文本增量 -- 可能含 <think 标签, 需要拆分为 ContentDelta 和 ReasoningDelta
     if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
         if !text.is_empty() {
-            content.push_str(text);
-            chunks.push(ChatChunk::ContentDelta(text.to_string()));
+            for chunk in split_think_content(text, in_think_block) {
+                match &chunk {
+                    ChatChunk::ContentDelta(c) => content.push_str(c),
+                    ChatChunk::ReasoningDelta(r) => reasoning_content.push_str(r),
+                    _ => {}
+                }
+                chunks.push(chunk);
+            }
         }
     }
 
-    // 推理内容增量 (DeepSeek-R1 等思考模型)
+    // 推理内容增量 (DeepSeek-R1 等思考模型的独立字段) -- 累积并推送 ReasoningDelta
     if let Some(rc) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
-        reasoning_content.push_str(rc);
+        if !rc.is_empty() {
+            reasoning_content.push_str(rc);
+            chunks.push(ChatChunk::ReasoningDelta(rc.to_string()));
+        }
     }
 
     // 工具调用增量
@@ -601,9 +690,10 @@ mod tests {
         let mut tool_calls_map = std::collections::BTreeMap::new();
         let mut reasoning = String::new();
         let mut usage = TokenUsage::default();
+        let mut in_think_block = false;
 
         let sse_data = r#"{"choices":[{"delta":{"content":"你好"}}]}"#;
-        let result = process_sse_data(sse_data, &mut content, &mut tool_calls_map, &mut reasoning, &mut usage);
+        let result = process_sse_data(sse_data, &mut content, &mut tool_calls_map, &mut reasoning, &mut usage, &mut in_think_block);
 
         assert!(result.is_some());
         let chunks = result.unwrap();
@@ -621,8 +711,9 @@ mod tests {
         let mut tool_calls_map = std::collections::BTreeMap::new();
         let mut reasoning = String::new();
         let mut usage = TokenUsage::default();
+        let mut in_think_block = false;
 
-        let result = process_sse_data("[DONE]", &mut content, &mut tool_calls_map, &mut reasoning, &mut usage);
+        let result = process_sse_data("[DONE]", &mut content, &mut tool_calls_map, &mut reasoning, &mut usage, &mut in_think_block);
         assert!(result.is_none()); // None 表示流结束
     }
 
@@ -632,14 +723,15 @@ mod tests {
         let mut tool_calls_map = std::collections::BTreeMap::new();
         let mut reasoning = String::new();
         let mut usage = TokenUsage::default();
+        let mut in_think_block = false;
 
         // 第一个 fragment: 工具名 + 部分 arguments
         let sse1 = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search","arguments":"{\"q\":"}}]}}]}"#;
-        let _ = process_sse_data(sse1, &mut content, &mut tool_calls_map, &mut reasoning, &mut usage);
+        let _ = process_sse_data(sse1, &mut content, &mut tool_calls_map, &mut reasoning, &mut usage, &mut in_think_block);
         
         // 第二个 fragment: 剩余 arguments
         let sse2 = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"rust\"}"}}]}}]}"#;
-        let _ = process_sse_data(sse2, &mut content, &mut tool_calls_map, &mut reasoning, &mut usage);
+        let _ = process_sse_data(sse2, &mut content, &mut tool_calls_map, &mut reasoning, &mut usage, &mut in_think_block);
 
         // 验证累积结果
         let accum = &tool_calls_map[&0];
@@ -654,9 +746,10 @@ mod tests {
         let mut tool_calls_map = std::collections::BTreeMap::new();
         let mut reasoning = String::new();
         let mut usage = TokenUsage::default();
+        let mut in_think_block = false;
 
         let sse_data = r#"{"choices":[{"delta":{}}],"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}"#;
-        let _ = process_sse_data(sse_data, &mut content, &mut tool_calls_map, &mut reasoning, &mut usage);
+        let _ = process_sse_data(sse_data, &mut content, &mut tool_calls_map, &mut reasoning, &mut usage, &mut in_think_block);
 
         assert_eq!(usage.prompt_tokens, 10);
         assert_eq!(usage.completion_tokens, 20);
@@ -669,8 +762,9 @@ mod tests {
         let mut tool_calls_map = std::collections::BTreeMap::new();
         let mut reasoning = String::new();
         let mut usage = TokenUsage::default();
+        let mut in_think_block = false;
 
-        let result = process_sse_data("not valid json", &mut content, &mut tool_calls_map, &mut reasoning, &mut usage);
+        let result = process_sse_data("not valid json", &mut content, &mut tool_calls_map, &mut reasoning, &mut usage, &mut in_think_block);
         // 返回空 chunks (跳过), 不报错
         assert!(result.is_some());
         assert!(result.unwrap().is_empty());

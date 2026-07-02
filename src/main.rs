@@ -352,14 +352,15 @@ async fn chat_via_agent(
     if let Some(msg) = message {
         // 单次对话 (流式输出) -- CLI 默认不显示 think 内容
         let on_delta: std::sync::Arc<dyn shadow_runtime::agent::StreamDeltaCallback> =
-            std::sync::Arc::new(|delta: &str| {
-                // 简单过滤: 跳过 <think> 和 </think> 标签 (流式中可能不完整)
-                let cleaned = delta
-                    .replace("<think>", "")
-                    .replace("</think>", "");
-                if !cleaned.is_empty() {
-                    print!("{cleaned}");
-                    let _ = std::io::Write::flush(&mut std::io::stdout());
+            std::sync::Arc::new(|delta: shadow_runtime::agent::StreamDelta| {
+                match delta {
+                    shadow_runtime::agent::StreamDelta::Content(s) => {
+                        print!("{s}");
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    }
+                    shadow_runtime::agent::StreamDelta::Reasoning(_) => {
+                        // CLI 默认不显示思考内容
+                    }
                 }
             });
         let resp = agent.chat_with_stream(&msg, Some(on_delta)).await?;
@@ -397,13 +398,15 @@ async fn chat_via_agent(
             // 流式输出: 逐字打印 LLM 回复 (CLI 默认不显示 think 内容)
             println!(); // 前置换行
             let on_delta: std::sync::Arc<dyn shadow_runtime::agent::StreamDeltaCallback> =
-                std::sync::Arc::new(|delta: &str| {
-                    let cleaned = delta
-                        .replace("<think>", "")
-                        .replace("</think>", "");
-                    if !cleaned.is_empty() {
-                        print!("{cleaned}");
-                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                std::sync::Arc::new(|delta: shadow_runtime::agent::StreamDelta| {
+                    match delta {
+                        shadow_runtime::agent::StreamDelta::Content(s) => {
+                            print!("{s}");
+                            let _ = std::io::Write::flush(&mut std::io::stdout());
+                        }
+                        shadow_runtime::agent::StreamDelta::Reasoning(_) => {
+                            // CLI 默认不显示思考内容
+                        }
                     }
                 });
             match agent.chat_with_stream(trimmed, Some(on_delta)).await {

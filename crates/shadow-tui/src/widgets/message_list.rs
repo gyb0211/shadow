@@ -20,7 +20,7 @@ pub struct MessageList<'a> {
     pub messages: &'a [ChatMessage],
     /// 滚动偏移 (从底部向上算). 0 = 跟随最新消息.
     pub scroll_from_bottom: usize,
-    /// 是否显示思考内容 (<think> 标签 / reasoning_content)
+    /// 是否显示思考内容 (reasoning_content)
     pub show_thinking: bool,
 }
 
@@ -98,41 +98,43 @@ impl<'a> Widget for MessageList<'a> {
             let dim_style = Style::default().fg(theme::dim()).bg(theme::bg());
             let think_style = Style::default().fg(theme::dim()).bg(theme::bg());
 
-            // 处理思考内容: show_thinking=false 时过滤 <think> 标签; true 时用 dim 样式显示
-            let display_content = if self.show_thinking {
-                // 显示思考: 保留原始内容, <think> 块用 dim 样式
-                // 同时如果有 reasoning_content, 在内容前显示
-                let mut full = String::new();
+            // show_thinking=true 时先渲染思考内容 (dim 样式, 带 "(thinking) " 前缀)
+            // content 字段只含回答 (think 标签已在 provider 层分离), 不需要 strip
+            if self.show_thinking {
                 if let Some(rc) = &msg.reasoning_content {
                     if !rc.is_empty() {
-                        full.push_str(rc);
-                        full.push_str("\n");
+                        let mut rc_lines = rc.lines();
+                        match rc_lines.next() {
+                            Some(first) => {
+                                lines.push(Line::from(vec![
+                                    Span::styled("(thinking) ", think_style),
+                                    Span::styled(first.to_string(), think_style),
+                                ]));
+                            }
+                            None => {
+                                lines.push(Line::from(vec![
+                                    Span::styled("(thinking) ", think_style),
+                                ]));
+                            }
+                        }
+                        for text in rc_lines {
+                            lines.push(Line::from(vec![Span::styled(text.to_string(), think_style)]));
+                        }
+                        // 思考内容和回答之间加空行
+                        if !msg.content.is_empty() {
+                            lines.push(Line::from(""));
+                        }
                     }
                 }
-                full.push_str(&msg.content);
-                full
-            } else {
-                // 不显示思考: 去除 <think>...</think> 块
-                strip_think_blocks(&msg.content)
-            };
+            }
 
-            // 判断是否在 think 块内 (用于 show_thinking=true 时的行级着色)
-            let mut in_think = false;
-            let mut content_lines = display_content.lines();
+            // 渲染回答内容
+            let mut content_lines = msg.content.lines();
             match content_lines.next() {
                 Some(first) => {
-                    // 检查第一行是否以 <think> 开头
-                    let line_style = if self.show_thinking && first.contains("<think>") {
-                        in_think = true;
-                        think_style
-                    } else if self.show_thinking && in_think {
-                        think_style
-                    } else {
-                        content_style
-                    };
                     lines.push(Line::from(vec![
                         Span::styled(label, label_style),
-                        Span::styled(first.to_string(), line_style),
+                        Span::styled(first.to_string(), content_style),
                     ]));
                 }
                 None => {
@@ -140,24 +142,10 @@ impl<'a> Widget for MessageList<'a> {
                 }
             }
             for text in content_lines {
-                let line_style = if self.show_thinking {
-                    if text.contains("</think>") {
-                        in_think = false;
-                        think_style
-                    } else if text.contains("<think>") {
-                        in_think = true;
-                        think_style
-                    } else if in_think {
-                        think_style
-                    } else {
-                        content_style
-                    }
-                } else {
-                    content_style
-                };
-                lines.push(Line::from(vec![Span::styled(text.to_string(), line_style)]));
+                lines.push(Line::from(vec![Span::styled(text.to_string(), content_style)]));
             }
 
+            // 渲染工具调用
             for tc in &msg.tool_calls {
                 let args_preview = serde_json::to_string(&tc.arguments).unwrap_or_default();
                 let preview = if args_preview.len() > 80 {
@@ -216,28 +204,6 @@ impl<'a> Widget for MessageList<'a> {
             }
         }
     }
-}
-
-/// 去除 `<think>...</think>` 思考块 (用于 show_thinking=false 时的显示过滤)
-fn strip_think_blocks(content: &str) -> String {
-    let mut result = content.to_string();
-    loop {
-        match result.find("<think>") {
-            Some(start) => match result[start..].find("</think>") {
-                Some(end_rel) => {
-                    let end_abs = start + end_rel + "</think>".len();
-                    result.replace_range(start..end_abs, "");
-                }
-                None => {
-                    // 未闭合 <think>: 删除到末尾
-                    result.truncate(start);
-                    break;
-                }
-            },
-            None => break,
-        }
-    }
-    result.trim().to_string()
 }
 
 #[cfg(test)]
@@ -363,5 +329,32 @@ mod tests {
         let buf = render_to_buffer(MessageList::new(&messages), 20, 3);
         let bottom_char = buf.cell((0, 2)).map(|c| c.symbol().to_string()).unwrap_or_default();
         assert_eq!(bottom_char, "a", "长消息末尾应通过自动滚动可见");
+    }
+
+    #[test]
+    fn reasoning_content_shown_when_thinking_enabled() {
+        let mut m = msg("assistant", "answer");
+        m.reasoning_content = Some("my thoughts".to_string());
+        let messages = vec![m];
+        let buf = render_to_buffer(MessageList::new(&messages).show_thinking(true), 40, 5);
+        // 第一行应该是 (thinking) 前缀
+        let row0: String = (0..40)
+            .map(|x| buf.cell((x, 0)).map(|c| c.symbol().to_string()).unwrap_or_default())
+            .collect();
+        assert!(row0.contains("thinking"), "show_thinking=true 时应显示思考内容");
+    }
+
+    #[test]
+    fn reasoning_content_hidden_when_thinking_disabled() {
+        let mut m = msg("assistant", "answer");
+        m.reasoning_content = Some("my thoughts".to_string());
+        let messages = vec![m];
+        let buf = render_to_buffer(MessageList::new(&messages).show_thinking(false), 40, 3);
+        // 第一行应该是 assistant 标签, 不含 thinking
+        let row0: String = (0..40)
+            .map(|x| buf.cell((x, 0)).map(|c| c.symbol().to_string()).unwrap_or_default())
+            .collect();
+        assert!(row0.contains("assistant"), "show_thinking=false 时应显示回答");
+        assert!(!row0.contains("thinking"), "show_thinking=false 时不应显示思考");
     }
 }

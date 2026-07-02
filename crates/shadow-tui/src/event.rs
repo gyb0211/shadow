@@ -11,6 +11,8 @@ pub enum AppEvent {
     Mouse(MouseEvent),
     /// 流式文本增量 (逐字/逐词片段)
     AgentStreamDelta(String),
+    /// 流式思考增量 (reasoning_content 的逐字/逐词片段)
+    AgentStreamReasoning(String),
     /// 一条 assistant 回复 (完整, 含 reasoning_content)
     AgentMessage {
         content: String,

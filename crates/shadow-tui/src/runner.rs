@@ -218,6 +218,29 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
                 state.chat.scroll_offset = 0;
             }
         }
+        AppEvent::AgentStreamReasoning(delta) => {
+            // 流式思考增量: 追加到最后一条正在生成的 assistant 消息的 reasoning_content
+            let need_new = match state.chat.messages.last() {
+                Some(last) => last.role != "assistant" || !state.chat.agent_busy,
+                None => true,
+            };
+            if need_new {
+                state.chat.messages.push(shadow_core::ChatMessage {
+                    role: "assistant".into(),
+                    content: String::new(),
+                    tool_call_id: None,
+                    tool_calls: vec![], reasoning_content: Some(delta),
+                });
+            } else if let Some(last) = state.chat.messages.last_mut() {
+                match &mut last.reasoning_content {
+                    Some(rc) => rc.push_str(&delta),
+                    None => last.reasoning_content = Some(delta),
+                }
+            }
+            if state.chat.pinned_to_bottom {
+                state.chat.scroll_offset = 0;
+            }
+        }
         AppEvent::AgentMessage { content, reasoning_content } => {
             // 完整回复: 如果最后一条是正在生成的 assistant 消息, 替换内容
             // (原始内容含 <think> 标签, 由 MessageList 按开关过滤显示)
@@ -228,7 +251,9 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
             if replace_last {
                 if let Some(last) = state.chat.messages.last_mut() {
                     last.content = content;
-                    last.reasoning_content = reasoning_content;
+                    if let Some(rc) = reasoning_content {
+                        last.reasoning_content = Some(rc);
+                    }
                 }
             } else {
                 state.chat.messages.push(shadow_core::ChatMessage {
@@ -388,9 +413,17 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
                                 // 流式回调: 每个 delta 通过 try_send 非阻塞发送, 避免阻塞 LLM stream
                                 let tx_for_delta = tx.clone();
                                 let on_delta: Arc<dyn shadow_runtime::agent::StreamDeltaCallback> =
-                                    Arc::new(move |delta: &str| {
-                                        let _ = tx_for_delta
-                                            .try_send(AppEvent::AgentStreamDelta(delta.to_string()));
+                                    Arc::new(move |delta: shadow_runtime::agent::StreamDelta| {
+                                        match delta {
+                                            shadow_runtime::agent::StreamDelta::Content(s) => {
+                                                let _ = tx_for_delta
+                                                    .try_send(AppEvent::AgentStreamDelta(s));
+                                            }
+                                            shadow_runtime::agent::StreamDelta::Reasoning(s) => {
+                                                let _ = tx_for_delta
+                                                    .try_send(AppEvent::AgentStreamReasoning(s));
+                                            }
+                                        }
                                     });
                                 match agent.chat_with_stream(&text, Some(on_delta)).await {
                                     Ok(resp) => {

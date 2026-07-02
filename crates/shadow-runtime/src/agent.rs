@@ -35,13 +35,22 @@ pub trait ToolEventCallback: Fn(&str, &str) + Send + Sync {}
 // 为所有满足 Fn(&str, &str) + Send + Sync 的类型自动实现 ToolEventCallback
 impl<T> ToolEventCallback for T where T: Fn(&str, &str) + Send + Sync {}
 
-/// 流式文本增量回调 trait -- TUI/CLI 通过此回调接收逐字增量
-///
-/// 参数: 文本增量片段 (delta)
-pub trait StreamDeltaCallback: Fn(&str) + Send + Sync {}
+/// 流式增量类型 -- 区分回答和思考
+#[derive(Debug, Clone)]
+pub enum StreamDelta {
+    /// 回答增量
+    Content(String),
+    /// 思考增量
+    Reasoning(String),
+}
 
-// 为所有满足 Fn(&str) + Send + Sync 的类型自动实现 StreamDeltaCallback
-impl<T> StreamDeltaCallback for T where T: Fn(&str) + Send + Sync {}
+/// 流式增量回调 trait -- TUI/CLI 通过此回调接收逐字增量
+///
+/// 参数: StreamDelta (回答或思考的增量片段)
+pub trait StreamDeltaCallback: Fn(StreamDelta) + Send + Sync {}
+
+// 为所有满足 Fn(StreamDelta) + Send + Sync 的类型自动实现 StreamDeltaCallback
+impl<T> StreamDeltaCallback for T where T: Fn(StreamDelta) + Send + Sync {}
 
 /// Agent 配置
 #[derive(Debug, Clone)]
@@ -136,7 +145,7 @@ impl Agent {
     /// 流程:
     /// 1. 截断过长的历史 (上下文窗口管理)
     /// 2. 构建消息 (system + history + user)
-    /// 3. 调用 LLM (流式 -- 每个 ContentDelta 调用 on_delta 回调)
+    /// 3. 调用 LLM (流式 -- 每个 ContentDelta/ReasoningDelta 调用 on_delta 回调)
     /// 4. 若响应包含 tool_calls, 执行工具, 将结果追加到消息, 回到步骤 3
     /// 5. 若无 tool_calls, 保存历史并返回最终内容
     pub async fn chat_with_stream(
@@ -637,15 +646,27 @@ async fn consume_stream(
     let mut content = String::new();
     let mut tool_calls = Vec::new();
     let mut usage = TokenUsage::default();
-    let mut reasoning_content = None;
+    let mut reasoning_content: Option<String> = None;
 
     while let Some(chunk_result) = stream.next().await {
         match chunk_result? {
             ChatChunk::ContentDelta(delta) => {
                 if let Some(cb) = on_delta {
-                    cb(&delta);
+                    cb(StreamDelta::Content(delta.clone()));
                 }
                 content.push_str(&delta);
+            }
+            ChatChunk::ReasoningDelta(delta) => {
+                if let Some(cb) = on_delta {
+                    cb(StreamDelta::Reasoning(delta.clone()));
+                }
+                reasoning_content = Some(match reasoning_content.take() {
+                    Some(mut rc) => {
+                        rc.push_str(&delta);
+                        rc
+                    }
+                    None => delta,
+                });
             }
             ChatChunk::ToolCallDelta { .. } => {
                 // 工具调用增量已在 provider 内部累积, Done chunk 中包含完整结果

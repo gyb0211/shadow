@@ -70,6 +70,8 @@ pub struct TokenUsage {
 pub enum ChatChunk {
     /// 文本增量 (assistant 回复的逐字/逐词片段)
     ContentDelta(String),
+    /// 思考内容增量 (reasoning_content 的流式片段)
+    ReasoningDelta(String),
     /// 工具调用增量 (arguments 可能分多次到达, 按 index 分组累积)
     ToolCallDelta {
         index: usize,
