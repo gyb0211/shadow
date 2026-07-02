@@ -81,23 +81,7 @@ mod tests {
             "stub"
         }
     }
-    #[async_trait]
-    impl ModelProvider for StubProvider {
-        fn provider_type(&self) -> &str {
-            "stub"
-        }
-        async fn chat(&self, _: ChatRequest) -> Result<ChatResponse> {
-            Ok(ChatResponse {
-                content: "ok".into(),
-                tool_calls: vec![],
-                usage: TokenUsage::default(),
-                reasoning_content: None,
-            })
-        }
-        async fn list_models(&self) -> Result<Vec<String>> {
-            Ok(vec![])
-        }
-    }
+
 
     #[tokio::test]
     async fn forwards_tool_call_to_channel() {
