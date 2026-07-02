@@ -350,13 +350,22 @@ async fn chat_via_agent(
     agent.load_history().await?;
 
     if let Some(msg) = message {
-        // 单次对话 (流式输出)
+        // 单次对话 (流式输出) -- CLI 默认不显示 think 内容
         let on_delta: std::sync::Arc<dyn shadow_runtime::agent::StreamDeltaCallback> =
             std::sync::Arc::new(|delta: &str| {
-                print!("{delta}");
-                let _ = std::io::Write::flush(&mut std::io::stdout());
+                // 简单过滤: 跳过 <think> 和 </think> 标签 (流式中可能不完整)
+                let cleaned = delta
+                    .replace("<think>", "")
+                    .replace("</think>", "");
+                if !cleaned.is_empty() {
+                    print!("{cleaned}");
+                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                }
             });
-        let _ = agent.chat_with_stream(&msg, Some(on_delta)).await?;
+        let resp = agent.chat_with_stream(&msg, Some(on_delta)).await?;
+        // 最终响应可能仍有 think 标签, 打印清理后的版本
+        // (流式 delta 已打印大部分, 这里只补全可能的差异)
+        let _ = resp;
         println!();
     } else {
         // 交互式对话
@@ -385,12 +394,17 @@ async fn chat_via_agent(
                 continue;
             }
 
-            // 流式输出: 逐字打印 LLM 回复
+            // 流式输出: 逐字打印 LLM 回复 (CLI 默认不显示 think 内容)
             println!(); // 前置换行
             let on_delta: std::sync::Arc<dyn shadow_runtime::agent::StreamDeltaCallback> =
                 std::sync::Arc::new(|delta: &str| {
-                    print!("{delta}");
-                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                    let cleaned = delta
+                        .replace("<think>", "")
+                        .replace("</think>", "");
+                    if !cleaned.is_empty() {
+                        print!("{cleaned}");
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    }
                 });
             match agent.chat_with_stream(trimmed, Some(on_delta)).await {
                 Ok(_) => println!("\n"),

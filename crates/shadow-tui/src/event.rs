@@ -11,8 +11,11 @@ pub enum AppEvent {
     Mouse(MouseEvent),
     /// 流式文本增量 (逐字/逐词片段)
     AgentStreamDelta(String),
-    /// 一条 assistant 回复 (完整)
-    AgentMessage(String),
+    /// 一条 assistant 回复 (完整, 含 reasoning_content)
+    AgentMessage {
+        content: String,
+        reasoning_content: Option<String>,
+    },
     /// 一次工具调用
     AgentToolCall {
         name: String,
@@ -34,7 +37,7 @@ impl std::fmt::Display for AppEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AppEvent::Status(s) => write!(f, "{s}"),
-            AppEvent::AgentMessage(s) => write!(f, "{s}"),
+            AppEvent::AgentMessage { content, .. } => write!(f, "{content}"),
             _ => write!(f, "{self:?}"),
         }
     }

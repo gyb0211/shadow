@@ -35,6 +35,9 @@ pub struct ChatState {
     /// 是否钉在底部 (跟随最新消息). 参考 ZeroClaw pinned_to_bottom.
     /// 滚动向上时设为 false, 新消息到来时只有 pinned_to_bottom=true 才自动跳底.
     pub pinned_to_bottom: bool,
+    /// 是否显示思考内容 (<think> 标签 / reasoning_content). 默认 false.
+    /// Ctrl+T 切换.
+    pub show_thinking: bool,
 }
 
 impl Default for ChatState {
@@ -49,6 +52,7 @@ impl Default for ChatState {
             scroll_offset: 0,
             agent_busy: false,
             pinned_to_bottom: true, // 默认钉在底部, 跟随最新消息
+            show_thinking: false,   // 默认不显示思考内容
         }
     }
 }
@@ -193,9 +197,8 @@ impl AppState {
             ));
         }
 
-        data.hint =
-            "↵ send · ⌥↵ newline · ↑↓ history · PgUp/PgDn scroll · ⌘K palette · ^L clear"
-                .to_string();
+        data.hint = "↵ send · ⌥↵ newline · ↑↓ history · PgUp/PgDn scroll · ^T thinking · ⌘K palette · ^L clear"
+            .to_string();
         data.error = self.last_error.clone();
 
         data

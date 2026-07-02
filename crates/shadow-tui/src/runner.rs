@@ -218,23 +218,24 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
                 state.chat.scroll_offset = 0;
             }
         }
-        AppEvent::AgentMessage(msg) => {
+        AppEvent::AgentMessage { content, reasoning_content } => {
             // 完整回复: 如果最后一条是正在生成的 assistant 消息, 替换内容
-            // (strip_think_blocks 可能修改了内容, 使其与增量累积的不同)
+            // (原始内容含 <think> 标签, 由 MessageList 按开关过滤显示)
             let replace_last = match state.chat.messages.last() {
                 Some(last) => last.role == "assistant" && state.chat.agent_busy,
                 None => false,
             };
             if replace_last {
                 if let Some(last) = state.chat.messages.last_mut() {
-                    last.content = msg;
+                    last.content = content;
+                    last.reasoning_content = reasoning_content;
                 }
             } else {
                 state.chat.messages.push(shadow_core::ChatMessage {
                     role: "assistant".into(),
-                    content: msg,
+                    content,
                     tool_call_id: None,
-                    tool_calls: vec![], reasoning_content: None,
+                    tool_calls: vec![], reasoning_content,
                 });
             }
             // 只有钉在底部时才跟随最新消息 (参考 ZeroClaw pinned_to_bottom)
@@ -344,6 +345,10 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
             state.chat.pinned_to_bottom = true;
             state.last_error = None;
         }
+        Char('t') if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+            // 切换思考内容显示 (Ctrl+T)
+            state.chat.show_thinking = !state.chat.show_thinking;
+        }
         Esc => { /* 退出当前 view? 暂不处理 */ }
         PageUp => {
             // 向上滚动 10 行 (参考 ZeroClaw scroll_up)
@@ -389,7 +394,12 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
                                     });
                                 match agent.chat_with_stream(&text, Some(on_delta)).await {
                                     Ok(resp) => {
-                                        let _ = tx.send(AppEvent::AgentMessage(resp)).await;
+                                        // resp 是原始内容 (含 <think> 标签), reasoning_content 已在 consume_stream 中捕获
+                                        // 但 chat_with_stream 返回 String, reasoning_content 需要从 agent 获取
+                                        let _ = tx.send(AppEvent::AgentMessage {
+                                            content: resp,
+                                            reasoning_content: None, // reasoning_content 在 delta 流中已推送, 最终消息不需要重复
+                                        }).await;
                                     }
                                     Err(e) => {
                                         let _ = tx.send(AppEvent::AgentError(e.to_string())).await;

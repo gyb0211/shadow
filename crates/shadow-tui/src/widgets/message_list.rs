@@ -20,15 +20,22 @@ pub struct MessageList<'a> {
     pub messages: &'a [ChatMessage],
     /// 滚动偏移 (从底部向上算). 0 = 跟随最新消息.
     pub scroll_from_bottom: usize,
+    /// 是否显示思考内容 (<think> 标签 / reasoning_content)
+    pub show_thinking: bool,
 }
 
 impl<'a> MessageList<'a> {
     pub fn new(messages: &'a [ChatMessage]) -> Self {
-        Self { messages, scroll_from_bottom: 0 }
+        Self { messages, scroll_from_bottom: 0, show_thinking: false }
     }
 
     pub fn scroll(mut self, scroll_from_bottom: usize) -> Self {
         self.scroll_from_bottom = scroll_from_bottom;
+        self
+    }
+
+    pub fn show_thinking(mut self, show: bool) -> Self {
+        self.show_thinking = show;
         self
     }
 }
@@ -89,13 +96,43 @@ impl<'a> Widget for MessageList<'a> {
             let label_style = Style::default().fg(color).bg(theme::bg());
             let content_style = Style::default().fg(theme::text()).bg(theme::bg());
             let dim_style = Style::default().fg(theme::dim()).bg(theme::bg());
+            let think_style = Style::default().fg(theme::dim()).bg(theme::bg());
 
-            let mut content_lines = msg.content.lines();
+            // 处理思考内容: show_thinking=false 时过滤 <think> 标签; true 时用 dim 样式显示
+            let display_content = if self.show_thinking {
+                // 显示思考: 保留原始内容, <think> 块用 dim 样式
+                // 同时如果有 reasoning_content, 在内容前显示
+                let mut full = String::new();
+                if let Some(rc) = &msg.reasoning_content {
+                    if !rc.is_empty() {
+                        full.push_str(rc);
+                        full.push_str("\n");
+                    }
+                }
+                full.push_str(&msg.content);
+                full
+            } else {
+                // 不显示思考: 去除 <think>...</think> 块
+                strip_think_blocks(&msg.content)
+            };
+
+            // 判断是否在 think 块内 (用于 show_thinking=true 时的行级着色)
+            let mut in_think = false;
+            let mut content_lines = display_content.lines();
             match content_lines.next() {
                 Some(first) => {
+                    // 检查第一行是否以 <think> 开头
+                    let line_style = if self.show_thinking && first.contains("<think>") {
+                        in_think = true;
+                        think_style
+                    } else if self.show_thinking && in_think {
+                        think_style
+                    } else {
+                        content_style
+                    };
                     lines.push(Line::from(vec![
                         Span::styled(label, label_style),
-                        Span::styled(first.to_string(), content_style),
+                        Span::styled(first.to_string(), line_style),
                     ]));
                 }
                 None => {
@@ -103,7 +140,22 @@ impl<'a> Widget for MessageList<'a> {
                 }
             }
             for text in content_lines {
-                lines.push(Line::from(vec![Span::styled(text.to_string(), content_style)]));
+                let line_style = if self.show_thinking {
+                    if text.contains("</think>") {
+                        in_think = false;
+                        think_style
+                    } else if text.contains("<think>") {
+                        in_think = true;
+                        think_style
+                    } else if in_think {
+                        think_style
+                    } else {
+                        content_style
+                    }
+                } else {
+                    content_style
+                };
+                lines.push(Line::from(vec![Span::styled(text.to_string(), line_style)]));
             }
 
             for tc in &msg.tool_calls {
@@ -164,6 +216,28 @@ impl<'a> Widget for MessageList<'a> {
             }
         }
     }
+}
+
+/// 去除 `<think>...</think>` 思考块 (用于 show_thinking=false 时的显示过滤)
+fn strip_think_blocks(content: &str) -> String {
+    let mut result = content.to_string();
+    loop {
+        match result.find("<think>") {
+            Some(start) => match result[start..].find("</think>") {
+                Some(end_rel) => {
+                    let end_abs = start + end_rel + "</think>".len();
+                    result.replace_range(start..end_abs, "");
+                }
+                None => {
+                    // 未闭合 <think>: 删除到末尾
+                    result.truncate(start);
+                    break;
+                }
+            },
+            None => break,
+        }
+    }
+    result.trim().to_string()
 }
 
 #[cfg(test)]

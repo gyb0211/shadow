@@ -21,6 +21,7 @@ impl<'a> Widget for ChatView<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         MessageList::new(&self.state.messages)
             .scroll(self.state.scroll_offset)
+            .show_thinking(self.state.show_thinking)
             .render(area, buf);
     }
 }
