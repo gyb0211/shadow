@@ -34,9 +34,13 @@
 //! backend = "none"
 //! ```
 
+pub mod migration;
 pub mod provider;
 pub mod schema;
+pub mod secrets;
 
+pub use migration::{migrate_str, CURRENT_SCHEMA_VERSION};
 pub use provider::{default_base_url, list_providers, resolve_provider, ProviderEntry, ProviderRef, ResolvedProvider};
 pub use schema::{AgentSection, Config, MemorySection, ProvidersConfig};
 pub use schema::{config_dir, config_path, load_or_init, save};
+pub use secrets::{is_encrypted, SecretStore};

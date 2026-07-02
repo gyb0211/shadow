@@ -9,6 +9,10 @@ use std::path::PathBuf;
 /// 顶层配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// schema 版本号 -- 用于未来迁移。新配置默认 = CURRENT_SCHEMA_VERSION。
+    #[serde(default)]
+    pub schema_version: u32,
+
     #[serde(default)]
     pub agent: AgentSection,
 
@@ -26,6 +30,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            schema_version: crate::migration::CURRENT_SCHEMA_VERSION,
             agent: AgentSection::default(),
             providers: ProvidersConfig::default(),
             memory: MemorySection::default(),
@@ -194,33 +199,216 @@ pub fn config_path() -> PathBuf {
     config_dir().join("config.toml")
 }
 
-/// 加载配置 -- 不存在则创建默认
+/// 加载配置(使用 `SHADOW_CONFIG_DIR` / `~/.shadow`)。不存在则创建默认。
 pub fn load_or_init() -> Result<Config> {
-    let path = config_path();
+    load_from(&config_dir())
+}
+
+/// 从指定目录加载配置。目录既是配置文件所在,也是密钥文件 `.secret_key` 所在。
+pub(crate) fn load_from(dir: &std::path::Path) -> Result<Config> {
+    let path = dir.join("config.toml");
+    let store = crate::secrets::SecretStore::new(dir, true)?;
     if path.exists() {
         let content = std::fs::read_to_string(&path)?;
-        let config: Config = toml::from_str(&content).unwrap_or_default();
+        // 迁移到当前 schema 版本(若需要)
+        let migrated = crate::migration::migrate_str(&content)?;
+        let toml_str = migrated.as_deref().unwrap_or(&content);
+        let mut config: Config = toml::from_str(toml_str).unwrap_or_default();
+        config.decrypt_secrets(&store);
         Ok(config)
     } else {
         let config = Config::default();
-        save(&config)?;
+        save_to(&config, dir)?;
         Ok(config)
     }
 }
 
-/// 保存配置
+/// 保存配置(使用 `SHADOW_CONFIG_DIR` / `~/.shadow`)。
 pub fn save(config: &Config) -> Result<()> {
-    let dir = config_dir();
-    std::fs::create_dir_all(&dir)?;
-    let path = config_path();
-    let content = toml::to_string_pretty(config)?;
-    std::fs::write(&path, content)?;
+    save_to(config, &config_dir())
+}
+
+/// 保存配置到指定目录。原子写(tempfile + rename)+ 文件权限 0600 + 加密 api_key。
+pub(crate) fn save_to(config: &Config, dir: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let store = crate::secrets::SecretStore::new(dir, true)?;
+    // 克隆一份,加密后写盘 -- 不污染调用方的内存 config
+    let mut to_write = config.clone();
+    to_write.encrypt_secrets(&store);
+
+    let path = dir.join("config.toml");
+    let content = toml::to_string_pretty(&to_write)?;
+
+    // 原子写: 在同目录建临时文件,写完 fsync 后 persist(rename)
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    std::io::Write::write_all(&mut tmp, content.as_bytes())?;
+    restrict_permissions(tmp.as_file())?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(&path).map_err(|e| anyhow::anyhow!("persist failed: {e}"))?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_permissions(file: &std::fs::File) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| anyhow::anyhow!("set permissions: {e}"))
+}
+
+#[cfg(not(unix))]
+fn restrict_permissions(_file: &std::fs::File) -> Result<()> {
+    Ok(())
+}
+
+// ── Config 的密钥加密辅助 ──
+
+impl Config {
+    /// 加密所有 provider 的 api_key(写盘前调用)。
+    fn encrypt_secrets(&mut self, store: &crate::secrets::SecretStore) {
+        for entry in self.iter_provider_entries_mut() {
+            if let Some(k) = entry.api_key.take() {
+                entry.api_key = store.encrypt(&k).ok().filter(|s| !s.is_empty());
+            }
+        }
+    }
+
+    /// 解密所有 provider 的 api_key(读盘后调用)。裸值透传,兼容旧明文配置。
+    fn decrypt_secrets(&mut self, store: &crate::secrets::SecretStore) {
+        for entry in self.iter_provider_entries_mut() {
+            if let Some(k) = entry.api_key.take() {
+                entry.api_key = store.decrypt(&k).ok().filter(|s| !s.is_empty());
+            }
+        }
+    }
+
+    fn iter_provider_entries_mut(&mut self) -> impl Iterator<Item = &mut ProviderEntry> {
+        self.providers.families.values_mut().flat_map(|m| m.values_mut())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── load/save + 加密集成 ──
+
+    #[test]
+    fn save_writes_encrypted_api_key_to_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let mut config = Config::default();
+        config
+            .providers
+            .find_or_create("openai", "default")
+            .api_key = Some("sk-plaintext".into());
+        save_to(&config, dir).unwrap();
+        let raw = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+        assert!(
+            raw.contains("enc2:"),
+            "api_key must be encrypted on disk, got: {raw}"
+        );
+        assert!(
+            !raw.contains("sk-plaintext"),
+            "plaintext must NOT reach disk"
+        );
+    }
+
+    #[test]
+    fn save_then_load_preserves_api_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let mut config = Config::default();
+        config
+            .providers
+            .find_or_create("openai", "default")
+            .api_key = Some("sk-roundtrip".into());
+        save_to(&config, dir).unwrap();
+        let loaded = load_from(dir).unwrap();
+        assert_eq!(
+            loaded.providers.find("openai", "default").unwrap().api_key.as_deref(),
+            Some("sk-roundtrip")
+        );
+    }
+
+    #[test]
+    fn load_decrypts_encrypted_api_key() {
+        // 先在一个 dir 里 save 一个带 api_key 的配置,拿到 enc2: 形态,
+        // 再清空内存重新 load,验证 decrypt 生效。
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let mut config = Config::default();
+        config
+            .providers
+            .find_or_create("anthropic", "default")
+            .api_key = Some("sk-ant-secret".into());
+        save_to(&config, dir).unwrap();
+        // 磁盘上 api_key 行必须是加密形态(值带 enc2: 前缀)
+        let raw = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+        let api_key_line = raw
+            .lines()
+            .find(|l| l.contains("api_key"))
+            .expect("config must have an api_key line");
+        assert!(
+            api_key_line.contains("enc2:"),
+            "api_key on disk must be encrypted, got: {api_key_line}"
+        );
+        // 重新 load 应解密回明文
+        let loaded = load_from(dir).unwrap();
+        assert_eq!(
+            loaded.providers.find("anthropic", "default").unwrap().api_key.as_deref(),
+            Some("sk-ant-secret")
+        );
+    }
+
+    #[test]
+    fn load_migrates_unversioned_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // 手写一个没有 schema_version 的旧配置
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("config.toml"),
+            r#"
+[agent]
+alias = "default"
+"#,
+        )
+        .unwrap();
+        let loaded = load_from(dir).unwrap();
+        assert_eq!(
+            loaded.schema_version,
+            crate::migration::CURRENT_SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn save_load_empty_api_key_stays_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let mut config = Config::default();
+        config.providers.find_or_create("openai", "default").api_key = None;
+        save_to(&config, dir).unwrap();
+        let loaded = load_from(dir).unwrap();
+        assert!(loaded.providers.find("openai", "default").unwrap().api_key.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_sets_config_file_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let config = Config::default();
+        save_to(&config, dir).unwrap();
+        let mode = std::fs::metadata(dir.join("config.toml"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    // ── 原有单元测试 ──
 
     #[test]
     fn default_config_serializes_to_toml() {
@@ -294,6 +482,24 @@ mod tests {
             ("custom".to_string(), "minimax1".to_string()),
             ("openai".to_string(), "default".to_string()),
         ]);
+    }
+
+    #[test]
+    fn default_config_has_current_schema_version() {
+        let config = Config::default();
+        assert_eq!(config.schema_version, crate::migration::CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn schema_version_round_trips_through_toml() {
+        let config = Config {
+            schema_version: 7,
+            ..Config::default()
+        };
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        assert!(toml_str.contains("schema_version = 7"));
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.schema_version, 7);
     }
 
     #[test]
