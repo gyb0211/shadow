@@ -571,7 +571,7 @@ async fn memory_command(config: shadow_config::Config, action: MemoryAction) -> 
 
     match action {
         MemoryAction::List => {
-            let entries = memory.list().await?;
+            let entries = memory.list(None).await?;
             if entries.is_empty() {
                 println!("(无记忆)");
             } else {
@@ -596,7 +596,7 @@ async fn memory_command(config: shadow_config::Config, action: MemoryAction) -> 
             println!("(已删除: {key})");
         }
         MemoryAction::Clear => {
-            let entries = memory.list().await?;
+            let entries = memory.list(None).await?;
             for entry in &entries {
                 memory.forget(&entry.key).await?;
             }

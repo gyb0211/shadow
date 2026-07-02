@@ -72,17 +72,17 @@ impl<'a> Widget for MemoryView<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shadow_core::MemoryEntry;
+    use shadow_core::{MemoryEntry, MemoryCategory};
 
     fn entry(key: &str, content: &str) -> MemoryEntry {
         MemoryEntry {
             id: key.to_string(),
             key: key.to_string(),
             content: content.to_string(),
-            category: "note".to_string(),
-            timestamp: chrono::Utc::now(),
+            category: MemoryCategory::Custom("note".to_string()),
+            timestamp: chrono::Utc::now().to_rfc3339(),
             session_id: None,
-            agent_alias: None,
+            agent_alias: None, score: None,
         }
     }
 
