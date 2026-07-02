@@ -76,9 +76,11 @@ fn build_agent(
     let temperature = resolved.effective_temperature();
 
     let provider = shadow_providers::create_provider(
+        &resolved.alias,
         &resolved.family,
         resolved.entry.api_key.as_deref(),
         resolved.effective_base_url(),
+        shadow_core::ModelProviderRuntimeOptions::default(),
     )?;
 
     let workspace = shadow_config::config_dir();

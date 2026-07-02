@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 /// Agent 运行时 trait
 ///
-/// 把 Provider + Memory + Tool 串成可交互的对话循环。
+/// 把 ModelProvider + Memory + Tool 串成可交互的对话循环。
 /// 实现方负责历史管理、工具调度、observer 通知等。
 /// 通过 [`Attributable`] 参与归因 (Role::Agent), alias 取 agent 别名。
 #[async_trait]

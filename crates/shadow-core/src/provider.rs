@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// 聊天消息
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -64,7 +65,7 @@ pub struct TokenUsage {
 
 /// 流式聊天块 -- SSE 增量
 ///
-/// Provider::chat_stream() 返回 BoxStream<Result<ChatChunk>>,
+/// ModelProvider::chat_stream() 返回 BoxStream<Result<ChatChunk>>,
 /// 调用方逐块消费, 实现逐字/逐词显示.
 #[derive(Debug, Clone)]
 pub enum ChatChunk {
@@ -86,14 +87,50 @@ pub enum ChatChunk {
     },
 }
 
+/// API key 注入位置 -- 决定 provider 如何把 key 放进 HTTP 请求
+///
+/// - `Bearer`: OpenAI 风格, `Authorization: Bearer <key>`
+/// - `XApiKey`: Anthropic 风格, `x-api-key: <key>` (Phase 2 Anthropic native 用)
+/// - `Query(name)`: 把 key 作为 URL query 参数, 如 `?key=<k>` (某些中国厂商)
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum AuthStyle {
+    #[default]
+    Bearer,
+    XApiKey,
+    /// key 作为 URL query 参数, 字段值是参数名 (如 "key" / "apikey")
+    Query(String),
+}
+
+/// ModelProvider 运行时选项 -- 注入 HTTP 层细节
+///
+/// 由 factory (shadow-providers::create_provider) 接收, 透传给 Compat 层.
+/// 设计为 Option-heavy: MVP 阶段大部分字段为 None, 未来 Reliable 层 / 推理控制会填充.
+///
+/// 注: `extra_headers` 用 `HashMap<String, String>` 而非 `reqwest::HeaderMap`,
+/// 是为了让 shadow-core 保持 HTTP-agnostic (不依赖 reqwest). shadow-providers
+/// 在调用 reqwest 时做一次转换.
+#[derive(Debug, Clone, Default)]
+pub struct ModelProviderRuntimeOptions {
+    /// HTTP 请求超时 (None = reqwest 默认)
+    pub timeout: Option<std::time::Duration>,
+    /// 推理强度 (如 "low" / "medium" / "high"), OpenAI o-series / Anthropic 用
+    pub reasoning_effort: Option<String>,
+    /// 自定义 API path 后缀 (None = 各 family 默认, 如 "/chat/completions")
+    pub api_path: Option<String>,
+    /// 附加 HTTP headers (会与 auth header 合并)
+    pub extra_headers: HashMap<String, String>,
+    /// API key 注入位置
+    pub auth_style: AuthStyle,
+}
+
 /// 模型提供商 trait
 ///
 /// 每个 LLM 后端实现此 trait (OpenAI/Anthropic/Ollama...)
 /// 通过工厂函数按字符串 key 注册。
 /// 借鉴 ZeroClaw ModelProvider, 重命名自 agent-core。
 #[async_trait]
-pub trait Provider: Attributable {
-    /// 提供商类型名 (如 "openai", "anthropic")
+pub trait ModelProvider: Attributable {
+    /// 提供商类型名 (如 "openai", "anthropic") -- 即 family
     fn provider_type(&self) -> &str;
 
     /// 同步聊天
@@ -121,10 +158,19 @@ pub trait Provider: Attributable {
     }
 
     /// 列出可用模型
-    async fn list_models(&self) -> Result<Vec<String>>;
+    ///
+    /// 默认实现返回空 vec (provider 不支持 list models 时无需覆写).
+    async fn list_models(&self) -> Result<Vec<String>> {
+        Ok(vec![])
+    }
 
     /// 是否支持原生工具调用
     fn supports_native_tools(&self) -> bool {
+        false
+    }
+
+    /// 是否支持视觉输入 (vision/image)
+    fn supports_vision(&self) -> bool {
         false
     }
 
@@ -156,7 +202,7 @@ impl Attributable for DefaultProvider {
 }
 
 #[async_trait]
-impl Provider for DefaultProvider {
+impl ModelProvider for DefaultProvider {
     fn provider_type(&self) -> &str {
         "default"
     }
@@ -167,5 +213,65 @@ impl Provider for DefaultProvider {
 
     async fn list_models(&self) -> Result<Vec<String>> {
         Ok(vec![])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_style_default_is_bearer() {
+        match AuthStyle::default() {
+            AuthStyle::Bearer => {}
+            other => panic!("expected Bearer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn runtime_options_default_all_empty() {
+        let opts = ModelProviderRuntimeOptions::default();
+        assert!(opts.timeout.is_none());
+        assert!(opts.reasoning_effort.is_none());
+        assert!(opts.api_path.is_none());
+        assert!(opts.extra_headers.is_empty());
+        assert!(matches!(opts.auth_style, AuthStyle::Bearer));
+    }
+
+    #[tokio::test]
+    async fn list_models_default_impl_returns_empty() {
+        // 最小 impl: 只覆写必选方法, 验证 list_models 的默认实现
+        struct MinimalProvider;
+        impl Attributable for MinimalProvider {
+            fn role(&self) -> Role { Role::Provider }
+            fn alias(&self) -> &str { "minimal" }
+        }
+        #[async_trait]
+        impl ModelProvider for MinimalProvider {
+            fn provider_type(&self) -> &str { "minimal" }
+            async fn chat(&self, _: ChatRequest) -> Result<ChatResponse> {
+                Ok(ChatResponse { content: String::new(), tool_calls: vec![], usage: TokenUsage::default(), reasoning_content: None })
+            }
+        }
+        let p = MinimalProvider;
+        assert!(p.list_models().await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn supports_vision_default_is_false() {
+        struct MinimalProvider;
+        impl Attributable for MinimalProvider {
+            fn role(&self) -> Role { Role::Provider }
+            fn alias(&self) -> &str { "minimal" }
+        }
+        #[async_trait]
+        impl ModelProvider for MinimalProvider {
+            fn provider_type(&self) -> &str { "minimal" }
+            async fn chat(&self, _: ChatRequest) -> Result<ChatResponse> {
+                Ok(ChatResponse { content: String::new(), tool_calls: vec![], usage: TokenUsage::default(), reasoning_content: None })
+            }
+        }
+        let p = MinimalProvider;
+        assert!(!p.supports_vision());
     }
 }

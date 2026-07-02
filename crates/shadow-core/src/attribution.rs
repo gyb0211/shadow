@@ -79,7 +79,7 @@ impl Role {
 }
 
 // ── Blanket impl: Arc<T>, Box<T>, &T 自动实现 Attributable ──
-// 这样 Box<dyn Provider> 也能直接调 .role() 和 .alias()
+// 这样 Box<dyn ModelProvider> 也能直接调 .role() 和 .alias()
 
 impl<T: Attributable + ?Sized> Attributable for Arc<T> {
     fn role(&self) -> Role {

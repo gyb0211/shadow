@@ -158,9 +158,11 @@ async fn chat_command(
 
     // 创建 provider (kernel 层, 两种模式都可用)
     let provider = shadow_providers::create_provider(
+        &resolved.alias,
         &resolved.family,
         resolved.entry.api_key.as_deref(),
         resolved.effective_base_url(),
+        shadow_core::ModelProviderRuntimeOptions::default(),
     )?;
 
     // 创建 memory (kernel 层)
@@ -185,13 +187,13 @@ async fn chat_command(
 /// kernel-only 模式: 直连 provider, 最简对话
 #[cfg(not(feature = "runtime"))]
 async fn chat_direct(
-    provider: std::sync::Arc<dyn shadow_core::Provider>,
+    provider: std::sync::Arc<dyn shadow_core::ModelProvider>,
     _memory: std::sync::Arc<dyn shadow_core::Memory>,
     model: String,
     temperature: f64,
     message: Option<String>,
 ) -> Result<()> {
-    use shadow_core::{ChatMessage, ChatRequest, Provider};
+    use shadow_core::{ChatMessage, ChatRequest, ModelProvider};
 
     let system = ChatMessage {
         role: "system".to_string(),
@@ -286,7 +288,7 @@ async fn chat_direct(
 /// 完整版: 通过 Agent (带历史/observer/工具)
 #[cfg(feature = "runtime")]
 async fn chat_via_agent(
-    provider: std::sync::Arc<dyn shadow_core::Provider>,
+    provider: std::sync::Arc<dyn shadow_core::ModelProvider>,
     memory: std::sync::Arc<dyn shadow_core::Memory>,
     config: &shadow_config::Config,
     resolved: &shadow_config::ResolvedProvider,

@@ -4,7 +4,8 @@
 //! 将 agent-core 的 ToolSpec 转换为 API 格式, 解析响应中的 tool_calls.
 
 use shadow_core::{
-    Attributable, ChatChunk, ChatRequest, ChatResponse, Provider, Role, TokenUsage, ToolCall,
+    Attributable, AuthStyle, ChatChunk, ChatRequest, ChatResponse, ModelProvider,
+    ModelProviderRuntimeOptions, Role, TokenUsage, ToolCall,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -13,55 +14,119 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub struct OpenAiProvider {
-    provider_type: String,
+/// OpenAI 兼容适配器 -- Compat 层
+///
+/// 把家族差异 (auth style, base_url, API path) 适配为统一 OpenAI Chat Completions 形态.
+/// 字段:
+/// - `alias`: 完整别名 (如 "openai.default"), 通过 Attributable::alias() 暴露
+/// - `family`: 家族名 (如 "openai" / "openrouter" / "ollama"), 通过 provider_type() 暴露
+/// - `opts`: HTTP 层细节 (timeout / auth_style / extra_headers / ...)
+pub struct OpenAiCompat {
+    alias: String,
+    family: String,
     api_key: Option<String>,
     base_url: String,
+    opts: ModelProviderRuntimeOptions,
 }
 
-impl OpenAiProvider {
-    pub fn new(provider_type: &str, api_key: Option<&str>, base_url: Option<&str>) -> Result<Self> {
-        let default_url = match provider_type {
+impl OpenAiCompat {
+    /// 构造器
+    ///
+    /// - `alias`: 完整别名 (如 "openai.default")
+    /// - `family`: 家族名, 决定默认 base_url 和 provider_type()
+    /// - `api_key`: API key (None 时不发送 auth header, 兼容 ollama)
+    /// - `base_url`: 自定义 base_url (None 时按 family 选默认)
+    /// - `opts`: 运行时选项 (auth_style / timeout / extra_headers / ...)
+    pub fn new(
+        alias: &str,
+        family: &str,
+        api_key: Option<&str>,
+        base_url: Option<&str>,
+        opts: ModelProviderRuntimeOptions,
+    ) -> Result<Self> {
+        let default_url = match family {
             "openai" => "https://api.openai.com/v1",
             "openrouter" => "https://openrouter.ai/api/v1",
             "ollama" => "http://localhost:11434/v1",
             _ => "https://api.openai.com/v1",
         };
         Ok(Self {
-            provider_type: provider_type.to_string(),
+            alias: alias.to_string(),
+            family: family.to_string(),
             api_key: api_key.map(String::from),
             base_url: base_url.unwrap_or(default_url).to_string(),
+            opts,
         })
     }
 
+    /// 构造 reqwest Client (应用 opts.timeout)
     fn client(&self) -> Result<reqwest::Client> {
         let mut builder = reqwest::Client::builder();
-        if let Some(ref key) = self.api_key {
-            builder = builder.default_headers(
-                reqwest::header::HeaderMap::from_iter([(
-                    reqwest::header::AUTHORIZATION,
-                    reqwest::header::HeaderValue::from_str(&format!("Bearer {key}"))
-                        .context("无效的 API key")?,
-                )]),
-            );
+        if let Some(timeout) = self.opts.timeout {
+            builder = builder.timeout(timeout);
         }
+        // 注: default_headers 由 apply_auth() 在每次请求时注入,
+        // 因为 Query auth_style 不走 header, 无法在 client 层统一设置.
         builder.build().context("创建 HTTP 客户端失败")
+    }
+
+    /// 构造 chat completions URL (应用 opts.api_path 覆盖)
+    fn build_url(&self) -> String {
+        let path = self.opts.api_path.as_deref().unwrap_or("chat/completions");
+        format!("{}/{path}", self.base_url)
+    }
+
+    /// 把 auth header / query 注入到 RequestBuilder
+    ///
+    /// - `Bearer`: `Authorization: Bearer <key>` (OpenAI 风格)
+    /// - `XApiKey`: `x-api-key: <key>` (Anthropic 风格, Phase 2 Anthropic native 用)
+    /// - `Query(name)`: 把 key 作为 URL query 参数 `?<name>=<key>`
+    fn apply_auth(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        // 先注入 extra_headers
+        for (k, v) in &self.opts.extra_headers {
+            if let Ok(name) = reqwest::header::HeaderName::from_bytes(k.as_bytes())
+                && let Ok(value) = reqwest::header::HeaderValue::from_str(v)
+            {
+                req = req.header(name, value);
+            }
+        }
+        // 再注入 auth (覆盖同名 header)
+        let Some(ref key) = self.api_key else {
+            return req;
+        };
+        match &self.opts.auth_style {
+            AuthStyle::Bearer => {
+                if let Ok(value) = reqwest::header::HeaderValue::from_str(&format!("Bearer {key}"))
+                {
+                    req = req.header(reqwest::header::AUTHORIZATION, value);
+                }
+            }
+            AuthStyle::XApiKey => {
+                if let Ok(value) = reqwest::header::HeaderValue::from_str(key) {
+                    req = req.header("x-api-key", value);
+                }
+            }
+            AuthStyle::Query(param_name) => {
+                req = req.query(&[(param_name.as_str(), key.as_str())]);
+            }
+        }
+        req
     }
 }
 
-impl Attributable for OpenAiProvider {
+impl Attributable for OpenAiCompat {
     fn role(&self) -> Role {
         Role::Provider
     }
     fn alias(&self) -> &str {
-        &self.provider_type
+        &self.alias
     }
 }
 
 #[async_trait]
-impl Provider for OpenAiProvider {
+impl ModelProvider for OpenAiCompat {
     fn provider_type(&self) -> &str {
-        &self.provider_type
+        &self.family
     }
 
     fn supports_native_tools(&self) -> bool {
@@ -70,7 +135,7 @@ impl Provider for OpenAiProvider {
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let client = self.client()?;
-        let url = format!("{}/chat/completions", self.base_url);
+        let url = self.build_url();
 
         // 转换消息和工具
         let messages = convert_messages(&request.messages);
@@ -84,8 +149,8 @@ impl Provider for OpenAiProvider {
             stream: false,
         };
 
-        let resp = client
-            .post(&url)
+        let resp = self
+            .apply_auth(client.post(&url))
             .json(&body)
             .send()
             .await
@@ -154,7 +219,7 @@ impl Provider for OpenAiProvider {
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<ChatChunk>>> {
         let client = self.client()?;
-        let url = format!("{}/chat/completions", self.base_url);
+        let url = self.build_url();
 
         // 转换消息和工具
         let messages = convert_messages(&request.messages);
@@ -168,8 +233,8 @@ impl Provider for OpenAiProvider {
             stream: true,
         };
 
-        let resp = client
-            .post(&url)
+        let resp = self
+            .apply_auth(client.post(&url))
             .json(&body)
             .send()
             .await
@@ -285,7 +350,7 @@ impl Provider for OpenAiProvider {
     async fn list_models(&self) -> Result<Vec<String>> {
         let client = self.client()?;
         let url = format!("{}/models", self.base_url);
-        let resp: ModelsResponse = client.get(&url).send().await?.json().await?;
+        let resp: ModelsResponse = self.apply_auth(client.get(&url)).send().await?.json().await?;
         Ok(resp.data.into_iter().map(|m| m.id).collect())
     }
 }
@@ -707,5 +772,23 @@ mod tests {
         let result = convert_messages(&messages);
         assert_eq!(result[0].content.as_deref(), Some("hello"));
         assert!(result[0].tool_calls.is_none());
+    }
+
+    #[test]
+    fn openai_compat_exposes_alias_and_family() {
+        // C1: OpenAiCompat::new(alias, family, key, url, opts) -- alias != family
+        use shadow_core::{Attributable, ModelProvider, ModelProviderRuntimeOptions};
+        let p = OpenAiCompat::new(
+            "openai.default",
+            "openai",
+            Some("sk-test"),
+            None,
+            ModelProviderRuntimeOptions::default(),
+        )
+        .unwrap();
+        // Attributable::alias() 必须返回 alias (不是 family)
+        assert_eq!(p.alias(), "openai.default");
+        // provider_type() 返回 family
+        assert_eq!(p.provider_type(), "openai");
     }
 }

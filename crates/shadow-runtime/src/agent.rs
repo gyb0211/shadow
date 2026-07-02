@@ -6,7 +6,7 @@
 
 use shadow_core::{
     Attributable, AutonomyLevel, ChatChunk, ChatMessage, ChatRequest, ChatResponse, Memory,
-    Provider, Observer, ObserverEvent, Role, Session, SessionStore, TokenUsage, Tool, ToolCall,
+    ModelProvider, Observer, ObserverEvent, Role, Session, SessionStore, TokenUsage, Tool, ToolCall,
     ToolResult,
 };
 use anyhow::Result;
@@ -79,7 +79,7 @@ impl Default for AgentConfig {
 /// Agent -- 核心代理
 pub struct Agent {
     pub alias: String,
-    pub provider: Arc<dyn Provider>,
+    pub provider: Arc<dyn ModelProvider>,
     pub tools: Vec<Box<dyn Tool>>,
     pub memory: Arc<dyn Memory>,
     pub observer: Arc<dyn Observer>,
@@ -524,7 +524,7 @@ impl Agent {
 #[derive(Default)]
 pub struct AgentBuilder {
     alias: Option<String>,
-    provider: Option<Arc<dyn Provider>>,
+    provider: Option<Arc<dyn ModelProvider>>,
     tools: Option<Vec<Box<dyn Tool>>>,
     memory: Option<Arc<dyn Memory>>,
     observer: Option<Arc<dyn Observer>>,
@@ -538,7 +538,7 @@ impl AgentBuilder {
         self.alias = Some(alias.into());
         self
     }
-    pub fn provider(mut self, provider: Arc<dyn Provider>) -> Self {
+    pub fn provider(mut self, provider: Arc<dyn ModelProvider>) -> Self {
         self.provider = Some(provider);
         self
     }
