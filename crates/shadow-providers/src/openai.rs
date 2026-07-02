@@ -4,7 +4,8 @@
 //! 将 agent-core 的 ToolSpec 转换为 API 格式, 解析响应中的 tool_calls.
 
 use shadow_core::{
-    Attributable, ChatChunk, ChatRequest, ChatResponse, Provider, Role, TokenUsage, ToolCall,
+    Attributable, AuthStyle, ChatChunk, ChatRequest, ChatResponse, ModelProviderRuntimeOptions,
+    Provider, Role, TokenUsage, ToolCall,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -17,10 +18,27 @@ pub struct OpenAiProvider {
     provider_type: String,
     api_key: Option<String>,
     base_url: String,
+    opts: ModelProviderRuntimeOptions,
 }
 
 impl OpenAiProvider {
+    /// 构造器 (向后兼容) -- 不带运行时选项, 默认 Bearer auth
     pub fn new(provider_type: &str, api_key: Option<&str>, base_url: Option<&str>) -> Result<Self> {
+        Self::new_with_opts(
+            provider_type,
+            api_key,
+            base_url,
+            ModelProviderRuntimeOptions::default(),
+        )
+    }
+
+    /// 构造器 (带运行时选项) -- 支持 auth_style / timeout / extra_headers / api_path
+    pub fn new_with_opts(
+        provider_type: &str,
+        api_key: Option<&str>,
+        base_url: Option<&str>,
+        opts: ModelProviderRuntimeOptions,
+    ) -> Result<Self> {
         let default_url = match provider_type {
             "openai" => "https://api.openai.com/v1",
             "openrouter" => "https://openrouter.ai/api/v1",
@@ -31,21 +49,55 @@ impl OpenAiProvider {
             provider_type: provider_type.to_string(),
             api_key: api_key.map(String::from),
             base_url: base_url.unwrap_or(default_url).to_string(),
+            opts,
         })
     }
 
     fn client(&self) -> Result<reqwest::Client> {
         let mut builder = reqwest::Client::builder();
-        if let Some(ref key) = self.api_key {
-            builder = builder.default_headers(
-                reqwest::header::HeaderMap::from_iter([(
-                    reqwest::header::AUTHORIZATION,
-                    reqwest::header::HeaderValue::from_str(&format!("Bearer {key}"))
-                        .context("无效的 API key")?,
-                )]),
-            );
+        if let Some(timeout) = self.opts.timeout {
+            builder = builder.timeout(timeout);
         }
         builder.build().context("创建 HTTP 客户端失败")
+    }
+
+    /// 构建 API URL -- 尊重 opts.api_path (默认 chat/completions)
+    fn build_url(&self) -> String {
+        let path = self.opts.api_path.as_deref().unwrap_or("chat/completions");
+        format!("{}/{path}", self.base_url)
+    }
+
+    /// 把 auth header / extra headers / query 参数应用到请求构建器
+    fn apply_auth(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        // 附加 extra_headers
+        for (k, v) in &self.opts.extra_headers {
+            if let Ok(name) = reqwest::header::HeaderName::from_bytes(k.as_bytes())
+                && let Ok(value) = reqwest::header::HeaderValue::from_str(v)
+            {
+                req = req.header(name, value);
+            }
+        }
+        let Some(ref key) = self.api_key else {
+            return req;
+        };
+        match &self.opts.auth_style {
+            AuthStyle::Bearer => {
+                if let Ok(value) =
+                    reqwest::header::HeaderValue::from_str(&format!("Bearer {key}"))
+                {
+                    req = req.header(reqwest::header::AUTHORIZATION, value);
+                }
+            }
+            AuthStyle::XApiKey => {
+                if let Ok(value) = reqwest::header::HeaderValue::from_str(key) {
+                    req = req.header("x-api-key", value);
+                }
+            }
+            AuthStyle::Query(param_name) => {
+                req = req.query(&[(param_name.as_str(), key.as_str())]);
+            }
+        }
+        req
     }
 }
 
@@ -70,7 +122,7 @@ impl Provider for OpenAiProvider {
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let client = self.client()?;
-        let url = format!("{}/chat/completions", self.base_url);
+        let url = self.build_url();
 
         // 转换消息和工具
         let messages = convert_messages(&request.messages);
@@ -84,8 +136,8 @@ impl Provider for OpenAiProvider {
             stream: false,
         };
 
-        let resp = client
-            .post(&url)
+        let resp = self
+            .apply_auth(client.post(&url))
             .json(&body)
             .send()
             .await
@@ -154,7 +206,7 @@ impl Provider for OpenAiProvider {
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<ChatChunk>>> {
         let client = self.client()?;
-        let url = format!("{}/chat/completions", self.base_url);
+        let url = self.build_url();
 
         // 转换消息和工具
         let messages = convert_messages(&request.messages);
@@ -168,8 +220,8 @@ impl Provider for OpenAiProvider {
             stream: true,
         };
 
-        let resp = client
-            .post(&url)
+        let resp = self
+            .apply_auth(client.post(&url))
             .json(&body)
             .send()
             .await
@@ -287,7 +339,7 @@ impl Provider for OpenAiProvider {
     async fn list_models(&self) -> Result<Vec<String>> {
         let client = self.client()?;
         let url = format!("{}/models", self.base_url);
-        let resp: ModelsResponse = client.get(&url).send().await?.json().await?;
+        let resp: ModelsResponse = self.apply_auth(client.get(&url)).send().await?.json().await?;
         Ok(resp.data.into_iter().map(|m| m.id).collect())
     }
 }

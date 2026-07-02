@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// 聊天消息
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -60,6 +61,42 @@ pub struct TokenUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
+}
+
+/// API key 注入位置 -- 决定 provider 如何把 key 放进 HTTP 请求
+///
+/// - `Bearer`: OpenAI 风格, `Authorization: Bearer <key>`
+/// - `XApiKey`: Anthropic 风格, `x-api-key: <key>` (Phase 2 Anthropic native 用)
+/// - `Query(name)`: 把 key 作为 URL query 参数, 如 `?key=<k>` (某些中国厂商)
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum AuthStyle {
+    #[default]
+    Bearer,
+    XApiKey,
+    /// key 作为 URL query 参数, 字段值是参数名 (如 "key" / "apikey")
+    Query(String),
+}
+
+/// Provider 运行时选项 -- 注入 HTTP 层细节
+///
+/// 由 factory (shadow-providers::create_provider) 接收, 透传给 Compat 层.
+/// 设计为 Option-heavy: MVP 阶段大部分字段为 None, 未来 Reliable 层 / 推理控制会填充.
+///
+/// 注: `extra_headers` 用 `HashMap<String, String>` 而非 `reqwest::HeaderMap`,
+/// 是为了让 shadow-core 保持 HTTP-agnostic (不依赖 reqwest). shadow-providers
+/// 在调用 reqwest 时做一次转换.
+#[derive(Debug, Clone, Default)]
+pub struct ModelProviderRuntimeOptions {
+    /// HTTP 请求超时 (None = reqwest 默认)
+    pub timeout: Option<std::time::Duration>,
+    /// 推理强度 (如 "low" / "medium" / "high"), OpenAI o-series / Anthropic 用
+    pub reasoning_effort: Option<String>,
+    /// 自定义 API path 后缀 (None = 各 family 默认, 如 "/chat/completions")
+    pub api_path: Option<String>,
+    /// 附加 HTTP headers (会与 auth header 合并)
+    pub extra_headers: HashMap<String, String>,
+    /// API key 注入位置
+    pub auth_style: AuthStyle,
 }
 
 /// 流式聊天块 -- SSE 增量

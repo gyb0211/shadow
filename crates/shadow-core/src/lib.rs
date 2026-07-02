@@ -27,7 +27,7 @@ pub use attribution::{Attributable, Role};
 pub use channel::{Channel, ChannelMessage, CliChannel, SendMessage};
 pub use memory::{Memory, MemoryEntry, NoneMemory};
 pub use observer::{NoopObserver, Observer, ObserverEvent};
-pub use provider::{ChatChunk, ChatMessage, ChatRequest, ChatResponse, Provider, TokenUsage, ToolCall, DefaultProvider};
+pub use provider::{AuthStyle, ChatChunk, ChatMessage, ChatRequest, ChatResponse, ModelProviderRuntimeOptions, Provider, TokenUsage, ToolCall, DefaultProvider};
 pub use session_store::{JsonlSessionStore, Session, SessionStore};
 pub use tool::{Tool, ToolResult, ToolSpec, ToolAttribution};
 
