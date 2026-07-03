@@ -365,3 +365,69 @@ fn reliable_default_section_not_serialized() {
         "默认 reliable 段不应序列化, got: {toml_str}"
     );
 }
+
+// ── Phase 4: RouterConfig ──
+
+#[test]
+fn router_section_parsing() {
+    let toml_str = r#"
+[router]
+default = "openai.default"
+
+[router.routes.reasoning]
+provider = "anthropic.claude"
+model = "claude-sonnet-4-20250514"
+
+[router.fallback_chains]
+default = ["anthropic.claude", "custom.glm"]
+reasoning = ["openai.default"]
+"#;
+    let config: Config = toml::from_str(toml_str).unwrap();
+    let router = config.router.expect("router section should parse");
+    assert_eq!(router.default, "openai.default");
+
+    let reasoning_route = router.routes.get("reasoning").expect("reasoning route");
+    assert_eq!(reasoning_route.provider, "anthropic.claude");
+    assert_eq!(reasoning_route.model, "claude-sonnet-4-20250514");
+
+    let default_chain = router.fallback_chains.get("default").expect("default chain");
+    assert_eq!(*default_chain, vec!["anthropic.claude".to_string(), "custom.glm".to_string()]);
+}
+
+#[test]
+fn router_section_optional_when_omitted() {
+    let toml_str = r#"
+[agent]
+alias = "default"
+"#;
+    let config: Config = toml::from_str(toml_str).unwrap();
+    assert!(config.router.is_none(), "router should be None when omitted");
+}
+
+#[test]
+fn router_section_round_trip() {
+    use shadow_config::provider::{RouterConfig, RouteEntry};
+    let mut config = Config::default();
+    config.router = Some(RouterConfig {
+        default: "openai.default".to_string(),
+        routes: std::collections::HashMap::from([(
+            "reasoning".to_string(),
+            RouteEntry {
+                provider: "anthropic.claude".to_string(),
+                model: "claude-sonnet-4-20250514".to_string(),
+            },
+        )]),
+        fallback_chains: std::collections::HashMap::from([(
+            "default".to_string(),
+            vec!["anthropic.claude".to_string()],
+        )]),
+    });
+    let toml_str = toml::to_string_pretty(&config).unwrap();
+    assert!(toml_str.contains("[router]"));
+    assert!(toml_str.contains("default = \"openai.default\""));
+    assert!(toml_str.contains("[router.routes.reasoning]"));
+
+    let parsed: Config = toml::from_str(&toml_str).unwrap();
+    let router = parsed.router.unwrap();
+    assert_eq!(router.default, "openai.default");
+}

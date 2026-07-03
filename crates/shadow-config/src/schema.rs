@@ -25,6 +25,10 @@ pub struct Config {
 
     #[serde(default)]
     pub memory: MemorySection,
+
+    /// Router 配置 (可选) -- 配置后启用跨 provider 路由与 fallback
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub router: Option<crate::provider::RouterConfig>,
 }
 
 impl Default for Config {
@@ -34,6 +38,7 @@ impl Default for Config {
             agent: AgentSection::default(),
             providers: ProvidersConfig::default(),
             memory: MemorySection::default(),
+            router: None,
         }
     }
 }

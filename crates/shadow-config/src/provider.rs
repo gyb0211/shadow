@@ -191,6 +191,44 @@ impl ReliableConfig {
     }
 }
 
+/// Router 配置段 -- 跨 provider 路由与 fallback
+///
+/// ```toml
+/// [router]
+/// default = "openai.default"
+///
+/// [router.routes.reasoning]
+/// provider = "anthropic.claude"
+/// model = "claude-sonnet-4-20250514"
+///
+/// [router.fallback_chains]
+/// default = ["anthropic.claude", "openai.default"]
+/// reasoning = ["openai.default"]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RouterConfig {
+    /// 默认 provider 引用 -- "family.alias" 格式
+    #[serde(default)]
+    pub default: String,
+
+    /// hint → 路由规则
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub routes: HashMap<String, RouteEntry>,
+
+    /// hint (或 "default") → 备选 provider 引用列表
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub fallback_chains: HashMap<String, Vec<String>>,
+}
+
+/// 单条路由规则 -- hint → (provider, model)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteEntry {
+    /// provider 引用 -- "family.alias" 格式
+    pub provider: String,
+    /// 实际下发的 model 名
+    pub model: String,
+}
+
 /// Provider 引用 -- "family.alias" 格式
 ///
 /// agent.model_provider = "openai.default" 或 "custom.minimax1"
