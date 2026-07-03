@@ -99,11 +99,13 @@ enum MemoryAction {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // 配置目录
-    let workspace = shadow_config::config_dir();
+    // Workspace -- 集中所有路径布局 (替代散落的 config_dir() 调用)
+    let workspace = shadow_core::Workspace::open(shadow_config::config_dir());
+    workspace.ensure_layout()?;
+    let workspace_root = workspace.root();
 
     // 初始化日志写入器 (JSONL 持久化)
-    shadow_log::init_from_config(&workspace, 10_000);
+    shadow_log::init_from_config(workspace_root, 10_000);
 
     // 安装日志 subscriber (终端 + LogCaptureLayer)
     shadow_log::install_subscriber(cli.verbose);
@@ -122,10 +124,10 @@ async fn main() -> Result<()> {
                 }
                 #[cfg(not(feature = "tui"))]
                 {
-                    chat_command(config, message).await?;
+                    chat_command(workspace_root, config, message).await?;
                 }
             } else {
-                chat_command(config, message).await?;
+                chat_command(workspace_root, config, message).await?;
             }
         }
 
@@ -134,7 +136,7 @@ async fn main() -> Result<()> {
         }
 
         Commands::Memory { action } => {
-            memory_command(config, action).await?;
+            memory_command(workspace_root, config, action).await?;
         }
     }
 
@@ -144,6 +146,7 @@ async fn main() -> Result<()> {
 // ── Chat 命令 ──
 
 async fn chat_command(
+    workspace_root: &std::path::Path,
     config: shadow_config::Config,
     message: Option<String>,
 ) -> Result<()> {
@@ -163,14 +166,13 @@ async fn chat_command(
         resolved.effective_base_url(),
     )?;
 
-    // 创建 memory (kernel 层)
-    let workspace = shadow_config::config_dir();
-    let memory = shadow_memory::create_memory(&config.memory.backend, &workspace)?;
+    // 创建 memory (kernel 层, 路径来自 Workspace)
+    let memory = shadow_memory::create_memory(&config.memory.backend, workspace_root)?;
 
     #[cfg(feature = "runtime")]
     {
         // 完整版: 通过 Agent (带历史/observer/工具)
-        chat_via_agent(provider, memory, &config, &resolved, model, temperature, message).await?;
+        chat_via_agent(workspace_root, provider, memory, &config, &resolved, model, temperature, message).await?;
     }
 
     #[cfg(not(feature = "runtime"))]
@@ -286,6 +288,7 @@ async fn chat_direct(
 /// 完整版: 通过 Agent (带历史/observer/工具)
 #[cfg(feature = "runtime")]
 async fn chat_via_agent(
+    workspace_root: &std::path::Path,
     provider: std::sync::Arc<dyn shadow_core::Provider>,
     memory: std::sync::Arc<dyn shadow_core::Memory>,
     config: &shadow_config::Config,
@@ -304,7 +307,7 @@ async fn chat_via_agent(
             "read_only" => shadow_core::AutonomyLevel::ReadOnly,
             _ => shadow_core::AutonomyLevel::Supervised,
         },
-        workspace_dir: shadow_config::config_dir(),
+        workspace_dir: workspace_root.to_path_buf(),
         max_iterations: config.agent.max_iterations,
         max_history: config.agent.max_history,
         system_prompt: config.agent.system_prompt.clone(),
@@ -330,9 +333,9 @@ async fn chat_via_agent(
     // 注册默认工具集 (传入 memory, 注册记忆工具)
     let tools = shadow_runtime::tools::default_tools(Some(std::sync::Arc::clone(&memory)));
 
-    // 创建会话存储 (JSONL 文件持久化)
+    // 创建会话存储 (JSONL 文件持久化, 路径来自 Workspace)
     let session_store: std::sync::Arc<dyn shadow_core::SessionStore> = std::sync::Arc::new(
-        shadow_core::JsonlSessionStore::new(shadow_config::config_dir()),
+        shadow_core::JsonlSessionStore::new(workspace_root),
     );
 
     let agent = shadow_runtime::agent::Agent::builder()
@@ -565,9 +568,12 @@ fn config_command(config: &mut shadow_config::Config, action: ConfigAction) {
 
 // ── Memory 命令 ──
 
-async fn memory_command(config: shadow_config::Config, action: MemoryAction) -> Result<()> {
-    let workspace = shadow_config::config_dir();
-    let memory = shadow_memory::create_memory(&config.memory.backend, &workspace)?;
+async fn memory_command(
+    workspace_root: &std::path::Path,
+    config: shadow_config::Config,
+    action: MemoryAction,
+) -> Result<()> {
+    let memory = shadow_memory::create_memory(&config.memory.backend, workspace_root)?;
 
     match action {
         MemoryAction::List => {
