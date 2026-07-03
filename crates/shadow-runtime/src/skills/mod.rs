@@ -41,7 +41,7 @@ pub use skill_tool::SkillShellTool;
 use shadow_core::Tool;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 // ── 数据结构 ──────────────────────────────────────────────────────────
 
@@ -550,12 +550,10 @@ pub fn load_skills_from_dir(skills_dir: &Path) -> Result<Vec<Skill>> {
 pub fn load_skills(workspace_dir: &Path) -> Result<Vec<Skill>> {
     let mut skills = Vec::new();
 
-    // 1. 扫描 ~/.shadow/skills/
-    if let Some(home) = home_dir() {
-        let dir = home.join(".shadow").join("skills");
-        if dir.exists() {
-            skills.extend(load_skills_from_dir(&dir)?);
-        }
+    // 1. 扫描 ~/.shadow/skills/ (经 shadow_config::config_dir() 解析, 支持 SHADOW_CONFIG_DIR override)
+    let home_dir = shadow_config::config_dir().join("skills");
+    if home_dir.exists() {
+        skills.extend(load_skills_from_dir(&home_dir)?);
     }
 
     // 2. 扫描 {workspace_dir}/.shadow/skills/
@@ -565,13 +563,6 @@ pub fn load_skills(workspace_dir: &Path) -> Result<Vec<Skill>> {
     }
 
     Ok(skills)
-}
-
-/// 获取用户主目录 (兼容 Unix 和 Windows)
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
 }
 
 // ── 单元测试 ─────────────────────────────────────────────────────────
