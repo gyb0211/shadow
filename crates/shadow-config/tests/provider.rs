@@ -39,7 +39,7 @@ fn resolve_existing_provider() {
     openai.insert(
         "default".to_string(),
         ProviderEntry {
-            api_key: Some("sk-xxx".to_string()),
+            api_keys: vec!["sk-xxx".to_string()],
             model: Some("gpt-4o-mini".to_string()),
             ..Default::default()
         },
@@ -49,7 +49,7 @@ fn resolve_existing_provider() {
     let resolved = resolve_provider(&providers, "openai.default").unwrap();
     assert_eq!(resolved.family, "openai");
     assert_eq!(resolved.alias, "default");
-    assert_eq!(resolved.entry.api_key.as_deref(), Some("sk-xxx"));
+    assert_eq!(resolved.entry.first_key(), Some("sk-xxx"));
 }
 
 #[test]

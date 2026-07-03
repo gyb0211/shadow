@@ -159,11 +159,22 @@ async fn chat_command(
     let model = resolved.effective_model(&config.agent.model).to_string();
     let temperature = resolved.effective_temperature();
 
-    // 创建 provider (kernel 层, 两种模式都可用)
-    let provider = shadow_providers::create_provider(
+    // 创建 provider -- Reliable 包装 (重试/退避/key 轮换/限流/fallback)
+    let alias = format!("{}.{}", resolved.family, resolved.alias);
+    let policy = shadow_providers::RetryPolicy {
+        max_retries: resolved.entry.reliable.max_retries,
+        initial_backoff_ms: resolved.entry.reliable.initial_backoff_ms,
+        max_backoff_ms: resolved.entry.reliable.max_backoff_ms,
+        jitter_pct: resolved.entry.reliable.jitter_pct,
+    };
+    let provider = shadow_providers::create_reliable_provider(
+        &alias,
         &resolved.family,
-        resolved.entry.api_key.as_deref(),
+        resolved.entry.api_keys.clone(),
         resolved.effective_base_url(),
+        resolved.entry.fallback_models.clone(),
+        policy,
+        resolved.entry.reliable.requests_per_minute,
     )?;
 
     // 创建 memory (kernel 层, 路径来自 Workspace)
@@ -507,13 +518,17 @@ fn config_command(config: &mut shadow_config::Config, action: ConfigAction) {
                 for (family, alias) in &providers {
                     let entry = config.providers.find(family, alias).unwrap();
                     println!("[providers.{family}.{alias}]");
-                    if let Some(ref key) = entry.api_key {
+                    for (i, key) in entry.api_keys.iter().enumerate() {
                         let masked = if key.len() > 8 {
                             format!("{}...{}", &key[..4], &key[key.len()-4..])
                         } else {
                             "***".to_string()
                         };
-                        println!("  api_key = \"{masked}\"");
+                        if entry.api_keys.len() == 1 {
+                            println!("  api_key = \"{masked}\"");
+                        } else {
+                            println!("  api_key[{i}] = \"{masked}\"");
+                        }
                     }
                     if let Some(ref model) = entry.model {
                         println!("  model = \"{model}\"");
@@ -648,7 +663,8 @@ fn config_set(config: &mut shadow_config::Config, key: &str, value: &str) -> Res
         ["providers", family, alias, field] => {
             let entry = config.providers.find_or_create(family, alias);
             match *field {
-                "api_key" => { entry.api_key = Some(value.to_string()); Ok(true) }
+                // api_key / api_keys 都接受 -- 单值替换整个列表
+                "api_key" | "api_keys" => { entry.api_keys = vec![value.to_string()]; Ok(true) }
                 "model" => { entry.model = Some(value.to_string()); Ok(true) }
                 "base_url" => { entry.base_url = Some(value.to_string()); Ok(true) }
                 "temperature" => {

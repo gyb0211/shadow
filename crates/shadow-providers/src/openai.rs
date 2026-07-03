@@ -3,6 +3,8 @@
 //! 实现 OpenAI Chat Completions API 的 tool calling 功能.
 //! 将 agent-core 的 ToolSpec 转换为 API 格式, 解析响应中的 tool_calls.
 
+use crate::error::ChatError;
+use crate::reliable::KeyRotator;
 use shadow_core::{
     Attributable, AuthStyle, ChatChunk, ChatRequest, ChatResponse, ModelProviderRuntimeOptions,
     Provider, Role, TokenUsage, ToolCall,
@@ -13,12 +15,16 @@ use futures::stream::BoxStream;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::{Arc, RwLock};
 
 pub struct OpenAiProvider {
     provider_type: String,
-    api_key: Option<String>,
+    /// 当前 API key -- Arc<RwLock> 支持运行时切换 (key 轮换)
+    api_key: Arc<RwLock<Option<String>>>,
     base_url: String,
     opts: ModelProviderRuntimeOptions,
+    /// 复用连接池 -- 构造一次, 不再 per-call 重建
+    client: reqwest::Client,
 }
 
 impl OpenAiProvider {
@@ -45,20 +51,39 @@ impl OpenAiProvider {
             "ollama" => "http://localhost:11434/v1",
             _ => "https://api.openai.com/v1",
         };
+        // HTTP client 构造一次, 后续 chat/stream/list_models 复用
+        let mut builder = reqwest::Client::builder();
+        if let Some(timeout) = opts.timeout {
+            builder = builder.timeout(timeout);
+        }
+        let client = builder.build().context("创建 HTTP 客户端失败")?;
         Ok(Self {
             provider_type: provider_type.to_string(),
-            api_key: api_key.map(String::from),
+            api_key: Arc::new(RwLock::new(api_key.map(String::from))),
             base_url: base_url.unwrap_or(default_url).to_string(),
             opts,
+            client,
         })
     }
 
-    fn client(&self) -> Result<reqwest::Client> {
-        let mut builder = reqwest::Client::builder();
-        if let Some(timeout) = self.opts.timeout {
-            builder = builder.timeout(timeout);
+    /// 设置/切换 API key -- Reliable 层 key 轮换时调用
+    ///
+    /// 传入 None 清空 key (匿名 provider, 如本地 ollama)
+    pub fn set_api_key(&self, key: Option<String>) {
+        if let Ok(mut guard) = self.api_key.write() {
+            *guard = key;
         }
-        builder.build().context("创建 HTTP 客户端失败")
+    }
+
+    /// 借用共享的 api_key Arc -- Reliable 层用于把 key 池与 inner 同步
+    #[must_use]
+    pub fn shared_api_key(&self) -> Arc<RwLock<Option<String>>> {
+        Arc::clone(&self.api_key)
+    }
+
+    /// 借用 HTTP client -- chat/stream/list_models 用
+    fn client(&self) -> &reqwest::Client {
+        &self.client
     }
 
     /// 构建 API URL -- 尊重 opts.api_path (默认 chat/completions)
@@ -77,7 +102,13 @@ impl OpenAiProvider {
                 req = req.header(name, value);
             }
         }
-        let Some(ref key) = self.api_key else {
+        let key_opt = self
+            .api_key
+            .read()
+            .map(|guard| guard.clone())
+            .ok()
+            .flatten();
+        let Some(key) = key_opt else {
             return req;
         };
         match &self.opts.auth_style {
@@ -89,7 +120,7 @@ impl OpenAiProvider {
                 }
             }
             AuthStyle::XApiKey => {
-                if let Ok(value) = reqwest::header::HeaderValue::from_str(key) {
+                if let Ok(value) = reqwest::header::HeaderValue::from_str(&key) {
                     req = req.header("x-api-key", value);
                 }
             }
@@ -110,6 +141,12 @@ impl Attributable for OpenAiProvider {
     }
 }
 
+impl KeyRotator for OpenAiProvider {
+    fn set_key(&self, key: Option<&str>) {
+        OpenAiProvider::set_api_key(self, key.map(String::from));
+    }
+}
+
 #[async_trait]
 impl Provider for OpenAiProvider {
     fn provider_type(&self) -> &str {
@@ -121,7 +158,7 @@ impl Provider for OpenAiProvider {
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
-        let client = self.client()?;
+        let client = self.client();
         let url = self.build_url();
 
         // 转换消息和工具
@@ -141,12 +178,12 @@ impl Provider for OpenAiProvider {
             .json(&body)
             .send()
             .await
-            .context("LLM 请求失败")?;
+            .map_err(|e| anyhow::Error::new(ChatError::network(format!("LLM 请求失败: {e}"))))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("LLM 返回错误 {status}: {text}");
+            return Err(anyhow::Error::new(ChatError::from_status(status, text)));
         }
 
         let api_resp: ApiResponse = resp
@@ -205,7 +242,7 @@ impl Provider for OpenAiProvider {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<ChatChunk>>> {
-        let client = self.client()?;
+        let client = self.client();
         let url = self.build_url();
 
         // 转换消息和工具
@@ -225,12 +262,12 @@ impl Provider for OpenAiProvider {
             .json(&body)
             .send()
             .await
-            .context("LLM 流式请求失败")?;
+            .map_err(|e| anyhow::Error::new(ChatError::network(format!("LLM 流式请求失败: {e}"))))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("LLM 返回错误 {status}: {text}");
+            return Err(anyhow::Error::new(ChatError::from_status(status, text)));
         }
 
         // 创建 channel 传递解析后的 ChatChunk
@@ -337,7 +374,7 @@ impl Provider for OpenAiProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<String>> {
-        let client = self.client()?;
+        let client = self.client();
         let url = format!("{}/models", self.base_url);
         let resp: ModelsResponse = self.apply_auth(client.get(&url)).send().await?.json().await?;
         Ok(resp.data.into_iter().map(|m| m.id).collect())
