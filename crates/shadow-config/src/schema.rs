@@ -114,8 +114,13 @@ impl Default for AgentSection {
 /// TOML 形态:
 /// ```toml
 /// [providers.openai.default]
-/// api_key = "sk-xxx"
+/// api_keys = ["sk-xxx"]      # 多 key 轮换; 也接受 api_key = "sk-xxx"
 /// model = "gpt-4o-mini"
+///
+/// [providers.openai.default.reliable]
+/// max_retries = 3
+/// initial_backoff_ms = 1000
+/// requests_per_minute = 60
 ///
 /// [providers.custom.minimax1]
 /// api_key = "xxx"
@@ -263,20 +268,28 @@ fn restrict_permissions(_file: &std::fs::File) -> Result<()> {
 // ── Config 的密钥加密辅助 ──
 
 impl Config {
-    /// 加密所有 provider 的 api_key(写盘前调用)。
+    /// 加密所有 provider 的 api_keys(写盘前调用)。裸值透传 (失败则保留原值)。
     fn encrypt_secrets(&mut self, store: &crate::secrets::SecretStore) {
         for entry in self.iter_provider_entries_mut() {
-            if let Some(k) = entry.api_key.take() {
-                entry.api_key = store.encrypt(&k).ok().filter(|s| !s.is_empty());
+            for key in entry.api_keys.iter_mut() {
+                if let Ok(enc) = store.encrypt(key) {
+                    if !enc.is_empty() {
+                        *key = enc;
+                    }
+                }
             }
         }
     }
 
-    /// 解密所有 provider 的 api_key(读盘后调用)。裸值透传,兼容旧明文配置。
+    /// 解密所有 provider 的 api_keys(读盘后调用)。裸值透传,兼容旧明文配置。
     fn decrypt_secrets(&mut self, store: &crate::secrets::SecretStore) {
         for entry in self.iter_provider_entries_mut() {
-            if let Some(k) = entry.api_key.take() {
-                entry.api_key = store.decrypt(&k).ok().filter(|s| !s.is_empty());
+            for key in entry.api_keys.iter_mut() {
+                if let Ok(dec) = store.decrypt(key) {
+                    if !dec.is_empty() {
+                        *key = dec;
+                    }
+                }
             }
         }
     }

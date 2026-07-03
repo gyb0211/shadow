@@ -4,6 +4,7 @@
 //! 将 agent-core 的 ToolSpec 转换为 API 格式, 解析响应中的 tool_calls.
 
 use crate::error::ChatError;
+use crate::reliable::KeyRotator;
 use shadow_core::{
     Attributable, AuthStyle, ChatChunk, ChatRequest, ChatResponse, ModelProviderRuntimeOptions,
     Provider, Role, TokenUsage, ToolCall,
@@ -137,6 +138,12 @@ impl Attributable for OpenAiProvider {
     }
     fn alias(&self) -> &str {
         &self.provider_type
+    }
+}
+
+impl KeyRotator for OpenAiProvider {
+    fn set_key(&self, key: Option<&str>) {
+        OpenAiProvider::set_api_key(self, key.map(String::from));
     }
 }
 

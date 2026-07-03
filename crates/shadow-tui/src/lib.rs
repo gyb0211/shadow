@@ -77,7 +77,7 @@ fn build_agent(
 
     let provider = shadow_providers::create_provider(
         &resolved.family,
-        resolved.entry.api_key.as_deref(),
+        resolved.entry.first_key(),
         resolved.effective_base_url(),
     )?;
 

@@ -6,29 +6,74 @@
 //! - `MIGRATION_STEPS[i]`: 把 version (i+1) 迁移到 (i+2) 的函数
 //! - 编译期断言: steps 数量恰好覆盖所有版本
 //!
-//! 当前 v1 是首个版本,steps 为空。未来加 v2 时:
-//! 1. `CURRENT_SCHEMA_VERSION` 改为 2
-//! 2. 在 `MIGRATION_STEPS` 末尾加一个 v1→v2 的 step 函数
-//! 3. 在 v1 的"部分类型透镜"模块里实现该 step
+//! ## 版本历史
+//!
+//! - v1: 初始版本 -- 单 api_key 字段
+//! - v2: api_keys 列表 + ReliableConfig (重试/退避/限流)
+//!   迁移: `api_key = "x"` → `api_keys = ["x"]`
 
 use anyhow::Result;
 
 /// 当前 schema 版本
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 /// 单个迁移步骤: 接受旧版本 toml::Value,返回新版本 toml::Value。
 type MigrationStep = fn(toml::Value) -> Result<toml::Value>;
 
 /// 迁移链。`MIGRATION_STEPS[i]` 把 version (i+1) 迁移到 (i+2)。
-///
-/// 当前为空 -- v1 是首个版本,无历史可迁。
-pub const MIGRATION_STEPS: &[MigrationStep] = &[];
+pub const MIGRATION_STEPS: &[MigrationStep] = &[migrate_v1_to_v2];
 
-// 编译期断言: steps 数量 + 1 == CURRENT。加版本时忘了补 step 会直接编译失败。
+// 编译期断言: steps 数量 + 1 == CURRENT。
 const _: () = assert!(
     MIGRATION_STEPS.len() as u32 + 1 == CURRENT_SCHEMA_VERSION,
     "MIGRATION_STEPS must cover all versions up to CURRENT_SCHEMA_VERSION"
 );
+
+/// v1 → v2: 把每个 provider entry 的 `api_key = "x"` 转成 `api_keys = ["x"]`
+///
+/// 遍历 `providers.<family>.<alias>` 三层 table, 对每个 entry:
+/// - 若有 `api_key` (string) 而无 `api_keys`, 转成单元素数组
+/// - 若两者都有, 合并 (api_key 优先, 去重)
+/// - 若只有 `api_keys`, 不动
+fn migrate_v1_to_v2(mut value: toml::Value) -> Result<toml::Value> {
+    let table = match value.as_table_mut() {
+        Some(t) => t,
+        None => return Ok(value),
+    };
+    let providers = match table.get_mut("providers").and_then(toml::Value::as_table_mut) {
+        Some(t) => t,
+        None => return Ok(value), // 无 providers 段, 无需迁移
+    };
+    for (_family, family_map) in providers.iter_mut() {
+        let entries = match family_map.as_table_mut() {
+            Some(t) => t,
+            None => continue,
+        };
+        for (_alias, entry) in entries.iter_mut() {
+            let entry_table = match entry.as_table_mut() {
+                Some(t) => t,
+                None => continue,
+            };
+            let single = entry_table.remove("api_key");
+            if let Some(toml::Value::String(s)) = single {
+                let existing = entry_table
+                    .get("api_keys")
+                    .and_then(|v: &toml::Value| v.as_array())
+                    .cloned();
+                let mut merged: Vec<toml::Value> = vec![toml::Value::String(s)];
+                if let Some(arr) = existing {
+                    for v in arr {
+                        if !merged.contains(&v) {
+                            merged.push(v);
+                        }
+                    }
+                }
+                entry_table.insert("api_keys".to_string(), toml::Value::Array(merged));
+            }
+        }
+    }
+    Ok(value)
+}
 
 /// 检测 toml 文档的 schema 版本。
 ///
@@ -49,8 +94,6 @@ fn detect_version(value: &toml::Value) -> u32 {
 ///
 /// - 输入已是当前版本 → 返回 `Ok(None)`
 /// - 输入需要迁移 → 返回 `Ok(Some(新 toml 字符串))`,内含 `schema_version = CURRENT`
-///
-/// 当前 v1 是首个版本,迁移行为仅为"缺失字段则补戳"。
 pub fn migrate_str(input: &str) -> Result<Option<String>> {
     let mut value: toml::Value = toml::from_str(input)?;
     let detected = detect_version(&value);
@@ -59,7 +102,7 @@ pub fn migrate_str(input: &str) -> Result<Option<String>> {
     }
     // 运行迁移链: 从 detected 升到 CURRENT。
     // step 索引 (from-1) 对应 MIGRATION_STEPS[i] 把 (i+1)→(i+2)。
-    // detected=0 (未版本化) 视作"比 v1 还早",但 v1 是基线,无需数据转换,只补版本戳。
+    // detected=0 (未版本化) 视作"比 v1 还早",从 v1 开始迁移。
     for from in detected.max(1)..CURRENT_SCHEMA_VERSION {
         let idx = (from - 1) as usize;
         if idx < MIGRATION_STEPS.len() {
@@ -74,4 +117,78 @@ pub fn migrate_str(input: &str) -> Result<Option<String>> {
         );
     }
     Ok(Some(toml::to_string_pretty(&value)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v1_to_v2_transforms_single_api_key() {
+        let input = r#"
+schema_version = 1
+[providers.openai.default]
+api_key = "sk-xxx"
+model = "gpt-4o-mini"
+"#;
+        let out = migrate_str(input).expect("migration should succeed");
+        let out = out.expect("should produce migrated output");
+        assert!(out.contains("api_keys"));
+        assert!(out.contains("\"sk-xxx\""));
+        assert!(!out.contains("\napi_key = ")); // 旧的 api_key = ... 行消失
+        assert!(out.contains("schema_version = 2"));
+    }
+
+    #[test]
+    fn v1_to_v2_keeps_existing_api_keys() {
+        let input = r#"
+schema_version = 1
+[providers.openai.default]
+api_keys = ["sk-1", "sk-2"]
+"#;
+        let out = migrate_str(input).expect("migration ok");
+        let out = out.expect("should migrate (bump version)");
+        assert!(out.contains("schema_version = 2"));
+        // 仍包含原 api_keys
+        assert!(out.contains("\"sk-1\""));
+        assert!(out.contains("\"sk-2\""));
+    }
+
+    #[test]
+    fn v1_to_v2_merges_when_both_present() {
+        let input = r#"
+schema_version = 1
+[providers.openai.default]
+api_key = "sk-a"
+api_keys = ["sk-b"]
+"#;
+        let out = migrate_str(input).expect("migration ok");
+        let out = out.expect("should produce output");
+        // 合并: sk-a 在前, sk-b 去重后保留
+        assert!(out.contains("\"sk-a\""));
+        assert!(out.contains("\"sk-b\""));
+    }
+
+    #[test]
+    fn v1_to_v2_handles_no_providers_section() {
+        let input = r#"
+schema_version = 1
+[agent]
+model = "gpt-4o"
+"#;
+        let out = migrate_str(input).expect("migration ok");
+        let out = out.expect("should bump version");
+        assert!(out.contains("schema_version = 2"));
+    }
+
+    #[test]
+    fn already_v2_returns_none() {
+        let input = r#"
+schema_version = 2
+[providers.openai.default]
+api_keys = ["sk-x"]
+"#;
+        let out = migrate_str(input).expect("parse ok");
+        assert!(out.is_none(), "v2 input should not be migrated");
+    }
 }

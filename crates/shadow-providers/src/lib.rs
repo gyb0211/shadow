@@ -8,12 +8,14 @@
 pub mod dispatch;
 pub mod error;
 pub mod openai;
+pub mod rate_limit;
 pub mod reliable;
 pub mod router;
 
 pub use error::{ChatError, RetryClass};
 pub use openai::OpenAiProvider;
-pub use reliable::{ReliableModelProvider, RetryPolicy};
+pub use rate_limit::TokenBucket;
+pub use reliable::{KeyRotator, ReliableModelProvider, RetryPolicy};
 pub use router::RouterModelProvider;
 
 use shadow_core::{ModelProviderRuntimeOptions, Provider};

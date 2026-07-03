@@ -39,8 +39,13 @@ impl<'a> ConfigView<'a> {
         // providers.<family>.<alias>.<field>
         for (family, aliases) in &cfg.providers.families {
             for (alias, entry) in aliases {
-                if let Some(k) = &entry.api_key {
-                    out.push((format!("providers.{family}.{alias}.api_key"), k.clone()));
+                for (i, k) in entry.api_keys.iter().enumerate() {
+                    let field = if entry.api_keys.len() == 1 {
+                        format!("providers.{family}.{alias}.api_key")
+                    } else {
+                        format!("providers.{family}.{alias}.api_key[{i}]")
+                    };
+                    out.push((field, k.clone()));
                 }
                 if let Some(m) = &entry.model {
                     out.push((format!("providers.{family}.{alias}.model"), m.clone()));
@@ -90,7 +95,7 @@ mod tests {
     #[test]
     fn flatten_includes_providers_when_present() {
         let mut cfg = Config::default();
-        cfg.providers.find_or_create("openai", "minimax").api_key = Some("sk-x".into());
+        cfg.providers.find_or_create("openai", "minimax").api_keys = vec!["sk-x".into()];
         let rows = ConfigView::flatten(&cfg);
         let paths: Vec<_> = rows.iter().map(|(p, _)| p.as_str()).collect();
         assert!(paths.contains(&"providers.openai.minimax.api_key"));
