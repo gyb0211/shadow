@@ -159,11 +159,22 @@ async fn chat_command(
     let model = resolved.effective_model(&config.agent.model).to_string();
     let temperature = resolved.effective_temperature();
 
-    // 创建 provider (kernel 层, 两种模式都可用)
-    let provider = shadow_providers::create_provider(
+    // 创建 provider -- Reliable 包装 (重试/退避/key 轮换/限流/fallback)
+    let alias = format!("{}.{}", resolved.family, resolved.alias);
+    let policy = shadow_providers::RetryPolicy {
+        max_retries: resolved.entry.reliable.max_retries,
+        initial_backoff_ms: resolved.entry.reliable.initial_backoff_ms,
+        max_backoff_ms: resolved.entry.reliable.max_backoff_ms,
+        jitter_pct: resolved.entry.reliable.jitter_pct,
+    };
+    let provider = shadow_providers::create_reliable_provider(
+        &alias,
         &resolved.family,
-        resolved.entry.first_key(),
+        resolved.entry.api_keys.clone(),
         resolved.effective_base_url(),
+        resolved.entry.fallback_models.clone(),
+        policy,
+        resolved.entry.reliable.requests_per_minute,
     )?;
 
     // 创建 memory (kernel 层, 路径来自 Workspace)

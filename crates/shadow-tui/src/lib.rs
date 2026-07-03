@@ -75,10 +75,21 @@ fn build_agent(
     let model = resolved.effective_model(&config.agent.model).to_string();
     let temperature = resolved.effective_temperature();
 
-    let provider = shadow_providers::create_provider(
+    let alias = format!("{}.{}", resolved.family, resolved.alias);
+    let policy = shadow_providers::RetryPolicy {
+        max_retries: resolved.entry.reliable.max_retries,
+        initial_backoff_ms: resolved.entry.reliable.initial_backoff_ms,
+        max_backoff_ms: resolved.entry.reliable.max_backoff_ms,
+        jitter_pct: resolved.entry.reliable.jitter_pct,
+    };
+    let provider = shadow_providers::create_reliable_provider(
+        &alias,
         &resolved.family,
-        resolved.entry.first_key(),
+        resolved.entry.api_keys.clone(),
         resolved.effective_base_url(),
+        resolved.entry.fallback_models.clone(),
+        policy,
+        resolved.entry.reliable.requests_per_minute,
     )?;
 
     let workspace = shadow_config::config_dir();

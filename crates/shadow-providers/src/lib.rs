@@ -61,3 +61,47 @@ pub fn create_provider_with_opts(
         _ => anyhow::bail!("未知的 provider family: {alias}"),
     }
 }
+
+/// 创建 Reliable 包装的 provider -- 从 ResolvedProvider 字段构造完整 3 层栈.
+///
+/// 参数从 `ProviderEntry` 提取 (调用方负责), 避免本 crate 反向依赖 shadow-config.
+///
+/// - `alias`: 完整别名 (如 "openai.default") -- 用于 Attributable::alias()
+/// - `family`: 家族名 (如 "openai" / "openrouter" / "ollama" / "compatible")
+/// - `api_keys`: API key 列表 (多 key 支持轮换; 空 vec 表示无 auth)
+/// - `base_url`: 自定义 base_url (None 时按 family 选默认)
+/// - `fallback_models`: 主模型失败后依次尝试的备选模型列表
+/// - `policy`: 重试/退避策略 (max_retries / initial_backoff_ms / max_backoff_ms / jitter_pct)
+/// - `requests_per_minute`: 限流 (0 = 无限流)
+///
+/// 返回 `Arc<dyn Provider>` -- 内部已 Reliable 包装.
+pub fn create_reliable_provider(
+    alias: &str,
+    family: &str,
+    api_keys: Vec<String>,
+    base_url: Option<&str>,
+    fallback_models: Vec<String>,
+    policy: RetryPolicy,
+    requests_per_minute: u32,
+) -> Result<Arc<dyn Provider>> {
+    // 1. 构造 Compat 层 OpenAiProvider
+    let inner_provider: Arc<OpenAiProvider> = Arc::new(OpenAiProvider::new_with_opts(
+        family,
+        api_keys.first().map(String::as_str),
+        base_url,
+        ModelProviderRuntimeOptions::default(),
+    )?);
+
+    // 2. 构造 Reliable 包装层, 注入 key 轮换 / 限流 / fallback
+    let mut reliable = ReliableModelProvider::new(alias, inner_provider.clone(), policy);
+    if !api_keys.is_empty() {
+        reliable = reliable.with_key_rotation(api_keys, inner_provider);
+    }
+    if requests_per_minute > 0 {
+        reliable = reliable.with_rate_limiter(Arc::new(TokenBucket::new(requests_per_minute)));
+    }
+    if !fallback_models.is_empty() {
+        reliable = reliable.with_fallback_models(fallback_models);
+    }
+    Ok(Arc::new(reliable) as Arc<dyn Provider>)
+}
