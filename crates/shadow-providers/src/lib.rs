@@ -2,16 +2,18 @@
 //!
 //! 架构 (借鉴 zeroclaw 3 层):
 //! - **Router** (顶层): 按 alias 路由到具体 family provider
-//! - **Compat** (中层): 把家族差异 (auth, API path, payload) 适配为统一 OpenAI 形态
-//! - **Reliable** (底层, Phase 2): 重试/退避/key 轮换
-//!
-//! MVP 交付 Router + Compat, Reliable 延后.
+//! - **Reliable** (中层): 重试/退避/key 轮换/限流
+//! - **Compat** (底层): 把家族差异 (auth, API path, payload) 适配为统一 OpenAI 形态
 
 pub mod dispatch;
+pub mod error;
 pub mod openai;
+pub mod reliable;
 pub mod router;
 
+pub use error::{ChatError, RetryClass};
 pub use openai::OpenAiProvider;
+pub use reliable::{ReliableModelProvider, RetryPolicy};
 pub use router::RouterModelProvider;
 
 use shadow_core::{ModelProviderRuntimeOptions, Provider};
