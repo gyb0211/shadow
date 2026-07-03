@@ -260,14 +260,14 @@ mod tests {
     fn rate_limit_allows_under_limit() {
         // 测试: 不超过限制时正常执行
         // 这里只验证 name 委托, execute 需要异步环境
-        let wrapper = RateLimitedTool::new(Box::new(ShellTool), 10);
+        let wrapper = RateLimitedTool::new(Box::new(ShellTool::default()), 10);
         assert_eq!(wrapper.name(), "shell");
         assert!(wrapper.requires_approval());
     }
 
     #[tokio::test]
     async fn rate_limit_blocks_over_limit() {
-        let wrapper = RateLimitedTool::new(Box::new(ShellTool), 2);
+        let wrapper = RateLimitedTool::new(Box::new(ShellTool::default()), 2);
 
         // 前两次应通过 (虽然命令会失败但不是速率限制)
         let r1 = wrapper.execute(json!({"command": "true"})).await.unwrap();

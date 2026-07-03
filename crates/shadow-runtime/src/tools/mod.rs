@@ -31,6 +31,7 @@ pub use wrapper::{PathGuardedTool, RateLimitedTool, ToolWrapper};
 
 use shadow_core::Memory;
 use std::sync::Arc;
+use crate::security::SecurityPolicy;
 /// 创建默认工具集 -- 返回所有内置工具, 用装饰器包装敏感工具
 ///
 /// - `memory`: 可选的 Memory 后端, Some 时注册 memory_recall / memory_store 工具
@@ -46,9 +47,12 @@ pub fn default_tools_with_workspace(
 ) -> ToolRegistry {
     let mut registry = ToolRegistry::new();
 
-    // Shell 工具 -- 速率限制 (每秒 10 次) + 路径安全
+    // 安全策略: 黑名单 + 环境变量过滤 + 工作目录限制
+    let security = SecurityPolicy::new().with_workspace(workspace.clone());
+
+    // Shell 工具 -- 安全策略 + 速率限制 (每秒 10 次) + 路径安全
     registry.register(Box::new(RateLimitedTool::new(
-        Box::new(ShellTool),
+        Box::new(ShellTool::new(security)),
         10,
     )));
 

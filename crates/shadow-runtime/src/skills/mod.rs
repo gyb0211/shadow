@@ -34,8 +34,10 @@
 //! 这是技能的说明文档, 会作为附加提示使用...
 //! ```
 
+pub mod skill_http;
 pub mod skill_tool;
 
+pub use skill_http::SkillHttpTool;
 pub use skill_tool::SkillShellTool;
 
 use shadow_core::Tool;
@@ -122,11 +124,14 @@ impl SkillsService {
                         tools.push(Box::new(SkillShellTool::new(&skill.name, tool_def.clone()))
                             as Box<dyn Tool>);
                     }
-                    "http" | "builtin" => {
-                        // TODO: 后续实现 HTTP 和内置类型工具
+                    "http" => {
+                        tools.push(Box::new(SkillHttpTool::new(&skill.name, tool_def.clone()))
+                            as Box<dyn Tool>);
+                    }
+                    "builtin" => {
+                        // TODO: 后续实现内置类型工具
                         tracing::debug!(
-                            "跳过未实现的技能工具类型: {} ({})",
-                            tool_def.kind,
+                            "跳过未实现的技能工具类型: builtin ({})",
                             tool_def.name
                         );
                     }
@@ -817,7 +822,7 @@ tools:
                     name: "fetch".to_string(),
                     description: "HTTP 工具".to_string(),
                     kind: "http".to_string(),
-                    command: "".to_string(),
+                    command: "https://example.com/api".to_string(),
                     args: vec![],
                 },
             ],
@@ -825,11 +830,13 @@ tools:
         }];
         let service = SkillsService::from_skills(skills);
 
-        // 只有 shell 类型的工具会被注册 (http 被跳过)
+        // shell 和 http 类型的工具都会被注册
         let tools = service.all_tools();
-        assert_eq!(tools.len(), 2);
-        assert_eq!(tools[0].name(), "git__status");
-        assert_eq!(tools[1].name(), "git__log");
+        assert_eq!(tools.len(), 3);
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(names.contains(&"git__status"));
+        assert!(names.contains(&"git__log"));
+        assert!(names.contains(&"git__fetch"));
     }
 
     // ---- YAML 解析器单元测试 ----
