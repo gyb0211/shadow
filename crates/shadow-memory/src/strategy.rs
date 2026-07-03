@@ -1,36 +1,65 @@
-//! 记忆策略 -- 控制记忆的加载/存储/治理
+//! 记忆策略 -- DefaultMemoryStrategy 实现 + 工具函数
 //!
-//! DefaultMemoryStrategy 提供基础实现:
-//! - load_context: recall 检索相关记忆, 格式化为上下文文本
-//! - consolidate_turn: 把对话轮次存为一条 MemoryEntry
+//! Trait 定义在 `shadow_core::MemoryStrategy` (与 Memory trait 同层).
+//!
+//! DefaultMemoryStrategy 提供:
+//! - extract_queries: 从 user message 提取搜索关键词 (空白分词 + 长度过滤 + 去重)
+//! - before_chat: 多关键词 recall + 去重 + score 排序, 返回原始 entries
+//! - after_chat: importance filter 过滤寒暄, 只存有意义的轮次
+//!
+//! 格式化为 system prompt 文本的工作交给调用方 (format_entries),
+//! 这样上层可以二次过滤 / 重排 / 自定义渲染.
 
-use shadow_core::{Memory, MemoryEntry};
+use shadow_core::{Memory, MemoryCategory, MemoryEntry, MemoryStrategy};
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::Utc;
+use std::collections::HashSet;
 use std::sync::Arc;
 
-/// 记忆策略 -- 控制记忆的加载/存储/治理
-#[async_trait]
-pub trait MemoryStrategy: Send + Sync {
-    /// 加载与用户消息相关的记忆上下文
-    async fn load_context(&self, user_message: &str) -> String;
+/// 从 user message 提取搜索关键词.
+///
+/// 当前实现: 简单按空白分词 + 长度 >= 2 字符过滤 + 大小写不敏感去重.
+/// 中文等无空白分隔的文本会作为整句传入 -- 未来可替换为 LLM-based 提取器.
+pub fn extract_queries(message: &str) -> Vec<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for word in message.split_whitespace() {
+        let trimmed = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
+        if trimmed.chars().count() < 2 {
+            continue;
+        }
+        let lower = trimmed.to_lowercase();
+        if seen.insert(lower) {
+            out.push(trimmed.to_string());
+        }
+    }
+    out
+}
 
-    /// 从对话中提取并存储记忆
-    async fn consolidate_turn(&self, user_msg: &str, assistant_msg: &str) -> Result<()>;
+/// 格式化记忆条目为 system prompt 注入文本.
+///
+/// 空切片返回空字符串 (调用方据此判断是否注入).
+pub fn format_entries(entries: &[MemoryEntry]) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+    let body = entries
+        .iter()
+        .map(|e| format!("- {}", e.content))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("[memory_context]\n{body}\n[/memory_context]")
 }
 
 /// 默认记忆策略
 ///
-/// 使用 Memory trait 的 recall 检索记忆,
-/// consolidate_turn 把整轮对话存为一条 MemoryEntry。
+/// - before_chat: 多关键词 recall + 去重 + score 排序, 截断到 limit=5
+/// - after_chat: [`is_important_turn`] 过滤后, 存一条 Conversation 记忆
 pub struct DefaultMemoryStrategy {
-    /// 记忆后端
     memory: Arc<dyn Memory>,
 }
 
 impl DefaultMemoryStrategy {
-    /// 创建默认记忆策略, 绑定一个 Memory 后端
     pub fn new(memory: Arc<dyn Memory>) -> Self {
         Self { memory }
     }
@@ -38,114 +67,188 @@ impl DefaultMemoryStrategy {
 
 #[async_trait]
 impl MemoryStrategy for DefaultMemoryStrategy {
-    /// 加载记忆上下文: recall(query, limit=5), 格式化为 [memory_context]...[/memory_context]
-    async fn load_context(&self, user_message: &str) -> String {
-        // 检索相关记忆 (最多 5 条)
-        let entries = match self.memory.recall(user_message, 5).await {
-            Ok(e) => e,
-            Err(_) => return String::new(),
+    async fn before_chat(&self, user_message: &str, session_id: Option<&str>) -> Vec<MemoryEntry> {
+        let queries = extract_queries(user_message);
+        // 没有可提取的关键词时, 用原消息兜底检索一次
+        let queries: Vec<String> = if queries.is_empty() {
+            vec![user_message.to_string()]
+        } else {
+            queries
         };
 
-        // 无记忆时返回空字符串
-        if entries.is_empty() {
-            return String::new();
+        let mut seen_ids: HashSet<String> = HashSet::new();
+        let mut entries: Vec<MemoryEntry> = Vec::new();
+        for q in &queries {
+            if let Ok(found) = self.memory.recall(q, 5, session_id).await {
+                for e in found {
+                    if seen_ids.insert(e.id.clone()) {
+                        entries.push(e);
+                    }
+                }
+            }
         }
-
-        // 格式化为带标签的上下文文本
-        let body = entries
-            .iter()
-            .map(|e| format!("- {}", e.content))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        format!("[memory_context]\n{body}\n[/memory_context]")
+        // 按 score 降序 (None 排后)
+        entries.sort_by(|a, b| {
+            b.score.unwrap_or(0.0)
+                .partial_cmp(&a.score.unwrap_or(0.0))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        entries.truncate(5);
+        entries
     }
 
-    /// 存储对话轮次: 把 user+assistant 合并为一条 MemoryEntry, key 用时间戳
-    async fn consolidate_turn(&self, user_msg: &str, assistant_msg: &str) -> Result<()> {
-        let now = Utc::now();
-        // key 用毫秒级时间戳, 保证唯一性
-        let key = format!("turn_{}", now.timestamp_millis());
-        // 内容合并用户消息和助手回复
-        let content = format!("[用户] {user_msg}\n[助手] {assistant_msg}");
+    async fn after_chat(
+        &self,
+        user_message: &str,
+        assistant_response: &str,
+        session_id: Option<&str>,
+    ) -> Result<()> {
+        if !is_important_turn(user_message, assistant_response) {
+            return Ok(());
+        }
+        let key = format!("turn_{}", chrono::Utc::now().timestamp_millis());
+        let content = format!("[用户] {user_message}\n[助手] {assistant_response}");
 
-        let entry = MemoryEntry {
-            id: key.clone(),
-            key,
-            content,
-            category: "conversation".to_string(),
-            timestamp: now,
-            session_id: None,
-            agent_alias: None,
-        };
-
-        self.memory.store(&entry).await
+        self.memory
+            .store(&key, &content, MemoryCategory::Conversation, session_id)
+            .await
     }
 }
 
-// ── 单元测试 ──
+/// 简单的重要性过滤器 -- 决定本轮对话是否值得存储.
+///
+/// 当前规则 (跳过寒暄/确认):
+/// - assistant 回复 < 10 字符 -> 跳过 (过滤 "ok"/"好的"/"嗯" 等)
+/// - user message < 3 字符 -> 跳过
+///
+/// 未来可替换为 LLM-based 判定或被 recall 命中过的标记.
+fn is_important_turn(user_message: &str, assistant_response: &str) -> bool {
+    let u = user_message.trim();
+    let a = assistant_response.trim();
+    if a.chars().count() < 10 {
+        return false;
+    }
+    if u.chars().count() < 3 {
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sqlite::SqliteMemory;
 
-    /// 测试: load_context 检索记忆并格式化为 [memory_context] 标签
-    #[tokio::test]
-    async fn test_load_context() {
-        let dir = tempfile::tempdir().unwrap();
-        let mem = Arc::new(SqliteMemory::new(dir.path()).unwrap());
-
-        // 先存储一条记忆
-        let entry = MemoryEntry {
-            id: "1".to_string(),
-            key: "rust".to_string(),
-            content: "Rust 是一门系统编程语言".to_string(),
-            category: "fact".to_string(),
-            timestamp: Utc::now(),
-            session_id: None,
-            agent_alias: None,
-        };
-        mem.store(&entry).await.unwrap();
-
-        let strategy = DefaultMemoryStrategy::new(mem);
-        let ctx = strategy.load_context("Rust").await;
-
-        assert!(ctx.contains("[memory_context]"), "应包含 memory_context 开始标签");
-        assert!(
-            ctx.contains("Rust 是一门系统编程语言"),
-            "应包含记忆内容"
-        );
-        assert!(
-            ctx.contains("[/memory_context]"),
-            "应包含 memory_context 结束标签"
-        );
+    #[test]
+    fn extract_queries_dedups_case_insensitive() {
+        let qs = extract_queries("Rust 是什么 async rust");
+        // "rust" 大小写不敏感去重, 只出现一次
+        let rust_count = qs
+            .iter()
+            .filter(|s| s.to_lowercase() == "rust")
+            .count();
+        assert_eq!(rust_count, 1);
     }
 
-    /// 测试: consolidate_turn 存储对话轮次
+    #[test]
+    fn extract_queries_skips_short_tokens() {
+        let qs = extract_queries("a b cd ef");
+        // 长度 < 2 字符的词被过滤
+        assert!(qs.iter().all(|s| s.chars().count() >= 2));
+    }
+
+    #[test]
+    fn format_entries_empty_returns_empty_string() {
+        assert_eq!(format_entries(&[]), "");
+    }
+
+    #[test]
+    fn format_entries_wraps_in_tags() {
+        let entries = vec![MemoryEntry {
+            id: "1".into(),
+            key: "k".into(),
+            content: "hello".into(),
+            category: MemoryCategory::Core,
+            timestamp: "t".into(),
+            session_id: None,
+            score: None,
+            agent_alias: None,
+        }];
+        let s = format_entries(&entries);
+        assert!(s.contains("[memory_context]"));
+        assert!(s.contains("hello"));
+    }
+
+    #[test]
+    fn is_important_turn_rejects_short_response() {
+        assert!(!is_important_turn("hello", "ok"));
+        assert!(!is_important_turn("hi", "短的回复"));
+    }
+
+    #[test]
+    fn is_important_turn_accepts_meaningful() {
+        assert!(is_important_turn(
+            "什么是 Rust?",
+            "Rust 是一门系统编程语言"
+        ));
+    }
+
     #[tokio::test]
-    async fn test_consolidate_turn() {
+    async fn before_chat_returns_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = Arc::new(SqliteMemory::new(dir.path()).unwrap());
+        mem.store("rust", "Rust 是一门系统编程语言", MemoryCategory::Core, None)
+            .await
+            .unwrap();
+
+        let strategy = DefaultMemoryStrategy::new(mem);
+        let entries = strategy.before_chat("Rust", None).await;
+
+        assert!(entries.iter().any(|e| e.content.contains("Rust")));
+    }
+
+    #[tokio::test]
+    async fn before_chat_falls_back_to_full_message_when_no_keywords() {
+        // 纯中文无空白 -> extract_queries 返回空 -> before_chat 用原消息兜底
+        let dir = tempfile::tempdir().unwrap();
+        let mem = Arc::new(SqliteMemory::new(dir.path()).unwrap());
+        mem.store("k", "记忆内容在这里", MemoryCategory::Core, None)
+            .await
+            .unwrap();
+
+        let strategy = DefaultMemoryStrategy::new(mem);
+        let entries = strategy.before_chat("记忆", None).await;
+        assert!(!entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn after_chat_skips_short_response() {
         let dir = tempfile::tempdir().unwrap();
         let mem = Arc::new(SqliteMemory::new(dir.path()).unwrap());
         let strategy = DefaultMemoryStrategy::new(mem.clone());
 
-        // 存储一轮对话
+        // assistant 回复 < 20 字符 -> 不存储
+        strategy.after_chat("hello", "ok", None).await.unwrap();
+
+        let list = mem.list(None).await.unwrap();
+        assert_eq!(list.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn after_chat_stores_meaningful_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = Arc::new(SqliteMemory::new(dir.path()).unwrap());
+        let strategy = DefaultMemoryStrategy::new(mem.clone());
+
         strategy
-            .consolidate_turn("什么是 Rust?", "Rust 是一门系统编程语言")
+            .after_chat("什么是 Rust?", "Rust 是一门系统编程语言", None)
             .await
             .unwrap();
 
-        // 验证: 通过 list 应能看到存储的记忆
-        let list = mem.list().await.unwrap();
-        assert_eq!(list.len(), 1, "应存储了 1 条记忆");
-        assert!(
-            list[0].content.contains("什么是 Rust?"),
-            "内容应包含用户消息"
-        );
-        assert!(
-            list[0].content.contains("系统编程语言"),
-            "内容应包含助手消息"
-        );
-        assert_eq!(list[0].category, "conversation", "分类应为 conversation");
-        assert!(list[0].key.starts_with("turn_"), "key 应以 turn_ 开头");
+        let list = mem.list(None).await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert!(list[0].content.contains("什么是 Rust?"));
+        assert_eq!(list[0].category, MemoryCategory::Conversation);
+        assert!(list[0].key.starts_with("turn_"));
     }
 }

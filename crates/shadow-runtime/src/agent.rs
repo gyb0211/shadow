@@ -6,8 +6,8 @@
 
 use shadow_core::{
     Attributable, AutonomyLevel, ChatChunk, ChatMessage, ChatRequest, ChatResponse, Memory,
-    Provider, Observer, ObserverEvent, Role, Session, SessionStore, TokenUsage, Tool, ToolCall,
-    ToolResult,
+    MemoryStrategy, Provider, Observer, ObserverEvent, Role, Session, SessionStore, TokenUsage,
+    ToolCall, ToolResult,
 };
 use anyhow::Result;
 use futures::stream::BoxStream;
@@ -15,6 +15,9 @@ use futures::StreamExt;
 use parking_lot::Mutex;
 use shadow_log::Action;
 use std::sync::Arc;
+
+use crate::tools::ToolRegistry;
+use shadow_memory::format_entries;
 
 /// 工具调用最大循环次数 -- 默认值, 可被 AgentConfig.max_iterations 覆盖
 const DEFAULT_MAX_ITERATIONS: usize = 10;
@@ -89,7 +92,7 @@ impl Default for AgentConfig {
 pub struct Agent {
     pub alias: String,
     pub provider: Arc<dyn Provider>,
-    pub tools: Vec<Box<dyn Tool>>,
+    pub tools: ToolRegistry,
     pub memory: Arc<dyn Memory>,
     pub observer: Arc<dyn Observer>,
     pub config: AgentConfig,
@@ -98,6 +101,8 @@ pub struct Agent {
     pub tool_event_callback: Option<Arc<dyn ToolEventCallback>>,
     /// 会话存储 (可选) -- 用于持久化对话历史
     pub session_store: Option<Arc<dyn SessionStore>>,
+    /// 记忆策略 (可选) -- 对话前 recall + 对话后 store
+    pub memory_strategy: Option<Arc<dyn MemoryStrategy>>,
     /// 当前会话 ID (内存中维护, 通过 list() 修改时间动态确定)
     current_session_id: Mutex<Option<String>>,
 }
@@ -144,10 +149,12 @@ impl Agent {
     ///
     /// 流程:
     /// 1. 截断过长的历史 (上下文窗口管理)
-    /// 2. 构建消息 (system + history + user)
-    /// 3. 调用 LLM (流式 -- 每个 ContentDelta/ReasoningDelta 调用 on_delta 回调)
-    /// 4. 若响应包含 tool_calls, 执行工具, 将结果追加到消息, 回到步骤 3
-    /// 5. 若无 tool_calls, 保存历史并返回最终内容
+    /// 2. 记忆策略 before_chat: recall 相关记忆, 注入 system prompt
+    /// 3. 构建消息 (system + history + user)
+    /// 4. 调用 LLM (流式 -- 每个 ContentDelta/ReasoningDelta 调用 on_delta 回调)
+    /// 5. 若响应包含 tool_calls, 执行工具, 将结果追加到消息, 回到步骤 4
+    /// 6. 若无 tool_calls, 保存历史并返回最终内容
+    /// 7. 记忆策略 after_chat: 存储本轮重要事实
     pub async fn chat_with_stream(
         &self,
         user_message: &str,
@@ -155,6 +162,10 @@ impl Agent {
     ) -> Result<String> {
         // 记录会话开始
         shadow_log::record!(INFO, Action::Start, "agent chat 开始");
+
+        // 提前获取 session_id (供 memory_strategy 与 session_store 共用)
+        // 注: 首轮对话时为 None, after_chat 后由 session_store 触发生成 (见后文)
+        let session_id = self.current_session_id.lock().clone();
 
         // 上下文窗口管理: 截断过长的历史, 保留最近 max_history 条
         // 注: 锁必须在 block 内释放, 避免进入 async 状态机导致 future !Send
@@ -179,10 +190,35 @@ impl Agent {
             );
         }
 
-        // 构建初始消息 -- system prompt (从 config 读取, 未设则用默认)
+        // 记忆策略 before_chat: recall 相关记忆, 拼接到 system prompt
+        let memory_context = if let Some(strategy) = &self.memory_strategy {
+            let entries = strategy
+                .before_chat(user_message, session_id.as_deref())
+                .await;
+            if entries.is_empty() {
+                String::new()
+            } else {
+                let ctx = format_entries(&entries);
+                shadow_log::record!(
+                    INFO,
+                    Action::Note,
+                    format!("注入 {} 条记忆到 system prompt", entries.len())
+                );
+                ctx
+            }
+        } else {
+            String::new()
+        };
+
+        // 构建初始消息 -- system prompt (基础 prompt + 可选记忆上下文)
+        let system_content = if memory_context.is_empty() {
+            self.system_prompt().to_string()
+        } else {
+            format!("{}\n\n{memory_context}", self.system_prompt())
+        };
         let mut messages = vec![ChatMessage {
             role: "system".to_string(),
-            content: self.system_prompt().to_string(),
+            content: system_content,
             tool_call_id: None,
             ..Default::default()
         }];
@@ -231,7 +267,7 @@ impl Agent {
                 model: self.config.model.clone(),
                 temperature: self.config.temperature,
                 max_tokens: None,
-                tools: self.tools.iter().map(|t| t.spec()).collect(),
+                tools: self.tools.specs(),
             };
 
             // 调用 provider (流式)
@@ -273,49 +309,98 @@ impl Agent {
                 reasoning_content: response.reasoning_content.clone(),
             });
 
-            // 执行每个工具调用
-            for tool_call in &response.tool_calls {
+            // 执行工具调用 -- 检查是否有工具需要审批
+            // 如果任何工具 requires_approval, 全部串行执行 (安全第一)
+            let any_needs_approval = response.tool_calls.iter().any(|tc| {
+                self.tools
+                    .find(&tc.name)
+                    .map(|t| t.requires_approval())
+                    .unwrap_or(false)
+            });
+
+            if any_needs_approval {
+                // 串行执行 (有工具需要审批, 逐个执行)
+                for tool_call in &response.tool_calls {
+                    shadow_log::record!(
+                        INFO,
+                        Action::Invoke,
+                        format!("调用工具: {} (id: {})", tool_call.name, tool_call.id)
+                    );
+
+                    let tool_start = std::time::Instant::now();
+                    let result = self.execute_tool_call(tool_call).await;
+                    let tool_duration_ms = tool_start.elapsed().as_millis() as u64;
+
+                    // 记录工具调用事件 (脱敏后)
+                    self.record_tool_event(
+                        &tool_call.name,
+                        &result,
+                        tool_duration_ms,
+                    );
+
+                    // 将工具结果添加到消息 (脱敏后)
+                    let tool_content = if result.success {
+                        scrub_credentials(&result.output)
+                    } else {
+                        format!(
+                            "[工具执行失败] {}",
+                            scrub_credentials(&result.error.unwrap_or_default())
+                        )
+                    };
+
+                    messages.push(ChatMessage {
+                        role: "tool".to_string(),
+                        content: tool_content,
+                        tool_call_id: Some(tool_call.id.clone()),
+                        ..Default::default()
+                    });
+                }
+            } else {
+                // 并行执行 (无审批需求, 使用 join_all 并发执行)
                 shadow_log::record!(
                     INFO,
                     Action::Invoke,
-                    format!("调用工具: {} (id: {})", tool_call.name, tool_call.id)
+                    format!("并行执行 {} 个工具", response.tool_calls.len())
                 );
 
-                let tool_start = std::time::Instant::now();
-                let result = self.execute_tool_call(tool_call).await;
-                let tool_duration_ms = tool_start.elapsed().as_millis() as u64;
+                let tool_calls = &response.tool_calls;
+                let futures: Vec<_> = tool_calls
+                    .iter()
+                    .map(|tc| async move {
+                        let tool_start = std::time::Instant::now();
+                        let result = self.execute_tool_call(tc).await;
+                        let tool_duration_ms = tool_start.elapsed().as_millis() as u64;
+                        (tc, result, tool_duration_ms)
+                    })
+                    .collect();
+                let results = futures::future::join_all(futures).await;
 
-                // 记录工具调用事件
-                self.observer.record_event(&ObserverEvent::ToolCall {
-                    tool: tool_call.name.clone(),
-                    success: result.success,
-                    duration_ms: tool_duration_ms,
-                    output_preview: {
-                        let full = if result.success {
-                            result.output.clone()
-                        } else {
-                            result.error.clone().unwrap_or_default()
-                        };
-                        chars_preview(&full, 200)
-                    },
-                });
+                // 按顺序处理结果
+                for (tool_call, result, tool_duration_ms) in results {
+                    // 记录工具调用事件 (脱敏后)
+                    self.record_tool_event(
+                        &tool_call.name,
+                        &result,
+                        tool_duration_ms,
+                    );
 
-                // 将工具结果添加到消息
-                let tool_content = if result.success {
-                    result.output
-                } else {
-                    format!(
-                        "[工具执行失败] {}",
-                        result.error.unwrap_or_default()
-                    )
-                };
+                    // 将工具结果添加到消息 (脱敏后)
+                    let tool_content = if result.success {
+                        scrub_credentials(&result.output)
+                    } else {
+                        format!(
+                            "[工具执行失败] {}",
+                            scrub_credentials(&result.error.unwrap_or_default())
+                        )
+                    };
 
-                messages.push(ChatMessage {
-                    role: "tool".to_string(),
-                    content: tool_content,
-                    tool_call_id: Some(tool_call.id.clone()),
-                    ..Default::default()
-                });
+                    messages.push(ChatMessage {
+                        role: "tool".to_string(),
+                        content: tool_content,
+                        tool_call_id: Some(tool_call.id.clone()),
+                        ..Default::default()
+                    });
+                }
             }
 
             // 继续循环, 将工具结果发给 LLM
@@ -383,9 +468,45 @@ impl Agent {
             }
         }
 
+        // 记忆策略 after_chat: 提取并存储本轮重要事实
+        // 重新读取 session_id (首轮对话 session_store 会刚生成新 id,
+        // 让 after_chat 用与下一轮 before_chat 一致的 session 作用域)
+        if let Some(strategy) = &self.memory_strategy {
+            let sid = self.current_session_id.lock().clone();
+            if let Err(e) = strategy
+                .after_chat(user_message, &final_content, sid.as_deref())
+                .await
+            {
+                shadow_log::record!(
+                    WARN,
+                    Action::Fail,
+                    format!("after_chat 记忆存储失败: {e}")
+                );
+            }
+        }
+
         shadow_log::record!(INFO, Action::Complete, "agent chat 完成");
 
         Ok(final_content)
+    }
+
+    /// 记录工具调用事件到 observer (脱敏后)
+    fn record_tool_event(&self, tool_name: &str, result: &ToolResult, duration_ms: u64) {
+        let full = if result.success {
+            result.output.clone()
+        } else {
+            result.error.clone().unwrap_or_default()
+        };
+        // 脱敏后截断预览
+        let scrubbed = scrub_credentials(&full);
+        let preview = chars_preview(&scrubbed, 200);
+
+        self.observer.record_event(&ObserverEvent::ToolCall {
+            tool: tool_name.to_string(),
+            success: result.success,
+            duration_ms,
+            output_preview: preview,
+        });
     }
 
     /// 执行单个工具调用
@@ -396,8 +517,8 @@ impl Agent {
     /// 3. 工具超时控制 (tool.timeout() 返回的时长)
     /// 4. 工具事件回调通知
     async fn execute_tool_call(&self, tool_call: &ToolCall) -> ToolResult {
-        // 查找匹配的工具
-        let tool = self.tools.iter().find(|t| t.name() == tool_call.name);
+        // 查找匹配的工具 (通过 ToolRegistry)
+        let tool = self.tools.find(&tool_call.name);
 
         match tool {
             Some(t) => {
@@ -534,12 +655,13 @@ impl Agent {
 pub struct AgentBuilder {
     alias: Option<String>,
     provider: Option<Arc<dyn Provider>>,
-    tools: Option<Vec<Box<dyn Tool>>>,
+    tools: Option<ToolRegistry>,
     memory: Option<Arc<dyn Memory>>,
     observer: Option<Arc<dyn Observer>>,
     config: Option<AgentConfig>,
     tool_event_callback: Option<Arc<dyn ToolEventCallback>>,
     session_store: Option<Arc<dyn SessionStore>>,
+    memory_strategy: Option<Arc<dyn MemoryStrategy>>,
 }
 
 impl AgentBuilder {
@@ -551,7 +673,7 @@ impl AgentBuilder {
         self.provider = Some(provider);
         self
     }
-    pub fn tools(mut self, tools: Vec<Box<dyn Tool>>) -> Self {
+    pub fn tools(mut self, tools: ToolRegistry) -> Self {
         self.tools = Some(tools);
         self
     }
@@ -594,6 +716,14 @@ impl AgentBuilder {
         self
     }
 
+    /// 设置记忆策略 (用于对话前 recall + 对话后 store)
+    ///
+    /// 不设置则不启用记忆上下文注入和自动存储.
+    pub fn memory_strategy(mut self, strategy: Arc<dyn MemoryStrategy>) -> Self {
+        self.memory_strategy = Some(strategy);
+        self
+    }
+
     /// 构建 Agent
     pub fn build(self) -> Result<Agent> {
         let config = self.config.unwrap_or_default();
@@ -610,6 +740,7 @@ impl AgentBuilder {
         let tools = self.tools.unwrap_or_default();
         let tool_event_callback = self.tool_event_callback;
         let session_store = self.session_store;
+        let memory_strategy = self.memory_strategy;
 
         Ok(Agent {
             alias,
@@ -621,6 +752,7 @@ impl AgentBuilder {
             history: Mutex::new(Vec::new()),
             tool_event_callback,
             session_store,
+            memory_strategy,
             current_session_id: Mutex::new(None),
         })
     }
@@ -633,6 +765,80 @@ fn chars_preview(s: &str, n: usize) -> String {
         out.push_str("...");
     }
     out
+}
+
+/// 凭证脱敏 -- 替换文本中的 API key / Bearer token / token= 等敏感信息
+///
+/// 匹配模式:
+/// - `sk-xxx` (20+ 字符): OpenAI 风格 API key
+/// - `Bearer xxx` (20+ 字符): HTTP Bearer token
+/// - `token=xxx` / `token:xxx` (20+ 字符): query/header token
+///
+/// 替换为对应的 `***` 占位符, 防止敏感信息泄露到日志和 observer 事件中.
+fn scrub_credentials(text: &str) -> String {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    // 正则编译较慢, 使用 OnceLock 缓存
+    static RE_SK: OnceLock<Regex> = OnceLock::new();
+    static RE_BEARER: OnceLock<Regex> = OnceLock::new();
+    static RE_TOKEN: OnceLock<Regex> = OnceLock::new();
+
+    let re_sk = RE_SK.get_or_init(|| {
+        Regex::new(r"sk-[a-zA-Z0-9]{20,}").unwrap()
+    });
+    let re_bearer = RE_BEARER.get_or_init(|| {
+        Regex::new(r"Bearer\s+[a-zA-Z0-9._-]{20,}").unwrap()
+    });
+    let re_token = RE_TOKEN.get_or_init(|| {
+        Regex::new(r"token[=:]\s*[a-zA-Z0-9]{20,}").unwrap()
+    });
+
+    let result = re_sk.replace_all(text, "sk-***");
+    let result = re_bearer.replace_all(&result, "Bearer ***");
+    let result = re_token.replace_all(&result, "token=***");
+
+    result.into_owned()
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+
+    #[test]
+    fn scrub_sk_key() {
+        let input = "my key is sk-abcdefghijklmnopqrstuvwxyz1234567890";
+        let scrubbed = scrub_credentials(input);
+        assert!(scrubbed.contains("sk-***"));
+        assert!(!scrubbed.contains("sk-abcdefgh"));
+    }
+
+    #[test]
+    fn scrub_bearer_token() {
+        let input = "Authorization: Bearer abcdefghijklmnopqrstuvwxyz1234567890";
+        let scrubbed = scrub_credentials(input);
+        assert!(scrubbed.contains("Bearer ***"));
+    }
+
+    #[test]
+    fn scrub_token_equals() {
+        let input = "token=abcdefghijklmnopqrstuvwxyz1234567890";
+        let scrubbed = scrub_credentials(input);
+        assert!(scrubbed.contains("token=***"));
+    }
+
+    #[test]
+    fn scrub_no_match() {
+        let input = "普通文本, 无敏感信息";
+        assert_eq!(scrub_credentials(input), input);
+    }
+
+    #[test]
+    fn scrub_short_key_not_matched() {
+        // 短于 20 字符的 key 不匹配
+        let input = "sk-short";
+        assert_eq!(scrub_credentials(input), input);
+    }
 }
 
 /// 消费流式 ChatChunk 流, 聚合为完整 ChatResponse

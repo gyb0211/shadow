@@ -7,6 +7,7 @@ description = "影子运行时 -- agent loop"
 
 [dependencies]
 shadow-core.workspace = true
+shadow-memory.workspace = true
 shadow-log.workspace = true
 shadow-config.workspace = true
 anyhow.workspace = true
@@ -21,6 +22,7 @@ cron = "0.15"
 chrono.workspace = true
 uuid.workspace = true
 futures.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
