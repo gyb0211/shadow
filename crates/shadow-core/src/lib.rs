@@ -21,6 +21,7 @@ pub mod observer;
 pub mod provider;
 pub mod session_store;
 pub mod tool;
+pub mod workspace;
 
 pub use agent_runtime::AgentRuntime;
 pub use attribution::{Attributable, Role};
@@ -28,8 +29,9 @@ pub use channel::{Channel, ChannelMessage, CliChannel, SendMessage};
 pub use memory::{Memory, MemoryCategory, MemoryEntry, MemoryStrategy, NoneMemory};
 pub use observer::{NoopObserver, Observer, ObserverEvent};
 pub use provider::{AuthStyle, ChatChunk, ChatMessage, ChatRequest, ChatResponse, ModelProviderRuntimeOptions, Provider, TokenUsage, ToolCall, DefaultProvider};
-pub use session_store::{JsonlSessionStore, Session, SessionStore};
+pub use session_store::{JsonlSessionStore, Session, SessionMetadata, SessionStore};
 pub use tool::{Tool, ToolResult, ToolSpec, ToolAttribution};
+pub use workspace::Workspace;
 
 /// 代理自主级别
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
