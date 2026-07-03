@@ -7,6 +7,7 @@ description = "影子运行时 -- agent loop"
 
 [dependencies]
 shadow-core.workspace = true
+shadow-memory.workspace = true
 shadow-log.workspace = true
 shadow-config.workspace = true
 anyhow.workspace = true

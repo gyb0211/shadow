@@ -211,6 +211,37 @@ impl Memory for NoneMemory {
     }
 }
 
+// ── 记忆策略 trait ──
+
+/// 记忆策略 -- 控制记忆的加载/存储
+///
+/// 由 Agent runtime 在对话前后调用:
+/// - [`MemoryStrategy::before_chat`]: 检索相关记忆, 返回原始 entries (调用方负责格式化注入)
+/// - [`MemoryStrategy::after_chat`]: 提取并存储本轮重要事实
+///
+/// 实现方放在 `shadow-memory` 等 crate (如 `DefaultMemoryStrategy`).
+#[async_trait]
+pub trait MemoryStrategy: Send + Sync {
+    /// 对话前: 检索相关记忆, 返回原始 entries.
+    ///
+    /// 调用方负责格式化 (如拼接成 `[memory_context]...[/memory_context]`) 并注入 system prompt.
+    async fn before_chat(
+        &self,
+        user_message: &str,
+        session_id: Option<&str>,
+    ) -> Vec<MemoryEntry>;
+
+    /// 对话后: 从对话中提取并存储重要事实.
+    ///
+    /// 实现方可自行决定过滤策略 (如跳过寒暄/确认), 失败应返回 Err 但不应中断主流程.
+    async fn after_chat(
+        &self,
+        user_message: &str,
+        assistant_response: &str,
+        session_id: Option<&str>,
+    ) -> Result<()>;
+}
+
 // ── 单元测试 ──
 #[cfg(test)]
 mod tests {

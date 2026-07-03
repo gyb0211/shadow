@@ -25,7 +25,7 @@ pub mod tool;
 pub use agent_runtime::AgentRuntime;
 pub use attribution::{Attributable, Role};
 pub use channel::{Channel, ChannelMessage, CliChannel, SendMessage};
-pub use memory::{Memory, MemoryCategory, MemoryEntry, NoneMemory};
+pub use memory::{Memory, MemoryCategory, MemoryEntry, MemoryStrategy, NoneMemory};
 pub use observer::{NoopObserver, Observer, ObserverEvent};
 pub use provider::{AuthStyle, ChatChunk, ChatMessage, ChatRequest, ChatResponse, ModelProviderRuntimeOptions, Provider, TokenUsage, ToolCall, DefaultProvider};
 pub use session_store::{JsonlSessionStore, Session, SessionStore};

@@ -1674,6 +1674,7 @@ dependencies = [
  "shadow-config",
  "shadow-core",
  "shadow-log",
+ "shadow-memory",
  "tempfile",
  "tokio",
  "tracing",

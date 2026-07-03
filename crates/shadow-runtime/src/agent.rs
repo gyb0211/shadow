@@ -6,8 +6,8 @@
 
 use shadow_core::{
     Attributable, AutonomyLevel, ChatChunk, ChatMessage, ChatRequest, ChatResponse, Memory,
-    Provider, Observer, ObserverEvent, Role, Session, SessionStore, TokenUsage, ToolCall,
-    ToolResult,
+    MemoryStrategy, Provider, Observer, ObserverEvent, Role, Session, SessionStore, TokenUsage,
+    ToolCall, ToolResult,
 };
 use anyhow::Result;
 use futures::stream::BoxStream;
@@ -17,6 +17,7 @@ use shadow_log::Action;
 use std::sync::Arc;
 
 use crate::tools::ToolRegistry;
+use shadow_memory::format_entries;
 
 /// 工具调用最大循环次数 -- 默认值, 可被 AgentConfig.max_iterations 覆盖
 const DEFAULT_MAX_ITERATIONS: usize = 10;
@@ -100,6 +101,8 @@ pub struct Agent {
     pub tool_event_callback: Option<Arc<dyn ToolEventCallback>>,
     /// 会话存储 (可选) -- 用于持久化对话历史
     pub session_store: Option<Arc<dyn SessionStore>>,
+    /// 记忆策略 (可选) -- 对话前 recall + 对话后 store
+    pub memory_strategy: Option<Arc<dyn MemoryStrategy>>,
     /// 当前会话 ID (内存中维护, 通过 list() 修改时间动态确定)
     current_session_id: Mutex<Option<String>>,
 }
@@ -146,10 +149,12 @@ impl Agent {
     ///
     /// 流程:
     /// 1. 截断过长的历史 (上下文窗口管理)
-    /// 2. 构建消息 (system + history + user)
-    /// 3. 调用 LLM (流式 -- 每个 ContentDelta/ReasoningDelta 调用 on_delta 回调)
-    /// 4. 若响应包含 tool_calls, 执行工具, 将结果追加到消息, 回到步骤 3
-    /// 5. 若无 tool_calls, 保存历史并返回最终内容
+    /// 2. 记忆策略 before_chat: recall 相关记忆, 注入 system prompt
+    /// 3. 构建消息 (system + history + user)
+    /// 4. 调用 LLM (流式 -- 每个 ContentDelta/ReasoningDelta 调用 on_delta 回调)
+    /// 5. 若响应包含 tool_calls, 执行工具, 将结果追加到消息, 回到步骤 4
+    /// 6. 若无 tool_calls, 保存历史并返回最终内容
+    /// 7. 记忆策略 after_chat: 存储本轮重要事实
     pub async fn chat_with_stream(
         &self,
         user_message: &str,
@@ -157,6 +162,10 @@ impl Agent {
     ) -> Result<String> {
         // 记录会话开始
         shadow_log::record!(INFO, Action::Start, "agent chat 开始");
+
+        // 提前获取 session_id (供 memory_strategy 与 session_store 共用)
+        // 注: 首轮对话时为 None, after_chat 后由 session_store 触发生成 (见后文)
+        let session_id = self.current_session_id.lock().clone();
 
         // 上下文窗口管理: 截断过长的历史, 保留最近 max_history 条
         // 注: 锁必须在 block 内释放, 避免进入 async 状态机导致 future !Send
@@ -181,10 +190,35 @@ impl Agent {
             );
         }
 
-        // 构建初始消息 -- system prompt (从 config 读取, 未设则用默认)
+        // 记忆策略 before_chat: recall 相关记忆, 拼接到 system prompt
+        let memory_context = if let Some(strategy) = &self.memory_strategy {
+            let entries = strategy
+                .before_chat(user_message, session_id.as_deref())
+                .await;
+            if entries.is_empty() {
+                String::new()
+            } else {
+                let ctx = format_entries(&entries);
+                shadow_log::record!(
+                    INFO,
+                    Action::Note,
+                    format!("注入 {} 条记忆到 system prompt", entries.len())
+                );
+                ctx
+            }
+        } else {
+            String::new()
+        };
+
+        // 构建初始消息 -- system prompt (基础 prompt + 可选记忆上下文)
+        let system_content = if memory_context.is_empty() {
+            self.system_prompt().to_string()
+        } else {
+            format!("{}\n\n{memory_context}", self.system_prompt())
+        };
         let mut messages = vec![ChatMessage {
             role: "system".to_string(),
-            content: self.system_prompt().to_string(),
+            content: system_content,
             tool_call_id: None,
             ..Default::default()
         }];
@@ -434,6 +468,23 @@ impl Agent {
             }
         }
 
+        // 记忆策略 after_chat: 提取并存储本轮重要事实
+        // 重新读取 session_id (首轮对话 session_store 会刚生成新 id,
+        // 让 after_chat 用与下一轮 before_chat 一致的 session 作用域)
+        if let Some(strategy) = &self.memory_strategy {
+            let sid = self.current_session_id.lock().clone();
+            if let Err(e) = strategy
+                .after_chat(user_message, &final_content, sid.as_deref())
+                .await
+            {
+                shadow_log::record!(
+                    WARN,
+                    Action::Fail,
+                    format!("after_chat 记忆存储失败: {e}")
+                );
+            }
+        }
+
         shadow_log::record!(INFO, Action::Complete, "agent chat 完成");
 
         Ok(final_content)
@@ -610,6 +661,7 @@ pub struct AgentBuilder {
     config: Option<AgentConfig>,
     tool_event_callback: Option<Arc<dyn ToolEventCallback>>,
     session_store: Option<Arc<dyn SessionStore>>,
+    memory_strategy: Option<Arc<dyn MemoryStrategy>>,
 }
 
 impl AgentBuilder {
@@ -664,6 +716,14 @@ impl AgentBuilder {
         self
     }
 
+    /// 设置记忆策略 (用于对话前 recall + 对话后 store)
+    ///
+    /// 不设置则不启用记忆上下文注入和自动存储.
+    pub fn memory_strategy(mut self, strategy: Arc<dyn MemoryStrategy>) -> Self {
+        self.memory_strategy = Some(strategy);
+        self
+    }
+
     /// 构建 Agent
     pub fn build(self) -> Result<Agent> {
         let config = self.config.unwrap_or_default();
@@ -680,6 +740,7 @@ impl AgentBuilder {
         let tools = self.tools.unwrap_or_default();
         let tool_event_callback = self.tool_event_callback;
         let session_store = self.session_store;
+        let memory_strategy = self.memory_strategy;
 
         Ok(Agent {
             alias,
@@ -691,6 +752,7 @@ impl AgentBuilder {
             history: Mutex::new(Vec::new()),
             tool_event_callback,
             session_store,
+            memory_strategy,
             current_session_id: Mutex::new(None),
         })
     }
