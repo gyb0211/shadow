@@ -109,6 +109,7 @@ fn build_agent(
         max_iterations: config.agent.max_iterations,
         max_history: config.agent.max_history,
         system_prompt: config.agent.system_prompt.clone(),
+        context_token_budget: shadow_runtime::agent::DEFAULT_CONTEXT_TOKEN_BUDGET,
     };
 
     let tools = shadow_runtime::tools::default_tools(Some(Arc::clone(&memory)));

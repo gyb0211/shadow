@@ -3,6 +3,12 @@
 //! 借鉴 ZeroClaw 的 Agent 设计, 但大幅精简:
 //! - ZeroClaw: 30+ 字段, 7874 行
 //! - Shadow: ~10 字段, 目标 ~300 行
+//!
+//! P0 增强: 循环检测 + Token 预算 + 上下文溢出恢复
+
+mod loop_detector;
+
+pub use loop_detector::{LoopDetectionResult, LoopDetector};
 
 use shadow_core::{
     Attributable, AutonomyLevel, ChatChunk, ChatMessage, ChatRequest, ChatResponse, Memory,
@@ -27,6 +33,9 @@ const DEFAULT_MAX_HISTORY: usize = 50;
 
 /// 默认 system prompt
 const DEFAULT_SYSTEM_PROMPT: &str = "你是一个有用的 AI 助手. 你可以使用工具来完成任务.";
+
+/// 默认上下文 token 预算 (0 = 不限制)
+pub const DEFAULT_CONTEXT_TOKEN_BUDGET: usize = 100_000;
 
 /// 工具事件回调 trait -- CLI 通过此回调接收工具执行事件通知
 ///
@@ -70,6 +79,8 @@ pub struct AgentConfig {
     pub max_history: usize,
     /// 自定义 system prompt (None 则使用默认)
     pub system_prompt: Option<String>,
+    /// 上下文 token 预算 (0 = 不限制, 默认 100000)
+    pub context_token_budget: usize,
 }
 
 impl Default for AgentConfig {
@@ -84,6 +95,7 @@ impl Default for AgentConfig {
             max_iterations: DEFAULT_MAX_ITERATIONS,
             max_history: DEFAULT_MAX_HISTORY,
             system_prompt: None,
+            context_token_budget: DEFAULT_CONTEXT_TOKEN_BUDGET,
         }
     }
 }
@@ -243,6 +255,9 @@ impl Agent {
         let mut final_reasoning: Option<String> = None;
         let mut iteration = 0;
 
+        // P0: 循环检测器
+        let mut loop_detector = LoopDetector::new();
+
         loop {
             iteration += 1;
             if iteration > self.config.max_iterations {
@@ -253,6 +268,19 @@ impl Agent {
                 );
                 final_content = "工具调用次数超过上限, 终止对话.".to_string();
                 break;
+            }
+
+            // P0: 第一轮预裁剪历史 (若超过 token 预算)
+            if iteration == 1 && self.config.context_token_budget > 0 {
+                let tokens = estimate_tokens(&messages);
+                if tokens > self.config.context_token_budget {
+                    trim_history(&mut messages, self.config.context_token_budget);
+                    shadow_log::record!(
+                        INFO,
+                        Action::Note,
+                        "历史超过 token 预算, 已预裁剪"
+                    );
+                }
             }
 
             // 记录 LLM 请求
@@ -270,9 +298,23 @@ impl Agent {
                 tools: self.tools.specs(),
             };
 
-            // 调用 provider (流式)
+            // 调用 provider (流式) -- P0: 上下文溢出恢复
             let start = std::time::Instant::now();
-            let stream = self.provider.chat_stream(request).await?;
+            let stream = match self.provider.chat_stream(request).await {
+                Ok(s) => s,
+                Err(e) => {
+                    // 尝试从上下文溢出中恢复
+                    if try_recover_context_overflow(&mut messages, &e) {
+                        shadow_log::record!(
+                            WARN,
+                            Action::Note,
+                            "上下文溢出, 已裁剪历史, 重试"
+                        );
+                        continue;
+                    }
+                    return Err(e);
+                }
+            };
             let response = consume_stream(stream, on_delta.as_ref()).await?;
             let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -320,6 +362,7 @@ impl Agent {
 
             if any_needs_approval {
                 // 串行执行 (有工具需要审批, 逐个执行)
+                let mut should_break = false;
                 for tool_call in &response.tool_calls {
                     shadow_log::record!(
                         INFO,
@@ -348,12 +391,75 @@ impl Agent {
                         )
                     };
 
+                    // P0: 循环检测 -- 记录本次调用并处理结果
+                    let det_result = loop_detector.record(
+                        &tool_call.name,
+                        &tool_call.arguments,
+                        &tool_content,
+                    );
+                    // (action_tag, message) -- action_tag 用于后续分支判断
+                    let (det_tag, det_msg): (u8, Option<String>) = match det_result {
+                        LoopDetectionResult::Ok => (0, None),
+                        LoopDetectionResult::Warning(msg) => {
+                            shadow_log::record!(WARN, Action::Note, &msg);
+                            (1, Some(msg))
+                        }
+                        LoopDetectionResult::Block(msg) => {
+                            shadow_log::record!(WARN, Action::Note, &msg);
+                            (2, Some(msg))
+                        }
+                        LoopDetectionResult::Break(msg) => {
+                            shadow_log::record!(WARN, Action::Fail, &msg);
+                            final_content = format!("工具循环被终止: {msg}");
+                            should_break = true;
+                            (3, None)
+                        }
+                    };
+
+                    if should_break {
+                        messages.push(ChatMessage {
+                            role: "tool".to_string(),
+                            content: tool_content,
+                            tool_call_id: Some(tool_call.id.clone()),
+                            ..Default::default()
+                        });
+                        break;
+                    }
+
+                    // Block(2) 时替换工具结果内容
+                    let actual_content = if det_tag == 2 {
+                        if let Some(ref m) = det_msg {
+                            format!("调用被循环检测阻止: {m}")
+                        } else {
+                            tool_content
+                        }
+                    } else {
+                        tool_content
+                    };
+
                     messages.push(ChatMessage {
                         role: "tool".to_string(),
-                        content: tool_content,
+                        content: actual_content,
                         tool_call_id: Some(tool_call.id.clone()),
                         ..Default::default()
                     });
+
+                    // Warning(1) 时注入提示消息
+                    if det_tag == 1 {
+                        if let Some(msg) = det_msg {
+                            messages.push(ChatMessage {
+                                role: "system".to_string(),
+                                content: format!(
+                                    "你似乎在重复调用工具, 请尝试不同方法. ({msg})"
+                                ),
+                                tool_call_id: None,
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+                if should_break {
+                    break;
                 }
             } else {
                 // 并行执行 (无审批需求, 使用 join_all 并发执行)
@@ -376,6 +482,7 @@ impl Agent {
                 let results = futures::future::join_all(futures).await;
 
                 // 按顺序处理结果
+                let mut should_break = false;
                 for (tool_call, result, tool_duration_ms) in results {
                     // 记录工具调用事件 (脱敏后)
                     self.record_tool_event(
@@ -394,12 +501,74 @@ impl Agent {
                         )
                     };
 
+                    // P0: 循环检测 -- 记录本次调用并处理结果
+                    let det_result = loop_detector.record(
+                        &tool_call.name,
+                        &tool_call.arguments,
+                        &tool_content,
+                    );
+                    let (det_tag, det_msg): (u8, Option<String>) = match det_result {
+                        LoopDetectionResult::Ok => (0, None),
+                        LoopDetectionResult::Warning(msg) => {
+                            shadow_log::record!(WARN, Action::Note, &msg);
+                            (1, Some(msg))
+                        }
+                        LoopDetectionResult::Block(msg) => {
+                            shadow_log::record!(WARN, Action::Note, &msg);
+                            (2, Some(msg))
+                        }
+                        LoopDetectionResult::Break(msg) => {
+                            shadow_log::record!(WARN, Action::Fail, &msg);
+                            final_content = format!("工具循环被终止: {msg}");
+                            should_break = true;
+                            (3, None)
+                        }
+                    };
+
+                    if should_break {
+                        messages.push(ChatMessage {
+                            role: "tool".to_string(),
+                            content: tool_content,
+                            tool_call_id: Some(tool_call.id.clone()),
+                            ..Default::default()
+                        });
+                        break;
+                    }
+
+                    // Block(2) 时替换工具结果内容
+                    let actual_content = if det_tag == 2 {
+                        if let Some(ref m) = det_msg {
+                            format!("调用被循环检测阻止: {m}")
+                        } else {
+                            tool_content
+                        }
+                    } else {
+                        tool_content
+                    };
+
                     messages.push(ChatMessage {
                         role: "tool".to_string(),
-                        content: tool_content,
+                        content: actual_content,
                         tool_call_id: Some(tool_call.id.clone()),
                         ..Default::default()
                     });
+
+                    // Warning(1) 时注入提示消息
+                    if det_tag == 1 {
+                        if let Some(msg) = det_msg {
+                            messages.push(ChatMessage {
+                                role: "system".to_string(),
+                                content: format!(
+                                    "你似乎在重复调用工具, 请尝试不同方法. ({msg})"
+                                ),
+                                tool_call_id: None,
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+                if should_break {
+                    break;
                 }
             }
 
@@ -707,6 +876,13 @@ impl AgentBuilder {
         self
     }
 
+    /// 设置上下文 token 预算 (0 = 不限制)
+    pub fn context_token_budget(mut self, budget: usize) -> Self {
+        let config = self.config.get_or_insert_with(AgentConfig::default);
+        config.context_token_budget = budget;
+        self
+    }
+
     /// 设置工具事件回调
     pub fn tool_event_callback(mut self, callback: Arc<dyn ToolEventCallback>) -> Self {
         self.tool_event_callback = Some(callback);
@@ -759,6 +935,69 @@ impl AgentBuilder {
             current_session_id: Mutex::new(None),
         })
     }
+}
+
+/// 估算消息列表的 token 数 (~4 chars/token + 每条消息 10 token 开销)
+///
+/// 粗略估算, 不依赖 tokenizer; 用于上下文预算检查.
+fn estimate_tokens(messages: &[ChatMessage]) -> usize {
+    messages
+        .iter()
+        .map(|m| m.content.chars().count() / 4 + 10)
+        .sum()
+}
+
+/// 按整轮裁剪历史 (保留 system 消息, 删最旧的非 system 消息)
+///
+/// 反复删除第一个非 system 消息, 直到 token 估算 <= budget 或消息数 <= 3.
+fn trim_history(messages: &mut Vec<ChatMessage>, budget: usize) {
+    while estimate_tokens(messages) > budget && messages.len() > 3 {
+        // 找到第一个非 system 消息删除
+        let pos = messages.iter().position(|m| m.role != "system");
+        if let Some(pos) = pos {
+            messages.remove(pos);
+        } else {
+            break;
+        }
+    }
+}
+
+/// 尝试从上下文溢出中恢复
+///
+/// 检查错误信息是否包含上下文/token 溢出关键词.
+/// 若是, 裁剪历史到当前的 2/3 并注入裁剪提示, 返回 true.
+/// 否则返回 false (调用方应原样返回错误).
+fn try_recover_context_overflow(messages: &mut Vec<ChatMessage>, error: &anyhow::Error) -> bool {
+    let err_str = error.to_string().to_lowercase();
+    let is_overflow = err_str.contains("context")
+        || err_str.contains("token")
+        || err_str.contains("too long")
+        || err_str.contains("maximum")
+        || err_str.contains("overflow");
+
+    if !is_overflow {
+        return false;
+    }
+
+    let current = estimate_tokens(messages);
+    let target = current * 2 / 3;
+    trim_history(messages, target);
+
+    // 注入裁剪提示 (在所有 system 消息后)
+    let system_count = messages
+        .iter()
+        .take_while(|m| m.role == "system")
+        .count();
+    messages.insert(
+        system_count,
+        ChatMessage {
+            role: "system".to_string(),
+            content: "[部分早期对话历史已裁剪以适应上下文窗口]".to_string(),
+            ..Default::default()
+        },
+    );
+
+    true
 }
 
 /// 截断字符串到最多 n 个字符 (按 char, 非 byte), 超出加 "..."
@@ -841,6 +1080,118 @@ mod credential_tests {
         // 短于 20 字符的 key 不匹配
         let input = "sk-short";
         assert_eq!(scrub_credentials(input), input);
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+
+    fn msg(role: &str, content: &str) -> ChatMessage {
+        ChatMessage {
+            role: role.to_string(),
+            content: content.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn estimate_tokens_basic() {
+        // 空列表 → 0
+        assert_eq!(estimate_tokens(&[]), 0);
+        // 单条 system: "hello" (5 chars / 4 = 1) + 10 = 11
+        let msgs = vec![msg("system", "hello")];
+        assert_eq!(estimate_tokens(&msgs), 11);
+    }
+
+    #[test]
+    fn estimate_tokens_multi() {
+        // 两条消息: "hello"(5/4=1+10=11) + "world!!"(7/4=1+10=11) = 22
+        let msgs = vec![msg("system", "hello"), msg("user", "world!!")];
+        assert_eq!(estimate_tokens(&msgs), 22);
+    }
+
+    #[test]
+    fn trim_history_keeps_system() {
+        // system + user + assistant + user → 裁剪后 system 保留
+        let mut msgs = vec![
+            msg("system", "sys"),
+            msg("user", "hello world this is a long message aaaa"),
+            msg("assistant", "short reply bbbb"),
+            msg("user", "another message cccc"),
+        ];
+        let budget = 15; // 很小, 应删除非 system 消息
+        trim_history(&mut msgs, budget);
+        // system 必须保留
+        assert_eq!(msgs[0].role, "system");
+        // 至少 3 条 (不裁到 < 3)
+        assert!(msgs.len() >= 3);
+    }
+
+    #[test]
+    fn trim_history_no_change_if_under_budget() {
+        let mut msgs = vec![msg("system", "hi"), msg("user", "hi")];
+        let len_before = msgs.len();
+        trim_history(&mut msgs, 100_000);
+        assert_eq!(msgs.len(), len_before);
+    }
+
+    #[test]
+    fn trim_history_stops_at_3() {
+        // 即使超预算, 不会裁到 < 3 条
+        let mut msgs = vec![
+            msg("system", "sys"),
+            msg("user", "x"),
+            msg("assistant", "y"),
+        ];
+        let budget = 1;
+        trim_history(&mut msgs, budget);
+        assert_eq!(msgs.len(), 3);
+    }
+
+    #[test]
+    fn try_recover_context_overflow_triggers() {
+        let mut msgs = vec![
+            msg("system", "sys"),
+            msg("user", &"a".repeat(1000)),
+            msg("assistant", &"b".repeat(1000)),
+            msg("user", &"c".repeat(1000)),
+            msg("assistant", &"d".repeat(1000)),
+        ];
+        let err = anyhow::anyhow!("context length exceeded maximum tokens");
+        let recovered = try_recover_context_overflow(&mut msgs, &err);
+        assert!(recovered);
+        // 应注入裁剪提示
+        assert!(msgs
+            .iter()
+            .any(|m| m.content.contains("部分早期对话历史已裁剪")));
+    }
+
+    #[test]
+    fn try_recover_context_overflow_non_overflow_error() {
+        let mut msgs = vec![msg("system", "sys"), msg("user", "hi")];
+        let err = anyhow::anyhow!("network timeout");
+        let recovered = try_recover_context_overflow(&mut msgs, &err);
+        assert!(!recovered);
+        // 消息不应改变
+        assert_eq!(msgs.len(), 2);
+    }
+
+    #[test]
+    fn try_recover_context_overflow_various_keywords() {
+        let keywords = ["token too long", "context overflow", "maximum length", "overflow error"];
+        for kw in keywords {
+            let mut msgs = vec![
+                msg("system", "sys"),
+                msg("user", &"a".repeat(500)),
+                msg("assistant", &"b".repeat(500)),
+            ];
+            let err = anyhow::anyhow!("{kw}");
+            assert!(
+                try_recover_context_overflow(&mut msgs, &err),
+                "应识别关键词: {kw}"
+            );
+        }
     }
 }
 
