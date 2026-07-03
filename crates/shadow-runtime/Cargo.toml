@@ -21,6 +21,7 @@ cron = "0.15"
 chrono.workspace = true
 uuid.workspace = true
 futures.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

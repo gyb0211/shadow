@@ -100,7 +100,7 @@ fn build_agent(
         system_prompt: config.agent.system_prompt.clone(),
     };
 
-    let tools = shadow_runtime::tools::default_tools();
+    let tools = shadow_runtime::tools::default_tools(Some(Arc::clone(&memory)));
 
     // 创建会话存储 (JSONL 文件持久化)
     let session_store: Arc<dyn shadow_core::SessionStore> = Arc::new(

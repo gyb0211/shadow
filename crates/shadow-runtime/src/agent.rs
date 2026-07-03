@@ -6,7 +6,7 @@
 
 use shadow_core::{
     Attributable, AutonomyLevel, ChatChunk, ChatMessage, ChatRequest, ChatResponse, Memory,
-    Provider, Observer, ObserverEvent, Role, Session, SessionStore, TokenUsage, Tool, ToolCall,
+    Provider, Observer, ObserverEvent, Role, Session, SessionStore, TokenUsage, ToolCall,
     ToolResult,
 };
 use anyhow::Result;
@@ -15,6 +15,8 @@ use futures::StreamExt;
 use parking_lot::Mutex;
 use shadow_log::Action;
 use std::sync::Arc;
+
+use crate::tools::ToolRegistry;
 
 /// 工具调用最大循环次数 -- 默认值, 可被 AgentConfig.max_iterations 覆盖
 const DEFAULT_MAX_ITERATIONS: usize = 10;
@@ -89,7 +91,7 @@ impl Default for AgentConfig {
 pub struct Agent {
     pub alias: String,
     pub provider: Arc<dyn Provider>,
-    pub tools: Vec<Box<dyn Tool>>,
+    pub tools: ToolRegistry,
     pub memory: Arc<dyn Memory>,
     pub observer: Arc<dyn Observer>,
     pub config: AgentConfig,
@@ -231,7 +233,7 @@ impl Agent {
                 model: self.config.model.clone(),
                 temperature: self.config.temperature,
                 max_tokens: None,
-                tools: self.tools.iter().map(|t| t.spec()).collect(),
+                tools: self.tools.specs(),
             };
 
             // 调用 provider (流式)
@@ -273,49 +275,98 @@ impl Agent {
                 reasoning_content: response.reasoning_content.clone(),
             });
 
-            // 执行每个工具调用
-            for tool_call in &response.tool_calls {
+            // 执行工具调用 -- 检查是否有工具需要审批
+            // 如果任何工具 requires_approval, 全部串行执行 (安全第一)
+            let any_needs_approval = response.tool_calls.iter().any(|tc| {
+                self.tools
+                    .find(&tc.name)
+                    .map(|t| t.requires_approval())
+                    .unwrap_or(false)
+            });
+
+            if any_needs_approval {
+                // 串行执行 (有工具需要审批, 逐个执行)
+                for tool_call in &response.tool_calls {
+                    shadow_log::record!(
+                        INFO,
+                        Action::Invoke,
+                        format!("调用工具: {} (id: {})", tool_call.name, tool_call.id)
+                    );
+
+                    let tool_start = std::time::Instant::now();
+                    let result = self.execute_tool_call(tool_call).await;
+                    let tool_duration_ms = tool_start.elapsed().as_millis() as u64;
+
+                    // 记录工具调用事件 (脱敏后)
+                    self.record_tool_event(
+                        &tool_call.name,
+                        &result,
+                        tool_duration_ms,
+                    );
+
+                    // 将工具结果添加到消息 (脱敏后)
+                    let tool_content = if result.success {
+                        scrub_credentials(&result.output)
+                    } else {
+                        format!(
+                            "[工具执行失败] {}",
+                            scrub_credentials(&result.error.unwrap_or_default())
+                        )
+                    };
+
+                    messages.push(ChatMessage {
+                        role: "tool".to_string(),
+                        content: tool_content,
+                        tool_call_id: Some(tool_call.id.clone()),
+                        ..Default::default()
+                    });
+                }
+            } else {
+                // 并行执行 (无审批需求, 使用 join_all 并发执行)
                 shadow_log::record!(
                     INFO,
                     Action::Invoke,
-                    format!("调用工具: {} (id: {})", tool_call.name, tool_call.id)
+                    format!("并行执行 {} 个工具", response.tool_calls.len())
                 );
 
-                let tool_start = std::time::Instant::now();
-                let result = self.execute_tool_call(tool_call).await;
-                let tool_duration_ms = tool_start.elapsed().as_millis() as u64;
+                let tool_calls = &response.tool_calls;
+                let futures: Vec<_> = tool_calls
+                    .iter()
+                    .map(|tc| async move {
+                        let tool_start = std::time::Instant::now();
+                        let result = self.execute_tool_call(tc).await;
+                        let tool_duration_ms = tool_start.elapsed().as_millis() as u64;
+                        (tc, result, tool_duration_ms)
+                    })
+                    .collect();
+                let results = futures::future::join_all(futures).await;
 
-                // 记录工具调用事件
-                self.observer.record_event(&ObserverEvent::ToolCall {
-                    tool: tool_call.name.clone(),
-                    success: result.success,
-                    duration_ms: tool_duration_ms,
-                    output_preview: {
-                        let full = if result.success {
-                            result.output.clone()
-                        } else {
-                            result.error.clone().unwrap_or_default()
-                        };
-                        chars_preview(&full, 200)
-                    },
-                });
+                // 按顺序处理结果
+                for (tool_call, result, tool_duration_ms) in results {
+                    // 记录工具调用事件 (脱敏后)
+                    self.record_tool_event(
+                        &tool_call.name,
+                        &result,
+                        tool_duration_ms,
+                    );
 
-                // 将工具结果添加到消息
-                let tool_content = if result.success {
-                    result.output
-                } else {
-                    format!(
-                        "[工具执行失败] {}",
-                        result.error.unwrap_or_default()
-                    )
-                };
+                    // 将工具结果添加到消息 (脱敏后)
+                    let tool_content = if result.success {
+                        scrub_credentials(&result.output)
+                    } else {
+                        format!(
+                            "[工具执行失败] {}",
+                            scrub_credentials(&result.error.unwrap_or_default())
+                        )
+                    };
 
-                messages.push(ChatMessage {
-                    role: "tool".to_string(),
-                    content: tool_content,
-                    tool_call_id: Some(tool_call.id.clone()),
-                    ..Default::default()
-                });
+                    messages.push(ChatMessage {
+                        role: "tool".to_string(),
+                        content: tool_content,
+                        tool_call_id: Some(tool_call.id.clone()),
+                        ..Default::default()
+                    });
+                }
             }
 
             // 继续循环, 将工具结果发给 LLM
@@ -388,6 +439,25 @@ impl Agent {
         Ok(final_content)
     }
 
+    /// 记录工具调用事件到 observer (脱敏后)
+    fn record_tool_event(&self, tool_name: &str, result: &ToolResult, duration_ms: u64) {
+        let full = if result.success {
+            result.output.clone()
+        } else {
+            result.error.clone().unwrap_or_default()
+        };
+        // 脱敏后截断预览
+        let scrubbed = scrub_credentials(&full);
+        let preview = chars_preview(&scrubbed, 200);
+
+        self.observer.record_event(&ObserverEvent::ToolCall {
+            tool: tool_name.to_string(),
+            success: result.success,
+            duration_ms,
+            output_preview: preview,
+        });
+    }
+
     /// 执行单个工具调用
     ///
     /// 包含以下检查:
@@ -396,8 +466,8 @@ impl Agent {
     /// 3. 工具超时控制 (tool.timeout() 返回的时长)
     /// 4. 工具事件回调通知
     async fn execute_tool_call(&self, tool_call: &ToolCall) -> ToolResult {
-        // 查找匹配的工具
-        let tool = self.tools.iter().find(|t| t.name() == tool_call.name);
+        // 查找匹配的工具 (通过 ToolRegistry)
+        let tool = self.tools.find(&tool_call.name);
 
         match tool {
             Some(t) => {
@@ -534,7 +604,7 @@ impl Agent {
 pub struct AgentBuilder {
     alias: Option<String>,
     provider: Option<Arc<dyn Provider>>,
-    tools: Option<Vec<Box<dyn Tool>>>,
+    tools: Option<ToolRegistry>,
     memory: Option<Arc<dyn Memory>>,
     observer: Option<Arc<dyn Observer>>,
     config: Option<AgentConfig>,
@@ -551,7 +621,7 @@ impl AgentBuilder {
         self.provider = Some(provider);
         self
     }
-    pub fn tools(mut self, tools: Vec<Box<dyn Tool>>) -> Self {
+    pub fn tools(mut self, tools: ToolRegistry) -> Self {
         self.tools = Some(tools);
         self
     }
@@ -633,6 +703,80 @@ fn chars_preview(s: &str, n: usize) -> String {
         out.push_str("...");
     }
     out
+}
+
+/// 凭证脱敏 -- 替换文本中的 API key / Bearer token / token= 等敏感信息
+///
+/// 匹配模式:
+/// - `sk-xxx` (20+ 字符): OpenAI 风格 API key
+/// - `Bearer xxx` (20+ 字符): HTTP Bearer token
+/// - `token=xxx` / `token:xxx` (20+ 字符): query/header token
+///
+/// 替换为对应的 `***` 占位符, 防止敏感信息泄露到日志和 observer 事件中.
+fn scrub_credentials(text: &str) -> String {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    // 正则编译较慢, 使用 OnceLock 缓存
+    static RE_SK: OnceLock<Regex> = OnceLock::new();
+    static RE_BEARER: OnceLock<Regex> = OnceLock::new();
+    static RE_TOKEN: OnceLock<Regex> = OnceLock::new();
+
+    let re_sk = RE_SK.get_or_init(|| {
+        Regex::new(r"sk-[a-zA-Z0-9]{20,}").unwrap()
+    });
+    let re_bearer = RE_BEARER.get_or_init(|| {
+        Regex::new(r"Bearer\s+[a-zA-Z0-9._-]{20,}").unwrap()
+    });
+    let re_token = RE_TOKEN.get_or_init(|| {
+        Regex::new(r"token[=:]\s*[a-zA-Z0-9]{20,}").unwrap()
+    });
+
+    let result = re_sk.replace_all(text, "sk-***");
+    let result = re_bearer.replace_all(&result, "Bearer ***");
+    let result = re_token.replace_all(&result, "token=***");
+
+    result.into_owned()
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+
+    #[test]
+    fn scrub_sk_key() {
+        let input = "my key is sk-abcdefghijklmnopqrstuvwxyz1234567890";
+        let scrubbed = scrub_credentials(input);
+        assert!(scrubbed.contains("sk-***"));
+        assert!(!scrubbed.contains("sk-abcdefgh"));
+    }
+
+    #[test]
+    fn scrub_bearer_token() {
+        let input = "Authorization: Bearer abcdefghijklmnopqrstuvwxyz1234567890";
+        let scrubbed = scrub_credentials(input);
+        assert!(scrubbed.contains("Bearer ***"));
+    }
+
+    #[test]
+    fn scrub_token_equals() {
+        let input = "token=abcdefghijklmnopqrstuvwxyz1234567890";
+        let scrubbed = scrub_credentials(input);
+        assert!(scrubbed.contains("token=***"));
+    }
+
+    #[test]
+    fn scrub_no_match() {
+        let input = "普通文本, 无敏感信息";
+        assert_eq!(scrub_credentials(input), input);
+    }
+
+    #[test]
+    fn scrub_short_key_not_matched() {
+        // 短于 20 字符的 key 不匹配
+        let input = "sk-short";
+        assert_eq!(scrub_credentials(input), input);
+    }
 }
 
 /// 消费流式 ChatChunk 流, 聚合为完整 ChatResponse

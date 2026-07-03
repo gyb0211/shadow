@@ -327,8 +327,8 @@ async fn chat_via_agent(
             }
         });
 
-    // 注册默认工具集
-    let tools = shadow_runtime::tools::default_tools();
+    // 注册默认工具集 (传入 memory, 注册记忆工具)
+    let tools = shadow_runtime::tools::default_tools(Some(std::sync::Arc::clone(&memory)));
 
     // 创建会话存储 (JSONL 文件持久化)
     let session_store: std::sync::Arc<dyn shadow_core::SessionStore> = std::sync::Arc::new(
