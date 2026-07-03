@@ -6,7 +6,7 @@
 
 use shadow_core::{
     Attributable, AutonomyLevel, ChatChunk, ChatMessage, ChatRequest, ChatResponse, Memory,
-    MemoryStrategy, Provider, Observer, ObserverEvent, Role, Session, SessionStore, TokenUsage,
+    MemoryStrategy, Provider, Observer, ObserverEvent, Role, SessionStore, TokenUsage,
     ToolCall, ToolResult,
 };
 use anyhow::Result;
@@ -440,29 +440,32 @@ impl Agent {
                 sid.clone()
             };
             if let Some(id) = session_id {
-                let session = Session {
-                    id,
-                    messages: vec![
-                        ChatMessage {
-                            role: "user".to_string(),
-                            content: user_message.to_string(),
-                            tool_call_id: None,
-                            ..Default::default()
-                        },
-                        ChatMessage {
-                            role: "assistant".to_string(),
-                            content: final_content.clone(),
-                            tool_call_id: None,
-                            reasoning_content: final_reasoning.clone(),
-                            ..Default::default()
-                        },
-                    ],
+                // 使用 append_message API -- 语义清晰: 追加两条新消息到现有会话
+                let user_msg = ChatMessage {
+                    role: "user".to_string(),
+                    content: user_message.to_string(),
+                    tool_call_id: None,
+                    ..Default::default()
                 };
-                if let Err(e) = store.save(&session).await {
+                let assistant_msg = ChatMessage {
+                    role: "assistant".to_string(),
+                    content: final_content.clone(),
+                    tool_call_id: None,
+                    reasoning_content: final_reasoning.clone(),
+                    ..Default::default()
+                };
+                if let Err(e) = store.append_message(&id, &user_msg).await {
                     shadow_log::record!(
                         WARN,
                         Action::Fail,
-                        format!("保存会话失败: {e}")
+                        format!("追加用户消息失败: {e}")
+                    );
+                }
+                if let Err(e) = store.append_message(&id, &assistant_msg).await {
+                    shadow_log::record!(
+                        WARN,
+                        Action::Fail,
+                        format!("追加助手消息失败: {e}")
                     );
                 }
             }
