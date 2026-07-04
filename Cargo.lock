@@ -2345,9 +2345,11 @@ dependencies = [
  "shadow-core",
  "shadow-log",
  "shadow-memory",
+ "shadow-proxy",
  "tempfile",
  "tokio",
  "tracing",
+ "url",
  "uuid",
 ]
 

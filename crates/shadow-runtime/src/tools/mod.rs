@@ -4,31 +4,42 @@
 //! - Shell: 执行 shell 命令
 //! - FileRead: 读取文件内容
 //! - FileWrite: 写入文件内容
+//! - FileEdit: 精确替换文件中的文本片段 (patch 风格)
 //! - MemoryRecall: 检索记忆
 //! - MemoryStore: 存储记忆
 //! - GlobSearch: 按文件名模式搜索文件
 //! - ContentSearch: 在文件内容中搜索文本
 
 pub mod content_search;
+pub mod file_edit;
 pub mod file_read;
 pub mod file_write;
+pub mod git_ops;
 pub mod glob_search;
+pub mod http_request;
 pub mod memory_recall;
 pub mod memory_store;
 pub mod registry;
 pub mod shell;
 pub mod skill_manage;
+pub mod spawn_subagent;
+pub mod web_fetch;
 pub mod wrapper;
 
 pub use content_search::ContentSearchTool;
+pub use file_edit::FileEditTool;
 pub use file_read::FileReadTool;
 pub use file_write::FileWriteTool;
+pub use git_ops::GitOpsTool;
 pub use glob_search::GlobSearchTool;
+pub use http_request::HttpRequestTool;
 pub use memory_recall::MemoryRecallTool;
 pub use memory_store::MemoryStoreTool;
 pub use registry::ToolRegistry;
 pub use shell::ShellTool;
 pub use skill_manage::{SkillListTool, SkillViewTool, SkillManageTool};
+pub use spawn_subagent::SpawnSubagentTool;
+pub use web_fetch::WebFetchTool;
 pub use wrapper::{PathGuardedTool, RateLimitedTool, ToolWrapper};
 
 use shadow_core::Memory;
@@ -67,12 +78,30 @@ pub fn default_tools_with_workspace(
     // FileWrite 工具 -- 路径安全 (防止写入工作目录外文件)
     registry.register(Box::new(PathGuardedTool::new(
         Box::new(FileWriteTool),
-        workspace,
+        workspace.clone(),
+    )));
+
+    // FileEdit 工具 -- 路径安全 (防止编辑工作目录外文件)
+    registry.register(Box::new(PathGuardedTool::new(
+        Box::new(FileEditTool),
+        workspace.clone(),
     )));
 
     // 文件搜索工具
     registry.register(Box::new(GlobSearchTool));
     registry.register(Box::new(ContentSearchTool));
+
+    // HTTP 请求工具 (内置 SSRF 防护)
+    registry.register(Box::new(HttpRequestTool::new()));
+
+    // Web 抓取工具
+    registry.register(Box::new(WebFetchTool::new()));
+
+    // Git 操作工具 (白名单)
+    registry.register(Box::new(GitOpsTool::new()));
+
+    // 子代理委派工具 (无 router 模式, 仅支持 list_agents)
+    registry.register(Box::new(SpawnSubagentTool::new()));
 
     // 记忆工具 -- 仅在 memory 后端可用时注册
     if let Some(mem) = memory {

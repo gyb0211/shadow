@@ -24,6 +24,11 @@ uuid.workspace = true
 futures.workspace = true
 regex.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+url.workspace = true
+shadow-proxy = { workspace = true, optional = true }
+
+[features]
+proxy = ["dep:shadow-proxy"]
 
 [dev-dependencies]
 tempfile.workspace = true
