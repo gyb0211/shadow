@@ -178,6 +178,8 @@ async fn catalog_card(State(core): State<ProxyCore>) -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use serde_json::Value;
     use crate::{AgentRegistry, TaskRouter, AgentCard};
 
     #[tokio::test]

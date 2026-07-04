@@ -236,6 +236,7 @@ fn task_to_result(task: &crate::task::Task) -> ToolResult {
 mod tests {
     use super::*;
     use crate::local::LocalAgent;
+    use crate::AgentCard;
     use crate::AgentRegistry;
     use crate::transport::AgentTransport;
     use shadow_core::{Attributable, ChatResponse, ChatRequest, Provider, Role, TokenUsage};

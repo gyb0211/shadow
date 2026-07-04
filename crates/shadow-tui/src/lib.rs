@@ -110,6 +110,8 @@ fn build_agent(
         max_history: config.agent.max_history,
         system_prompt: config.agent.system_prompt.clone(),
         context_token_budget: shadow_runtime::agent::DEFAULT_CONTEXT_TOKEN_BUDGET,
+        skill_review_enabled: false,
+        skill_review_nudge_threshold: 5,
     };
 
     let tools = shadow_runtime::tools::default_tools(Some(Arc::clone(&memory)));

@@ -81,6 +81,10 @@ pub struct AgentConfig {
     pub system_prompt: Option<String>,
     /// 上下文 token 预算 (0 = 不限制, 默认 100000)
     pub context_token_budget: usize,
+    /// 是否启用对话后技能审查 (默认 false)
+    pub skill_review_enabled: bool,
+    /// 技能审查触发阈值 -- 工具调用次数达到此值才触发 (默认 5)
+    pub skill_review_nudge_threshold: usize,
 }
 
 impl Default for AgentConfig {
@@ -96,6 +100,8 @@ impl Default for AgentConfig {
             max_history: DEFAULT_MAX_HISTORY,
             system_prompt: None,
             context_token_budget: DEFAULT_CONTEXT_TOKEN_BUDGET,
+            skill_review_enabled: false,
+            skill_review_nudge_threshold: 5,
         }
     }
 }
@@ -115,6 +121,8 @@ pub struct Agent {
     pub session_store: Option<Arc<dyn SessionStore>>,
     /// 记忆策略 (可选) -- 对话前 recall + 对话后 store
     pub memory_strategy: Option<Arc<dyn MemoryStrategy>>,
+    /// 技能改进器 (可选) -- 对话后异步触发技能审查
+    pub skill_improver: Option<Arc<tokio::sync::Mutex<crate::skills::SkillImprover>>>,
     /// 当前会话 ID (内存中维护, 通过 list() 修改时间动态确定)
     current_session_id: Mutex<Option<String>>,
 }
@@ -659,6 +667,33 @@ impl Agent {
 
         shadow_log::record!(INFO, Action::Complete, "agent chat 完成");
 
+        // 技能审查: 对话后异步触发, 不阻塞用户
+        if self.config.skill_review_enabled {
+            let history_snapshot: Vec<ChatMessage> = self.history.lock().clone();
+            let workspace = self.config.workspace_dir.clone();
+            let threshold = self.config.skill_review_nudge_threshold;
+            let model = self.config.model.clone();
+            let provider = Arc::clone(&self.provider);
+            // 异步触发, 不阻塞用户返回
+            tokio::spawn(async move {
+                if let Err(e) = crate::skills::maybe_run_skill_review(
+                    workspace,
+                    &history_snapshot,
+                    threshold,
+                    provider.as_ref(),
+                    &model,
+                )
+                .await
+                {
+                    shadow_log::record!(
+                        WARN,
+                        Action::Fail,
+                        format!("技能审查异步任务失败: {e}")
+                    );
+                }
+            });
+        }
+
         Ok(final_content)
     }
 
@@ -834,6 +869,7 @@ pub struct AgentBuilder {
     tool_event_callback: Option<Arc<dyn ToolEventCallback>>,
     session_store: Option<Arc<dyn SessionStore>>,
     memory_strategy: Option<Arc<dyn MemoryStrategy>>,
+    skill_improver: Option<Arc<tokio::sync::Mutex<crate::skills::SkillImprover>>>,
 }
 
 impl AgentBuilder {
@@ -903,6 +939,20 @@ impl AgentBuilder {
         self
     }
 
+    /// 设置技能改进器 (用于对话后异步技能审查)
+    pub fn skill_improver(mut self, improver: Arc<tokio::sync::Mutex<crate::skills::SkillImprover>>) -> Self {
+        self.skill_improver = Some(improver);
+        self
+    }
+
+    /// 启用对话后技能审查
+    pub fn enable_skill_review(mut self, nudge_threshold: usize) -> Self {
+        let config = self.config.get_or_insert_with(AgentConfig::default);
+        config.skill_review_enabled = true;
+        config.skill_review_nudge_threshold = nudge_threshold;
+        self
+    }
+
     /// 构建 Agent
     pub fn build(self) -> Result<Agent> {
         let config = self.config.unwrap_or_default();
@@ -920,6 +970,7 @@ impl AgentBuilder {
         let tool_event_callback = self.tool_event_callback;
         let session_store = self.session_store;
         let memory_strategy = self.memory_strategy;
+        let skill_improver = self.skill_improver;
 
         Ok(Agent {
             alias,
@@ -932,6 +983,7 @@ impl AgentBuilder {
             tool_event_callback,
             session_store,
             memory_strategy,
+            skill_improver,
             current_session_id: Mutex::new(None),
         })
     }

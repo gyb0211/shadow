@@ -34,9 +34,13 @@
 //! 这是技能的说明文档, 会作为附加提示使用...
 //! ```
 
+pub mod improver;
+pub mod review;
 pub mod skill_http;
 pub mod skill_tool;
 
+pub use improver::SkillImprover;
+pub use review::maybe_run_skill_review;
 pub use skill_http::SkillHttpTool;
 pub use skill_tool::SkillShellTool;
 

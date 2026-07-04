@@ -17,6 +17,7 @@ pub mod memory_recall;
 pub mod memory_store;
 pub mod registry;
 pub mod shell;
+pub mod skill_manage;
 pub mod wrapper;
 
 pub use content_search::ContentSearchTool;
@@ -27,6 +28,7 @@ pub use memory_recall::MemoryRecallTool;
 pub use memory_store::MemoryStoreTool;
 pub use registry::ToolRegistry;
 pub use shell::ShellTool;
+pub use skill_manage::{SkillListTool, SkillViewTool, SkillManageTool};
 pub use wrapper::{PathGuardedTool, RateLimitedTool, ToolWrapper};
 
 use shadow_core::Memory;
