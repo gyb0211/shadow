@@ -56,7 +56,7 @@ impl MarkdownMemory {
                         let v = v.trim();
                         match k.trim() {
                             "id" => id = v.to_string(),
-                            "category" => category = MemoryCategory::from_str(v),
+                            "category" => category = MemoryCategory::from_name(v),
                             "timestamp" => timestamp = v.to_string(),
                             "session_id" if !v.is_empty() => {
                                 session_id = Some(v.to_string());
@@ -191,11 +191,10 @@ impl Memory for MarkdownMemory {
             let mem_entry = Self::parse_file(&content, &key);
 
             // 按 category 过滤
-            if let Some(cat) = category {
-                if &mem_entry.category != cat {
+            if let Some(cat) = category
+                && &mem_entry.category != cat {
                     continue;
                 }
-            }
 
             entries.push(mem_entry);
         }

@@ -1,9 +1,9 @@
 //! 向量操作 -- 余弦相似度, 序列化, 混合检索融合
 //!
 //! 提供:
-//! - [`cosine_similarity`]: 计算两个向量的余弦相似度 (0.0–1.0)
-//! - [`vec_to_bytes`] / [`bytes_to_vec`]: f32 向量与字节序列互转 (用于 SQLite BLOB 存储)
-//! - [`hybrid_merge`]: 加权融合向量检索与关键词检索结果
+//! - [`cosine_similarity`] — 计算两个向量的余弦相似度 (0.0–1.0)
+//! - [`vec_to_bytes`] / [`bytes_to_vec`] — f32 向量与字节序列互转 (用于 SQLite BLOB 存储)
+//! - [`hybrid_merge`] — 加权融合向量检索与关键词检索结果
 
 /// 计算两个向量的余弦相似度, 返回 0.0–1.0
 ///

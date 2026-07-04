@@ -81,7 +81,7 @@ impl RetryPolicy {
                 .map(|d| d.subsec_nanos() as u64)
                 .unwrap_or(0)
                 .wrapping_add(capped_ms.wrapping_mul(0x9E3779B97F4A7C15));
-            (seed % (jitter_range + 1)) as u64
+            seed % (jitter_range + 1)
         };
         let actual_ms = capped_ms + (capped_ms * jitter_factor / 100);
         Duration::from_millis(actual_ms.min(self.max_backoff_ms))

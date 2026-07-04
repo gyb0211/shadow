@@ -100,9 +100,9 @@ impl<'a> Widget for MessageList<'a> {
 
             // show_thinking=true 时先渲染思考内容 (dim 样式, 带 "(thinking) " 前缀)
             // content 字段只含回答 (think 标签已在 provider 层分离), 不需要 strip
-            if self.show_thinking {
-                if let Some(rc) = &msg.reasoning_content {
-                    if !rc.is_empty() {
+            if self.show_thinking
+                && let Some(rc) = &msg.reasoning_content
+                    && !rc.is_empty() {
                         let mut rc_lines = rc.lines();
                         match rc_lines.next() {
                             Some(first) => {
@@ -125,8 +125,6 @@ impl<'a> Widget for MessageList<'a> {
                             lines.push(Line::from(""));
                         }
                     }
-                }
-            }
 
             // 渲染回答内容
             let mut content_lines = msg.content.lines();
@@ -194,13 +192,12 @@ impl<'a> Widget for MessageList<'a> {
             };
             for i in 0..bar_height {
                 let y = area.top() + bar_top + i;
-                if y < area.bottom() {
-                    if let Some(cell) = buf.cell_mut((area.right() - 1, y)) {
+                if y < area.bottom()
+                    && let Some(cell) = buf.cell_mut((area.right() - 1, y)) {
                         cell.set_char('┃');
                         cell.set_fg(theme::dim());
                         cell.set_bg(theme::bg());
                     }
-                }
             }
         }
     }

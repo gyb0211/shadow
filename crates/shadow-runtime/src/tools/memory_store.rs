@@ -82,7 +82,7 @@ impl Tool for MemoryStoreTool {
             .and_then(|v| v.as_str())
             .unwrap_or("core");
 
-        let category = MemoryCategory::from_str(category_str);
+        let category = MemoryCategory::from_name(category_str);
 
         match self.memory.store(key, content, category, None).await {
             Ok(()) => Ok(ToolResult::ok(format!(

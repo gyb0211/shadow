@@ -4,7 +4,7 @@
 //! - [`EmbeddingProvider`] trait: 文本转向量的统一接口
 //! - [`NoopEmbedding`]: 空实现, 用于无 embedding 场景 (退化为纯 FTS5)
 //! - [`OpenAiEmbedding`]: 调用 OpenAI 兼容 /v1/embeddings API
-//! - [`create_embedding_provider`]: 工厂函数
+//! - [`create_embedding_provider`] — 工厂函数
 
 use anyhow::Context;
 use anyhow::Result;

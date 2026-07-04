@@ -66,7 +66,7 @@ impl SystemPromptBuilder {
         let mut sorted: Vec<&dyn PromptSection> =
             self.sections.iter().map(|s| s.as_ref()).collect();
         // priority 降序: 数值大的排前面
-        sorted.sort_by(|a, b| b.priority().cmp(&a.priority()));
+        sorted.sort_by_key(|s| std::cmp::Reverse(s.priority()));
         sorted
             .iter()
             .map(|s| s.render(ctx))

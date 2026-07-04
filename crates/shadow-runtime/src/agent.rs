@@ -453,8 +453,8 @@ impl Agent {
                     });
 
                     // Warning(1) 时注入提示消息
-                    if det_tag == 1 {
-                        if let Some(msg) = det_msg {
+                    if det_tag == 1
+                        && let Some(msg) = det_msg {
                             messages.push(ChatMessage {
                                 role: "system".to_string(),
                                 content: format!(
@@ -464,7 +464,6 @@ impl Agent {
                                 ..Default::default()
                             });
                         }
-                    }
                 }
                 if should_break {
                     break;
@@ -562,8 +561,8 @@ impl Agent {
                     });
 
                     // Warning(1) 时注入提示消息
-                    if det_tag == 1 {
-                        if let Some(msg) = det_msg {
+                    if det_tag == 1
+                        && let Some(msg) = det_msg {
                             messages.push(ChatMessage {
                                 role: "system".to_string(),
                                 content: format!(
@@ -573,7 +572,6 @@ impl Agent {
                                 ..Default::default()
                             });
                         }
-                    }
                 }
                 if should_break {
                     break;
@@ -814,15 +812,14 @@ impl Agent {
         // 同时清除 session store 中的当前会话
         if let Some(store) = &self.session_store {
             let sid = self.current_session_id.lock().take();
-            if let Some(id) = sid {
-                if let Err(e) = store.delete(&id).await {
+            if let Some(id) = sid
+                && let Err(e) = store.delete(&id).await {
                     shadow_log::record!(
                         WARN,
                         Action::Fail,
                         format!("删除会话失败: {e}")
                     );
                 }
-            }
         }
     }
 

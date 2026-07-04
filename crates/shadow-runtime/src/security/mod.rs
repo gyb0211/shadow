@@ -163,11 +163,10 @@ impl SecurityPolicy {
         for pattern in &self.blocked_patterns {
             // 含 ".*" 的模式按正则匹配
             if pattern.contains(".*") {
-                if let Ok(re) = regex::Regex::new(pattern) {
-                    if re.is_match(command) {
+                if let Ok(re) = regex::Regex::new(pattern)
+                    && re.is_match(command) {
                         return Some(pattern.clone());
                     }
-                }
                 // 正则编译失败则跳过该规则 (不应发生, 模式是预定义的)
                 continue;
             }

@@ -52,17 +52,15 @@ impl<S: Subscriber> Layer<S> for LogCaptureLayer {
         }
 
         // 解析归因字段 (shadow_attrs JSON 字符串)
-        if let Some(ref attrs_json) = visitor.attrs {
-            if let Ok(attrs) = serde_json::from_str::<serde_json::Value>(attrs_json) {
-                if let Some(obj) = attrs.as_object() {
+        if let Some(ref attrs_json) = visitor.attrs
+            && let Ok(attrs) = serde_json::from_str::<serde_json::Value>(attrs_json)
+                && let Some(obj) = attrs.as_object() {
                     for (key, val) in obj {
                         if let Some(s) = val.as_str() {
                             log_event = log_event.with_attr(key, s);
                         }
                     }
                 }
-            }
-        }
 
         record_event(log_event);
     }

@@ -693,8 +693,8 @@ fn process_sse_data(
     };
 
     // 文本增量 -- 可能含 <think 标签, 需要拆分为 ContentDelta 和 ReasoningDelta
-    if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
-        if !text.is_empty() {
+    if let Some(text) = delta.get("content").and_then(|v| v.as_str())
+        && !text.is_empty() {
             for chunk in split_think_content(text, in_think_block) {
                 match &chunk {
                     ChatChunk::ContentDelta(c) => content.push_str(c),
@@ -704,15 +704,13 @@ fn process_sse_data(
                 chunks.push(chunk);
             }
         }
-    }
 
     // 推理内容增量 (DeepSeek-R1 等思考模型的独立字段) -- 累积并推送 ReasoningDelta
-    if let Some(rc) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
-        if !rc.is_empty() {
+    if let Some(rc) = delta.get("reasoning_content").and_then(|v| v.as_str())
+        && !rc.is_empty() {
             reasoning_content.push_str(rc);
             chunks.push(ChatChunk::ReasoningDelta(rc.to_string()));
         }
-    }
 
     // 工具调用增量
     if let Some(tool_call_deltas) = delta.get("tool_calls").and_then(|v| v.as_array()) {

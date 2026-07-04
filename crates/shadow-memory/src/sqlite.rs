@@ -23,6 +23,8 @@ use crate::embedding::EmbeddingProvider;
 /// 可选注入 EmbeddingProvider 实现语义搜索 (FTS5 + 向量混合检索)。
 pub struct SqliteMemory {
     conn: Mutex<Connection>,
+    /// 保留 embedding provider 引用 (预留给后续语义搜索功能, 当前仅使用 FTS5)
+    #[allow(dead_code)]
     embedder: Option<Arc<dyn EmbeddingProvider>>,
 }
 
@@ -98,7 +100,7 @@ impl SqliteMemory {
             id: row.get(0)?,
             key: row.get(1)?,
             content: row.get(2)?,
-            category: MemoryCategory::from_str(&category_str),
+            category: MemoryCategory::from_name(&category_str),
             timestamp: row.get(4)?,
             session_id: row.get(5)?,
             score: None,
@@ -187,7 +189,7 @@ impl Memory for SqliteMemory {
                  ORDER BY rank
                  LIMIT ?3")
                 .context("准备检索查询失败")?;
-            stmt.query_map(params![fts, sid, limit as i64], |row| Self::row_to_entry(row))
+            stmt.query_map(params![fts, sid, limit as i64], Self::row_to_entry)
                 .context("执行检索查询失败")?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         } else {
@@ -199,7 +201,7 @@ impl Memory for SqliteMemory {
                  ORDER BY rank
                  LIMIT ?2")
                 .context("准备检索查询失败")?;
-            stmt.query_map(params![fts, limit as i64], |row| Self::row_to_entry(row))
+            stmt.query_map(params![fts, limit as i64], Self::row_to_entry)
                 .context("执行检索查询失败")?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
@@ -232,7 +234,7 @@ impl Memory for SqliteMemory {
                 .prepare("SELECT id, key, content, category, timestamp, session_id, agent_alias
                  FROM memory_entries WHERE category = ?1 ORDER BY timestamp DESC")
                 .context("准备列表查询失败")?;
-            stmt.query_map(params![cat.as_str()], |row| Self::row_to_entry(row))
+            stmt.query_map(params![cat.as_str()], Self::row_to_entry)
                 .context("执行列表查询失败")?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         } else {
@@ -240,7 +242,7 @@ impl Memory for SqliteMemory {
                 .prepare("SELECT id, key, content, category, timestamp, session_id, agent_alias
                  FROM memory_entries ORDER BY timestamp DESC")
                 .context("准备列表查询失败")?;
-            stmt.query_map([], |row| Self::row_to_entry(row))
+            stmt.query_map([], Self::row_to_entry)
                 .context("执行列表查询失败")?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
@@ -289,13 +291,13 @@ impl SqliteMemory {
             let mut stmt = conn
                 .prepare("SELECT id, key, content, category, timestamp, session_id, agent_alias
                  FROM memory_entries WHERE session_id = ?1 ORDER BY timestamp DESC LIMIT ?2")?;
-            stmt.query_map(params![sid, limit as i64], |row| Self::row_to_entry(row))?
+            stmt.query_map(params![sid, limit as i64], Self::row_to_entry)?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         } else {
             let mut stmt = conn
                 .prepare("SELECT id, key, content, category, timestamp, session_id, agent_alias
                  FROM memory_entries ORDER BY timestamp DESC LIMIT ?1")?;
-            stmt.query_map(params![limit as i64], |row| Self::row_to_entry(row))?
+            stmt.query_map(params![limit as i64], Self::row_to_entry)?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
 

@@ -167,7 +167,7 @@ impl Provider for RouterModelProvider {
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let (provider_idx, resolved_model) = self.resolve(&request.model);
-        let mut last_err: Option<anyhow::Error> = None;
+        let mut last_err: Option<anyhow::Error>;
 
         // 先尝试主 provider
         {
@@ -211,7 +211,7 @@ impl Provider for RouterModelProvider {
     ) -> Result<BoxStream<'static, Result<ChatChunk>>> {
         // 流式: 只在 pre-stream 阶段尝试 fallback. Ok(stream) 后不再 fallback.
         let (provider_idx, resolved_model) = self.resolve(&request.model);
-        let mut last_err: Option<anyhow::Error> = None;
+        let mut last_err: Option<anyhow::Error>;
 
         {
             let (_, provider) = &self.model_providers[provider_idx];

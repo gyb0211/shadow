@@ -36,17 +36,14 @@ pub use workspace::Workspace;
 /// 代理自主级别
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum AutonomyLevel {
     /// 完全自主, 无需审批
     Full,
     /// 受监督, 敏感操作需审批
+    #[default]
     Supervised,
     /// 只读, 写操作被拒绝
     ReadOnly,
 }
 
-impl Default for AutonomyLevel {
-    fn default() -> Self {
-        Self::Supervised
-    }
-}

@@ -52,11 +52,10 @@ pub async fn run_loop(
             // poll 短超时, 让线程有机会检查是否应退出
             match event::poll(Duration::from_millis(100)) {
                 Ok(true) => {
-                    if let Ok(ev) = event::read() {
-                        if input_tx.send(ev).is_err() {
+                    if let Ok(ev) = event::read()
+                        && input_tx.send(ev).is_err() {
                             break; // channel 关闭, 退出
                         }
-                    }
                 }
                 Ok(false) => {} // 超时, 继续
                 Err(_) => break,
@@ -330,9 +329,8 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
             Esc => state.close_palette(),
             Enter => { state.execute_palette(); }
             Up => {
-                if let Some(p) = state.palette.as_mut() {
-                    if p.selected > 0 { p.selected -= 1; }
-                }
+                if let Some(p) = state.palette.as_mut()
+                    && p.selected > 0 { p.selected -= 1; }
             }
             Down => {
                 let max = state.palette_items().len().saturating_sub(1);
@@ -389,8 +387,8 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
                 insert_char(&mut state.chat.input, &mut state.chat.cursor, '\n');
                 return Ok(());
             }
-            if !state.chat.agent_busy {
-                if !state.try_slash_input() {
+            if !state.chat.agent_busy
+                && !state.try_slash_input() {
                     let text = state.chat.input.clone();
                     if !text.trim().is_empty() {
                         state.chat.input_history.push(text.clone());
@@ -447,7 +445,6 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
                         }
                     }
                 }
-            }
         }
         Backspace => {
             let chars: Vec<char> = state.chat.input.chars().collect();

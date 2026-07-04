@@ -236,40 +236,34 @@ pub fn load_page(filter: &LogFilter, limit: usize) -> Result<LogPage> {
 /// 检查事件是否匹配过滤条件
 fn matches_filter(event: &LogEvent, filter: &LogFilter) -> bool {
     // action
-    if let Some(ref action) = filter.action {
-        if !event.action.eq_ignore_ascii_case(action) {
+    if let Some(ref action) = filter.action
+        && !event.action.eq_ignore_ascii_case(action) {
             return false;
         }
-    }
     // category
-    if let Some(ref category) = filter.category {
-        if !event.category.eq_ignore_ascii_case(category) {
+    if let Some(ref category) = filter.category
+        && !event.category.eq_ignore_ascii_case(category) {
             return false;
         }
-    }
     // outcome
-    if let Some(ref outcome) = filter.outcome {
-        if event.outcome.as_deref().unwrap_or("unknown") != outcome.as_str() {
+    if let Some(ref outcome) = filter.outcome
+        && event.outcome.as_deref().unwrap_or("unknown") != outcome.as_str() {
             return false;
         }
-    }
     // severity_min
-    if let Some(min) = filter.severity_min {
-        if event.severity_number < min {
+    if let Some(min) = filter.severity_min
+        && event.severity_number < min {
             return false;
         }
-    }
     // 时间范围
-    if let Some(ref since) = filter.since_ts {
-        if event.timestamp.as_str() < since.as_str() {
+    if let Some(ref since) = filter.since_ts
+        && event.timestamp.as_str() < since.as_str() {
             return false;
         }
-    }
-    if let Some(ref until) = filter.until_ts {
-        if event.timestamp.as_str() >= until.as_str() {
+    if let Some(ref until) = filter.until_ts
+        && event.timestamp.as_str() >= until.as_str() {
             return false;
         }
-    }
     // 归因字段
     for (key, value) in &filter.field_eq {
         if event.attribution.get(key).map(|s| s.as_str()) != Some(value.as_str()) {

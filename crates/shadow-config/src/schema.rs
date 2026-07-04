@@ -277,11 +277,10 @@ impl Config {
     fn encrypt_secrets(&mut self, store: &crate::secrets::SecretStore) {
         for entry in self.iter_provider_entries_mut() {
             for key in entry.api_keys.iter_mut() {
-                if let Ok(enc) = store.encrypt(key) {
-                    if !enc.is_empty() {
+                if let Ok(enc) = store.encrypt(key)
+                    && !enc.is_empty() {
                         *key = enc;
                     }
-                }
             }
         }
     }
@@ -290,11 +289,10 @@ impl Config {
     fn decrypt_secrets(&mut self, store: &crate::secrets::SecretStore) {
         for entry in self.iter_provider_entries_mut() {
             for key in entry.api_keys.iter_mut() {
-                if let Ok(dec) = store.decrypt(key) {
-                    if !dec.is_empty() {
+                if let Ok(dec) = store.decrypt(key)
+                    && !dec.is_empty() {
                         *key = dec;
                     }
-                }
             }
         }
     }

@@ -160,9 +160,9 @@ impl LoopDetector {
         }
 
         // 校验整个 tail 区间是否严格交替
-        for i in 0..take {
+        for (i, item) in tail.iter().enumerate().take(take) {
             let expected = if i % 2 == 0 { &name_a } else { &name_b };
-            if tail[i].name != *expected {
+            if item.name != *expected {
                 return None;
             }
         }

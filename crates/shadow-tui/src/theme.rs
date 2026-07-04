@@ -74,12 +74,11 @@ pub fn init() {
 fn detect_dark_terminal() -> bool {
     if let Ok(colorfgbg) = std::env::var("COLORFGBG") {
         // 格式: "0;7" 或 "15;0" -- 第二个数字是背景色
-        if let Some(bg_part) = colorfgbg.split(';').nth(1) {
-            if let Ok(bg) = bg_part.trim().parse::<u8>() {
+        if let Some(bg_part) = colorfgbg.split(';').nth(1)
+            && let Ok(bg) = bg_part.trim().parse::<u8>() {
                 // 0-6 为暗色, 7-15 为亮色
                 return bg < 7;
             }
-        }
     }
     // 默认暗色
     true

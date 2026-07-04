@@ -61,7 +61,7 @@ impl ChatState {
     /// 计算输入框显示行数: 1 行起步, 按换行符数增长, 上限 3
     pub fn input_height(&self) -> u16 {
         let lines = self.input.split('\n').count();
-        lines.min(3).max(1) as u16
+        lines.clamp(1, 3) as u16
     }
 
     /// 向上滚动 (远离底部). 参考 ZeroClaw scroll_up(): pinned_to_bottom = false

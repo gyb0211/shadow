@@ -10,10 +10,10 @@ use std::fmt;
 
 /// 记忆分类枚举
 ///
-/// - [`MemoryCategory::Core`]: 长期事实/偏好
-/// - [`MemoryCategory::Daily`]: 日常会话
-/// - [`MemoryCategory::Conversation`]: 对话上下文
-/// - [`MemoryCategory::Custom`]: 自定义分类
+/// - [`MemoryCategory::Core`] — 长期事实/偏好
+/// - [`MemoryCategory::Daily`] — 日常会话
+/// - [`MemoryCategory::Conversation`] — 对话上下文
+/// - [`MemoryCategory::Custom`] — 自定义分类
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MemoryCategory {
     /// 长期事实/偏好
@@ -46,7 +46,7 @@ impl MemoryCategory {
     /// "core" -> Core, "daily" -> Daily, "conversation" -> Conversation,
     /// 其他 -> Custom(s)
     #[must_use]
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_name(s: &str) -> Self {
         match s {
             "core" => Self::Core,
             "daily" => Self::Daily,
@@ -80,7 +80,7 @@ impl<'de> Deserialize<'de> for MemoryCategory {
         D: serde::Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        Ok(Self::from_str(&s))
+        Ok(Self::from_name(&s))
     }
 }
 
@@ -216,8 +216,8 @@ impl Memory for NoneMemory {
 /// 记忆策略 -- 控制记忆的加载/存储
 ///
 /// 由 Agent runtime 在对话前后调用:
-/// - [`MemoryStrategy::before_chat`]: 检索相关记忆, 返回原始 entries (调用方负责格式化注入)
-/// - [`MemoryStrategy::after_chat`]: 提取并存储本轮重要事实
+/// - [`MemoryStrategy::before_chat`] — 检索相关记忆, 返回原始 entries (调用方负责格式化注入)
+/// - [`MemoryStrategy::after_chat`] — 提取并存储本轮重要事实
 ///
 /// 实现方放在 `shadow-memory` 等 crate (如 `DefaultMemoryStrategy`).
 #[async_trait]
@@ -273,7 +273,7 @@ mod tests {
         assert_eq!(cat, MemoryCategory::Custom("custom-thing".to_string()));
     }
 
-    /// 测试: as_str / Display / from_str 往返
+    /// 测试: as_str / Display / from_name 往返
     #[test]
     fn test_category_roundtrip() {
         for cat in [
@@ -284,7 +284,7 @@ mod tests {
         ] {
             let s = cat.as_str();
             assert_eq!(cat.to_string(), s);
-            assert_eq!(MemoryCategory::from_str(s), cat);
+            assert_eq!(MemoryCategory::from_name(s), cat);
         }
     }
 

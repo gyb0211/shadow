@@ -92,7 +92,7 @@ fn search_content(base: &Path, pattern: &str, max: usize) -> Result<Vec<String>>
 
     fn walk(
         dir: &Path,
-        base: &Path,
+        _base: &Path,
         pattern: &str,
         results: &mut Vec<String>,
         max: usize,
@@ -114,26 +114,23 @@ fn search_content(base: &Path, pattern: &str, max: usize) -> Result<Vec<String>>
 
             if path.is_dir() {
                 // 跳过隐藏目录 (如 .git, .cargo)
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.starts_with('.') {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                    && name.starts_with('.') {
                         continue;
                     }
-                }
-                walk(&path, base, pattern, results, max);
+                walk(&path, _base, pattern, results, max);
             } else if path.is_file() {
                 // 跳过隐藏文件
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.starts_with('.') {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                    && name.starts_with('.') {
                         continue;
                     }
-                }
 
                 // 跳过超大文件 (超过 1MB)
-                if let Ok(meta) = entry.metadata() {
-                    if meta.len() > 1024 * 1024 {
+                if let Ok(meta) = entry.metadata()
+                    && meta.len() > 1024 * 1024 {
                         continue;
                     }
-                }
 
                 search_file(&path, pattern, results, max);
             }

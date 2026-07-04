@@ -319,6 +319,7 @@ async fn chat_direct(
 
 /// 完整版: 通过 Agent (带历史/observer/工具)
 #[cfg(feature = "runtime")]
+#[allow(clippy::too_many_arguments)]
 async fn chat_via_agent(
     workspace_root: &std::path::Path,
     provider: std::sync::Arc<dyn shadow_core::Provider>,
@@ -572,7 +573,7 @@ fn config_command(config: &mut shadow_config::Config, action: ConfigAction) {
             // 例: agent.model, agent.max_iterations, providers.openai.default.api_key
             match config_set(&mut *config, &key, &value) {
                 Ok(changed) => {
-                    if shadow_config::save(&config).is_ok() {
+                    if shadow_config::save(config).is_ok() {
                         println!("✓ 已设置 {key} = {value}");
                         if changed {
                             println!("  (配置已保存到 {})", shadow_config::config_path().display());
