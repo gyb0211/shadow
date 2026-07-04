@@ -71,6 +71,22 @@ enum Commands {
         #[command(subcommand)]
         action: MemoryAction,
     },
+
+    /// 启动 Proxy Server (A2A + ACP broker)
+    #[cfg(feature = "proxy")]
+    Proxy {
+        /// 绑定地址 (HTTP 模式)
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+
+        /// 端口 (HTTP 模式)
+        #[arg(short, long, default_value_t = 9090)]
+        port: u16,
+
+        /// 使用 stdio 模式 (JSON-RPC over stdin/stdout, 给 CLI/IDE 调用)
+        #[arg(long, default_value_t = false)]
+        stdio: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -137,6 +153,11 @@ async fn main() -> Result<()> {
 
         Commands::Memory { action } => {
             memory_command(workspace_root, config, action).await?;
+        }
+
+        #[cfg(feature = "proxy")]
+        Commands::Proxy { bind, port, stdio } => {
+            proxy_command(bind, port, stdio).await?;
         }
     }
 
@@ -323,6 +344,8 @@ async fn chat_via_agent(
         max_history: config.agent.max_history,
         system_prompt: config.agent.system_prompt.clone(),
         context_token_budget: shadow_runtime::agent::DEFAULT_CONTEXT_TOKEN_BUDGET,
+        skill_review_enabled: false,
+        skill_review_nudge_threshold: 5,
     };
 
     // 创建观察者 (日志观察者, 捕获事件到 JSONL)
@@ -678,4 +701,39 @@ fn config_set(config: &mut shadow_config::Config, key: &str, value: &str) -> Res
         }
         _ => Err(format!("无法识别的配置路径: {key}")),
     }
+}
+
+// ── Proxy 命令 ──
+
+#[cfg(feature = "proxy")]
+async fn proxy_command(bind: String, port: u16, stdio: bool) -> Result<()> {
+    use shadow_proxy::{AgentRegistry, TaskRouter, AgentCard, ProxyCore, HttpTransport, StdioTransport};
+
+    let registry = std::sync::Arc::new(AgentRegistry::new());
+    let router = std::sync::Arc::new(TaskRouter::new(std::sync::Arc::clone(&registry)));
+
+    // 注册自身为 "main" agent (本地)
+    registry.register(AgentCard::local("main", vec!["chat".into()]))?;
+
+    let core = ProxyCore::new(router);
+
+    if stdio {
+        // stdio 模式: JSON-RPC over stdin/stdout
+        let transport = StdioTransport::new(core);
+        transport.serve().await?;
+    } else {
+        // HTTP 模式: axum RESTful API
+        let server = HttpTransport::new(core, &bind, port);
+        println!("Shadow Proxy 启动中 (HTTP)...");
+        println!("  监听: http://{bind}:{port}");
+        println!("  Agent 注册: POST http://{bind}:{port}/agents/register");
+        println!("  任务派发: POST http://{bind}:{port}/tasks");
+        println!("  Agent 列表: GET  http://{bind}:{port}/agents");
+        println!("  健康检查: GET  http://{bind}:{port}/health");
+        println!("  发现卡片: GET  http://{bind}:{port}/.well-known/agent-card.json");
+        println!("按 Ctrl+C 退出");
+        server.serve().await?;
+    }
+
+    Ok(())
 }

@@ -74,7 +74,7 @@ mod tests {
         let mut reg = ToolRegistry::new();
         assert!(reg.is_empty());
 
-        reg.register(Box::new(ShellTool));
+        reg.register(Box::new(ShellTool::default()));
         assert_eq!(reg.len(), 1);
 
         let found = reg.find("shell");
@@ -87,7 +87,7 @@ mod tests {
     #[test]
     fn registry_specs() {
         let mut reg = ToolRegistry::new();
-        reg.register(Box::new(ShellTool));
+        reg.register(Box::new(ShellTool::default()));
         let specs = reg.specs();
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].name, "shell");
@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn registry_iter() {
         let mut reg = ToolRegistry::new();
-        reg.register(Box::new(ShellTool));
+        reg.register(Box::new(ShellTool::default()));
         let names: Vec<&str> = reg.iter().map(|t| t.name()).collect();
         assert_eq!(names, vec!["shell"]);
     }

@@ -1,15 +1,13 @@
 [package]
-name = "shadow-runtime"
+name = "shadow-proxy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "影子运行时 -- agent loop"
+description = "影子代理中转 -- A2A + ACP broker + registry"
 
 [dependencies]
 shadow-core.workspace = true
-shadow-memory.workspace = true
 shadow-log.workspace = true
-shadow-config.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 serde.workspace = true
@@ -17,13 +15,13 @@ serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 parking_lot.workspace = true
-rusqlite = { version = "0.37", features = ["bundled"] }
-cron = "0.15"
 chrono.workspace = true
 uuid.workspace = true
 futures.workspace = true
-regex.workspace = true
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+which = "7"
 
 [dev-dependencies]
 tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }
