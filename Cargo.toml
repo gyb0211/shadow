@@ -9,6 +9,7 @@ members = [
     "crates/shadow-providers", # LLM provider 实现
     "crates/shadow-memory",    # 记忆后端实现
     "crates/shadow-tui",       # TUI dashboard
+    "crates/shadow-proxy",     # A2A + ACP broker
 ]
 
 [workspace.package]
@@ -25,6 +26,7 @@ shadow-runtime = { path = "crates/shadow-runtime" }
 shadow-providers = { path = "crates/shadow-providers" }
 shadow-memory = { path = "crates/shadow-memory" }
 shadow-tui = { path = "crates/shadow-tui" }
+shadow-proxy = { path = "crates/shadow-proxy" }
 
 # 核心依赖
 anyhow = "1.0"
@@ -52,6 +54,11 @@ description = "影子 -- ZeroClaw 架构精简复刻: trait 驱动 + 微内核 +
 name = "shadow"
 path = "src/main.rs"
 
+[[bin]]
+name = "shadow-proxy"
+path = "src/proxy_main.rs"
+required-features = ["proxy"]
+
 [dependencies]
 # ── Kernel 层 (始终编译) ──
 shadow-core.workspace = true
@@ -66,6 +73,9 @@ shadow-runtime = { workspace = true, optional = true }
 # ── TUI 层 (可选, 默认开启) ──
 shadow-tui = { workspace = true, optional = true }
 
+# ── Proxy 层 (可选, 默认开启) ──
+shadow-proxy = { workspace = true, optional = true }
+
 # ── 外部依赖 ──
 anyhow.workspace = true
 async-trait.workspace = true
@@ -74,9 +84,11 @@ tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true }
 
 [features]
-default = ["runtime", "tui"]
+default = ["runtime", "tui", "proxy"]
 
 # 完整运行时: Agent loop + AgentBuilder + Observer
 # 关闭此 feature 构建 kernel-only 二进制 (~最小内核)
@@ -84,6 +96,9 @@ runtime = ["dep:shadow-runtime", "tui"]
 
 # TUI dashboard
 tui = ["dep:shadow-tui"]
+
+# Proxy broker (A2A + ACP)
+proxy = ["dep:shadow-proxy"]
 
 [profile.release]
 opt-level = "z"
