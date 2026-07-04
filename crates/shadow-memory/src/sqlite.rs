@@ -12,18 +12,31 @@ use async_trait::async_trait;
 use chrono::Utc;
 use rusqlite::{params, Connection, Row};
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+use crate::embedding::EmbeddingProvider;
 
 /// SQLite 记忆后端
 ///
 /// 使用 SQLite 存储记忆条目, FTS5 提供全文搜索能力。
 /// 采用 WAL 模式提升并发读写性能, trigram 分词支持中英文混合搜索。
+/// 可选注入 EmbeddingProvider 实现语义搜索 (FTS5 + 向量混合检索)。
 pub struct SqliteMemory {
     conn: Mutex<Connection>,
+    embedder: Option<Arc<dyn EmbeddingProvider>>,
 }
 
 impl SqliteMemory {
+    /// 创建不带 embedding 的实例 (纯 FTS5 检索)
     pub fn new(workspace_dir: &Path) -> Result<Self> {
+        Self::with_embedding(workspace_dir, None)
+    }
+
+    /// 创建带 embedding provider 的实例 (混合检索)
+    pub fn with_embedding(
+        workspace_dir: &Path,
+        embedder: Option<Arc<dyn EmbeddingProvider>>,
+    ) -> Result<Self> {
         let _ = std::fs::create_dir_all(workspace_dir);
         let db_path = workspace_dir.join("memory.db");
 
@@ -31,7 +44,7 @@ impl SqliteMemory {
             .with_context(|| format!("无法打开记忆数据库: {}", db_path.display()))?;
 
         Self::init_db(&conn)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self { conn: Mutex::new(conn), embedder })
     }
 
     fn init_db(conn: &Connection) -> Result<()> {
