@@ -721,8 +721,9 @@ impl Agent {
     /// 包含以下检查:
     /// 1. 只读模式拒绝
     /// 2. Supervised 模式审批检查 (requires_approval 的工具跳过执行)
-    /// 3. 工具超时控制 (tool.timeout() 返回的时长)
-    /// 4. 工具事件回调通知
+    /// 3. 参数校验 (P1.6: validate_args 校验 args 符合 parameters_schema)
+    /// 4. 工具超时控制 (tool.timeout() 返回的时长)
+    /// 5. 工具事件回调通知
     async fn execute_tool_call(&self, tool_call: &ToolCall) -> ToolResult {
         // 查找匹配的工具 (通过 ToolRegistry)
         let tool = self.tools.find(&tool_call.name);
@@ -747,6 +748,13 @@ impl Agent {
 
                 // 通知工具开始执行
                 self.notify_tool_event("tool_start", &tool_call.name);
+
+                // P1.6: 参数校验 -- 在 execute 前校验 args 符合 parameters_schema
+                if let Err(msg) = t.validate_args(&tool_call.arguments) {
+                    let detail = format!("{}: {msg}", tool_call.name);
+                    self.notify_tool_event("tool_error", &detail);
+                    return ToolResult::err(format!("参数校验失败: {msg}"));
+                }
 
                 // 获取工具超时配置 -- None 表示不限制
                 let timeout = t.timeout();

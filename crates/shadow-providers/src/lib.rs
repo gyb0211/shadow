@@ -5,6 +5,7 @@
 //! - **Reliable** (中层): 重试/退避/key 轮换/限流
 //! - **Compat** (底层): 把家族差异 (auth, API path, payload) 适配为统一 OpenAI 形态
 
+pub mod anthropic;
 pub mod dispatch;
 pub mod error;
 pub mod openai;
@@ -12,6 +13,7 @@ pub mod rate_limit;
 pub mod reliable;
 pub mod router;
 
+pub use anthropic::AnthropicProvider;
 pub use error::{ChatError, RetryClass};
 pub use openai::OpenAiProvider;
 pub use rate_limit::TokenBucket;
@@ -58,6 +60,8 @@ pub fn create_provider_with_opts(
             OpenAiProvider::new_with_opts(alias, api_key, base_url, opts)
                 .map(|p| Arc::new(p) as Arc<dyn Provider>)
         }
+        "anthropic" => AnthropicProvider::new_with_alias(alias, api_key, base_url, opts)
+            .map(|p| Arc::new(p) as Arc<dyn Provider>),
         _ => anyhow::bail!("未知的 provider family: {alias}"),
     }
 }
@@ -84,18 +88,36 @@ pub fn create_reliable_provider(
     policy: RetryPolicy,
     requests_per_minute: u32,
 ) -> Result<Arc<dyn Provider>> {
-    // 1. 构造 Compat 层 OpenAiProvider
-    let inner_provider: Arc<OpenAiProvider> = Arc::new(OpenAiProvider::new_with_opts(
-        family,
-        api_keys.first().map(String::as_str),
-        base_url,
-        ModelProviderRuntimeOptions::default(),
-    )?);
+    // 1. 构造 Compat 层 provider -- 按 family 选择具体实现
+    //    返回 (dyn Provider, dyn KeyRotator) 双重 Arc, 共享同一底层对象
+    let (inner_provider, rotator): (Arc<dyn Provider>, Arc<dyn KeyRotator>) = match family {
+        "anthropic" => {
+            let p = Arc::new(AnthropicProvider::new_with_alias(
+                alias,
+                api_keys.first().map(String::as_str),
+                base_url,
+                ModelProviderRuntimeOptions::default(),
+            )?);
+            let r = Arc::clone(&p) as Arc<dyn KeyRotator>;
+            (p, r)
+        }
+        // OpenAI 兼容家族 (openai/openrouter/ollama/compatible/其他)
+        _ => {
+            let p = Arc::new(OpenAiProvider::new_with_opts(
+                family,
+                api_keys.first().map(String::as_str),
+                base_url,
+                ModelProviderRuntimeOptions::default(),
+            )?);
+            let r = Arc::clone(&p) as Arc<dyn KeyRotator>;
+            (p, r)
+        }
+    };
 
     // 2. 构造 Reliable 包装层, 注入 key 轮换 / 限流 / fallback
-    let mut reliable = ReliableModelProvider::new(alias, inner_provider.clone(), policy);
+    let mut reliable = ReliableModelProvider::new(alias, inner_provider, policy);
     if !api_keys.is_empty() {
-        reliable = reliable.with_key_rotation(api_keys, inner_provider);
+        reliable = reliable.with_key_rotation(api_keys, rotator);
     }
     if requests_per_minute > 0 {
         reliable = reliable.with_rate_limiter(Arc::new(TokenBucket::new(requests_per_minute)));
