@@ -343,6 +343,94 @@ impl CronScheduler {
         )?;
         Ok(())
     }
+
+    /// 获取单个作业 -- 按 ID 查询
+    ///
+    /// 返回 `Ok(Some(job))` 表示找到, `Ok(None)` 表示 ID 不存在.
+    pub fn get_job(&self, id: i64) -> Result<Option<CronJob>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, schedule, command, enabled, agent_alias, next_run
+             FROM cron_jobs WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], |row| {
+            Ok(CronJob {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                schedule: row.get(2)?,
+                command: row.get(3)?,
+                enabled: row.get::<_, i64>(4)? != 0,
+                agent_alias: row.get(5)?,
+                next_run: row.get(6)?,
+            })
+        })?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 更新作业字段 -- 部分更新 (None 字段保持不变)
+    ///
+    /// # 参数
+    /// - `id`: 作业 ID
+    /// - `schedule`: 新的 cron 表达式 (None 则不更新). 更新后自动重算 next_run.
+    /// - `command`: 新的命令/prompt (None 则不更新)
+    /// - `enabled`: 新的启用状态 (None 则不更新)
+    ///
+    /// # 返回
+    /// `Ok(true)` 表示更新成功, `Ok(false)` 表示作业不存在.
+    pub fn update_job(
+        &self,
+        id: i64,
+        schedule: Option<&str>,
+        command: Option<&str>,
+        enabled: Option<bool>,
+    ) -> Result<bool> {
+        // 先检查作业是否存在
+        if self.get_job(id)?.is_none() {
+            return Ok(false);
+        }
+
+        let conn = self.conn.lock();
+
+        // 动态构建 UPDATE 语句
+        let mut sets: Vec<&str> = Vec::new();
+        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+        if let Some(sch) = schedule {
+            sets.push("schedule = ?");
+            params_vec.push(Box::new(sch.to_string()));
+            // schedule 变化时需要重算 next_run
+            let next = calc_next_run(sch)?;
+            sets.push("next_run = ?");
+            params_vec.push(Box::new(next));
+        }
+        if let Some(cmd) = command {
+            sets.push("command = ?");
+            params_vec.push(Box::new(cmd.to_string()));
+        }
+        if let Some(en) = enabled {
+            sets.push("enabled = ?");
+            params_vec.push(Box::new(en as i64));
+        }
+
+        if sets.is_empty() {
+            // 没有字段需要更新
+            return Ok(true);
+        }
+
+        let set_clause = sets.join(", ");
+        let sql = format!("UPDATE cron_jobs SET {set_clause} WHERE id = ?");
+
+        // 构建参数 (动态字段 + 末尾的 id)
+        let mut param_refs: Vec<&dyn rusqlite::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
+        param_refs.push(&id);
+
+        conn.execute(&sql, rusqlite::params_from_iter(param_refs))?;
+        Ok(true)
+    }
 }
 
 // ───────────────────────── 辅助函数 ─────────────────────────

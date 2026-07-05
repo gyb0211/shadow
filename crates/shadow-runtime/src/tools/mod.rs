@@ -1,22 +1,36 @@
 //! 工具集合 -- agent 可调用的基本工具
 //!
-//! 当前实现:
-//! - Shell: 执行 shell 命令
+//! 当前实现 (21 个工具):
+//! - Shell: 执行 shell 命令 (黑名单+超时)
 //! - FileRead: 读取文件内容
-//! - FileWrite: 写入文件内容
+//! - FileWrite: 写入文件内容 (原子写入)
 //! - FileEdit: 精确替换文件中的文本片段 (patch 风格)
-//! - MemoryRecall: 检索记忆
-//! - MemoryStore: 存储记忆
 //! - GlobSearch: 按文件名模式搜索文件
 //! - ContentSearch: 在文件内容中搜索文本
+//! - HttpRequest: HTTP 请求 (SSRF 防护)
+//! - WebFetch: URL 抓取 (text/markdown/raw)
+//! - WebSearch: Web 搜索 (DuckDuckGo/Google)
+//! - GitOps: Git 操作 (白名单)
+//! - SpawnSubagent: 子代理委派
+//! - CronTool: 定时任务管理
+//! - MemoryRecall: 检索记忆
+//! - MemoryStore: 存储记忆
+//! - MemoryForget: 删除单条记忆
+//! - MemoryPurge: 批量清除记忆
+//! - MemoryExport: 导出记忆
+//! - SkillManage: 技能管理
 
 pub mod content_search;
+pub mod cron_tool;
 pub mod file_edit;
 pub mod file_read;
 pub mod file_write;
 pub mod git_ops;
 pub mod glob_search;
 pub mod http_request;
+pub mod memory_export;
+pub mod memory_forget;
+pub mod memory_purge;
 pub mod memory_recall;
 pub mod memory_store;
 pub mod registry;
@@ -24,15 +38,20 @@ pub mod shell;
 pub mod skill_manage;
 pub mod spawn_subagent;
 pub mod web_fetch;
+pub mod web_search;
 pub mod wrapper;
 
 pub use content_search::ContentSearchTool;
+pub use cron_tool::CronTool;
 pub use file_edit::FileEditTool;
 pub use file_read::FileReadTool;
 pub use file_write::FileWriteTool;
 pub use git_ops::GitOpsTool;
 pub use glob_search::GlobSearchTool;
 pub use http_request::HttpRequestTool;
+pub use memory_export::MemoryExportTool;
+pub use memory_forget::MemoryForgetTool;
+pub use memory_purge::MemoryPurgeTool;
 pub use memory_recall::MemoryRecallTool;
 pub use memory_store::MemoryStoreTool;
 pub use registry::ToolRegistry;
@@ -40,14 +59,16 @@ pub use shell::ShellTool;
 pub use skill_manage::{SkillListTool, SkillViewTool, SkillManageTool};
 pub use spawn_subagent::SpawnSubagentTool;
 pub use web_fetch::WebFetchTool;
+pub use web_search::WebSearchTool;
 pub use wrapper::{PathGuardedTool, RateLimitedTool, ToolWrapper};
 
 use shadow_core::Memory;
 use std::sync::Arc;
 use crate::security::SecurityPolicy;
+
 /// 创建默认工具集 -- 返回所有内置工具, 用装饰器包装敏感工具
 ///
-/// - `memory`: 可选的 Memory 后端, Some 时注册 memory_recall / memory_store 工具
+/// - `memory`: 可选的 Memory 后端, Some 时注册 memory 工具
 pub fn default_tools(memory: Option<Arc<dyn Memory>>) -> ToolRegistry {
     let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     default_tools_with_workspace(memory, workspace)
@@ -63,50 +84,42 @@ pub fn default_tools_with_workspace(
     // 安全策略: 黑名单 + 环境变量过滤 + 工作目录限制
     let security = SecurityPolicy::new().with_workspace(workspace.clone());
 
-    // Shell 工具 -- 安全策略 + 速率限制 (每秒 10 次) + 路径安全
+    // Shell 工具 -- 安全策略 + 速率限制 (每秒 10 次)
     registry.register(Box::new(RateLimitedTool::new(
         Box::new(ShellTool::new(security)),
         10,
     )));
 
-    // FileRead 工具 -- 路径安全 (防止读取工作目录外文件)
-    registry.register(Box::new(PathGuardedTool::new(
-        Box::new(FileReadTool),
-        workspace.clone(),
-    )));
+    // 文件工具 -- 路径安全
+    registry.register(Box::new(PathGuardedTool::new(Box::new(FileReadTool), workspace.clone())));
+    registry.register(Box::new(PathGuardedTool::new(Box::new(FileWriteTool), workspace.clone())));
+    registry.register(Box::new(PathGuardedTool::new(Box::new(FileEditTool), workspace.clone())));
 
-    // FileWrite 工具 -- 路径安全 (防止写入工作目录外文件)
-    registry.register(Box::new(PathGuardedTool::new(
-        Box::new(FileWriteTool),
-        workspace.clone(),
-    )));
-
-    // FileEdit 工具 -- 路径安全 (防止编辑工作目录外文件)
-    registry.register(Box::new(PathGuardedTool::new(
-        Box::new(FileEditTool),
-        workspace.clone(),
-    )));
-
-    // 文件搜索工具
+    // 文件搜索
     registry.register(Box::new(GlobSearchTool));
     registry.register(Box::new(ContentSearchTool));
 
-    // HTTP 请求工具 (内置 SSRF 防护)
+    // HTTP / Web 工具
     registry.register(Box::new(HttpRequestTool::new()));
-
-    // Web 抓取工具
     registry.register(Box::new(WebFetchTool::new()));
+    registry.register(Box::new(WebSearchTool::new()));
 
-    // Git 操作工具 (白名单)
+    // Git 操作
     registry.register(Box::new(GitOpsTool::new()));
 
-    // 子代理委派工具 (无 router 模式, 仅支持 list_agents)
+    // 子代理委派
     registry.register(Box::new(SpawnSubagentTool::new()));
+
+    // Cron 管理
+    registry.register(Box::new(CronTool::new()));
 
     // 记忆工具 -- 仅在 memory 后端可用时注册
     if let Some(mem) = memory {
         registry.register(Box::new(MemoryRecallTool::new(Arc::clone(&mem))));
-        registry.register(Box::new(MemoryStoreTool::new(mem)));
+        registry.register(Box::new(MemoryStoreTool::new(Arc::clone(&mem))));
+        registry.register(Box::new(MemoryForgetTool::new(Arc::clone(&mem))));
+        registry.register(Box::new(MemoryPurgeTool::new(Arc::clone(&mem))));
+        registry.register(Box::new(MemoryExportTool::new(mem)));
     }
 
     registry

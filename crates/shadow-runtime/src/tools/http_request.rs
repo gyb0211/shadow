@@ -26,7 +26,7 @@ impl HttpRequestTool {
     }
 
     /// SSRF 防护 -- 检查 URL 是否安全
-    fn is_url_safe(url: &str) -> Result<()> {
+    pub(crate) fn is_url_safe(url: &str) -> Result<()> {
         let parsed = url::Url::parse(url)
             .map_err(|e| anyhow::anyhow!("无效的 URL: {e}"))?;
 
