@@ -793,3 +793,55 @@
 ---
 
 > 本文档基于源码分析和技术文档编写，旨在为 Shadow 的发展规划提供参考。各系统能力可能会随版本迭代而变化。
+
+---
+
+## 附录: Tool 系统逐项对比 (Shadow 15 vs ZeroClaw ~120)
+
+> Shadow: 3611行 15工具 | ZeroClaw: 119736行 ~120工具
+
+### 按类别对比
+
+| 类别 | Shadow | ZeroClaw | 差距 |
+|------|--------|----------|------|
+| 文件操作 | 5 (read/write/edit/glob/content_search) | 8 (+download/upload/bundle/backup) | 缺3 |
+| Shell执行 | 1 (shell) | 5 (+claude_code/codex/gemini/opencode CLI) | 缺4 |
+| HTTP/网络 | 2 (http_request/web_fetch) | 4 (+web_search/search_routing) | 缺2 |
+| Git | 1 (git_ops) | 1 (git_operations) | 对齐 |
+| Memory | 2 (recall/store) | 5 (+export/forget/purge) | 缺3 |
+| Skills | 2 (manage/http) | 4 (+read_skill/skill_tool) | 基本对齐 |
+| 子代理 | 1 (spawn_subagent) | 2 (+delegate) | 基本对齐 |
+| Cron Tool | 0 (有持久化无Tool) | 6 (add/list/remove/run/runs/update) | 缺6 |
+| MCP | 0 | 9 (client/transport/protocol/tool/deferred/prompt/resource) | 缺9 |
+| 浏览器 | 0 | 3 (browser/open/delegate) | 缺3 |
+| SOP | 0 | 6 (list/execute/approve/advance/status/history) | 缺6 |
+| 安全 | 0 (在agent层) | 3 (security_ops/verifiable_intent/safety_net) | 缺3 |
+| 集成服务 | 0 | ~15 (email/google/jira/notion/linkedin/discord/cloud) | 缺15 |
+| 硬件 | 0 | 3 (board_info/memory_map/memory_read) | 缺3 |
+| 实用工具 | 0 | ~10 (calculator/weather/screenshot/pdf_read/canvas等) | 缺10 |
+| 其他 | 0 | ~15 (pipeline/poll/escalate/text_browser等) | 缺15 |
+
+### 优先补齐建议 (按价值排序)
+
+P0 (核心能力):
+1. memory_forget + memory_purge + memory_export -- 记忆管理补齐
+2. cron tools (6个) -- Shadow 已有 cron 持久化, 缺 Tool 接口
+3. web_search -- Web 搜索工具
+
+P1 (扩展能力):
+4. MCP client (核心) -- MCP 协议支持
+5. ask_user -- 用户交互工具
+6. calculator -- 计算器
+7. text_browser -- 纯文本浏览器
+
+P2 (集成能力):
+8. email_read -- 邮件读取
+9. pdf_read -- PDF 读取
+10. screenshot -- 截图
+
+P3 (长期目标):
+11. CLI agent 集成 (claude_code/codex_cli)
+12. 浏览器工具
+13. SOP 引擎
+14. 第三方集成 (Jira/Notion/Google)
+15. 硬件工具
