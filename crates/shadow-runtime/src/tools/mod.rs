@@ -30,6 +30,7 @@ pub mod file_download;
 pub mod file_edit;
 pub mod file_read;
 pub mod file_upload;
+pub mod file_upload_bundle;
 pub mod file_write;
 pub mod git_ops;
 pub mod glob_search;
@@ -54,6 +55,7 @@ pub use file_download::FileDownloadTool;
 pub use file_edit::FileEditTool;
 pub use file_read::FileReadTool;
 pub use file_upload::FileUploadTool;
+pub use file_upload_bundle::FileUploadBundleTool;
 pub use file_write::FileWriteTool;
 pub use git_ops::GitOpsTool;
 pub use glob_search::GlobSearchTool;
@@ -102,6 +104,7 @@ pub fn default_tools_with_workspace(
     registry.register(Box::new(PathGuardedTool::new(Box::new(FileEditTool), workspace.clone())));
     registry.register(Box::new(PathGuardedTool::new(Box::new(FileDownloadTool::new()), workspace.clone())));
     registry.register(Box::new(PathGuardedTool::new(Box::new(FileUploadTool::new()), workspace.clone())));
+    registry.register(Box::new(PathGuardedTool::new(Box::new(FileUploadBundleTool::new()), workspace.clone())));
     registry.register(Box::new(PathGuardedTool::new(Box::new(BackupTool::new()), workspace.clone())));
 
     // 文件搜索
