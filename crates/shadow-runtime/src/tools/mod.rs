@@ -41,6 +41,7 @@ pub mod memory_purge;
 pub mod memory_recall;
 pub mod memory_store;
 pub mod registry;
+pub mod search_routing;
 pub mod shell;
 pub mod skill_manage;
 pub mod spawn_subagent;
