@@ -1,10 +1,13 @@
 //! 工具集合 -- agent 可调用的基本工具
 //!
-//! 当前实现 (21 个工具):
+//! 当前实现 (24 个工具):
 //! - Shell: 执行 shell 命令 (黑名单+超时)
 //! - FileRead: 读取文件内容
 //! - FileWrite: 写入文件内容 (原子写入)
 //! - FileEdit: 精确替换文件中的文本片段 (patch 风格)
+//! - FileDownload: 从 URL 下载文件
+//! - FileUpload: 上传文件到 URL (multipart)
+//! - BackupTool: 文件/目录备份 (复制/tar.gz)
 //! - GlobSearch: 按文件名模式搜索文件
 //! - ContentSearch: 在文件内容中搜索文本
 //! - HttpRequest: HTTP 请求 (SSRF 防护)
@@ -20,10 +23,13 @@
 //! - MemoryExport: 导出记忆
 //! - SkillManage: 技能管理
 
+pub mod backup_tool;
 pub mod content_search;
 pub mod cron_tool;
+pub mod file_download;
 pub mod file_edit;
 pub mod file_read;
+pub mod file_upload;
 pub mod file_write;
 pub mod git_ops;
 pub mod glob_search;
@@ -41,10 +47,13 @@ pub mod web_fetch;
 pub mod web_search;
 pub mod wrapper;
 
+pub use backup_tool::BackupTool;
 pub use content_search::ContentSearchTool;
 pub use cron_tool::CronTool;
+pub use file_download::FileDownloadTool;
 pub use file_edit::FileEditTool;
 pub use file_read::FileReadTool;
+pub use file_upload::FileUploadTool;
 pub use file_write::FileWriteTool;
 pub use git_ops::GitOpsTool;
 pub use glob_search::GlobSearchTool;
@@ -67,8 +76,6 @@ use std::sync::Arc;
 use crate::security::SecurityPolicy;
 
 /// 创建默认工具集 -- 返回所有内置工具, 用装饰器包装敏感工具
-///
-/// - `memory`: 可选的 Memory 后端, Some 时注册 memory 工具
 pub fn default_tools(memory: Option<Arc<dyn Memory>>) -> ToolRegistry {
     let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     default_tools_with_workspace(memory, workspace)
@@ -81,10 +88,9 @@ pub fn default_tools_with_workspace(
 ) -> ToolRegistry {
     let mut registry = ToolRegistry::new();
 
-    // 安全策略: 黑名单 + 环境变量过滤 + 工作目录限制
     let security = SecurityPolicy::new().with_workspace(workspace.clone());
 
-    // Shell 工具 -- 安全策略 + 速率限制 (每秒 10 次)
+    // Shell 工具 -- 安全策略 + 速率限制
     registry.register(Box::new(RateLimitedTool::new(
         Box::new(ShellTool::new(security)),
         10,
@@ -94,6 +100,9 @@ pub fn default_tools_with_workspace(
     registry.register(Box::new(PathGuardedTool::new(Box::new(FileReadTool), workspace.clone())));
     registry.register(Box::new(PathGuardedTool::new(Box::new(FileWriteTool), workspace.clone())));
     registry.register(Box::new(PathGuardedTool::new(Box::new(FileEditTool), workspace.clone())));
+    registry.register(Box::new(PathGuardedTool::new(Box::new(FileDownloadTool::new()), workspace.clone())));
+    registry.register(Box::new(PathGuardedTool::new(Box::new(FileUploadTool::new()), workspace.clone())));
+    registry.register(Box::new(PathGuardedTool::new(Box::new(BackupTool::new()), workspace.clone())));
 
     // 文件搜索
     registry.register(Box::new(GlobSearchTool));
@@ -113,7 +122,7 @@ pub fn default_tools_with_workspace(
     // Cron 管理
     registry.register(Box::new(CronTool::new()));
 
-    // 记忆工具 -- 仅在 memory 后端可用时注册
+    // 记忆工具
     if let Some(mem) = memory {
         registry.register(Box::new(MemoryRecallTool::new(Arc::clone(&mem))));
         registry.register(Box::new(MemoryStoreTool::new(Arc::clone(&mem))));

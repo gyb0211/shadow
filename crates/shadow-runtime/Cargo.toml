@@ -23,7 +23,7 @@ chrono.workspace = true
 uuid.workspace = true
 futures.workspace = true
 regex.workspace = true
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "multipart"] }
 url.workspace = true
 urlencoding.workspace = true
 shadow-proxy = { workspace = true, optional = true }
