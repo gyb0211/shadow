@@ -3,10 +3,36 @@
 //! 借鉴 ZeroClaw 的 PromptSection 设计, 但大幅精简:
 //! - 5 个基础 section: DateTime / Identity / ToolHonesty / Safety / Workspace
 //! - SystemPromptBuilder 按 priority 排序后拼接
+//!
+//! # 子模块
+//! - [`safety_injection`]: 安全策略注入 -- 将具体安全约束写入 system prompt
+//! - [`context_compressor`]: 上下文压缩 -- 工具输出预清理 (不含 LLM 摘要)
+//! - [`injection_guard`]: Prompt 注入防护 -- 检测上下文文件中的注入攻击
+//! - [`caching`]: Anthropic prompt 缓存 -- system_and_3 策略
+//! - [`truncation`]: 工具输出截断 -- 头尾保留 + JSON 感知
 
 use shadow_core::AutonomyLevel;
 use chrono::Local;
 use std::path::PathBuf;
+
+// ── 子模块 ─────────────────────────────────────────────────────────
+/// 安全策略注入 -- 将具体安全约束写入 system prompt
+pub mod safety_injection;
+/// 上下文压缩 -- 工具输出预清理 (不含 LLM 摘要, 那个需要 Provider)
+pub mod context_compressor;
+/// Prompt 注入防护 -- 检测上下文文件中的注入攻击
+pub mod injection_guard;
+/// Anthropic prompt 缓存 -- system_and_3 策略
+pub mod caching;
+/// 工具输出截断 -- 头尾保留 + JSON 感知
+pub mod truncation;
+
+// 重新导出子模块的公共 API, 方便外部通过 `prompt::` 直接使用
+pub use context_compressor::{estimate_tokens, prune_old_tool_outputs, prune_to_fit, should_compress};
+pub use injection_guard::{scan_context_content, ScanResult};
+pub use safety_injection::SafetyInjectionSection;
+pub use truncation::{truncate_tool_message, truncate_tool_result};
+pub use caching::apply_cache_control;
 
 /// 系统提示段 -- 可插拔的系统提示组成部分
 pub trait PromptSection: Send + Sync {

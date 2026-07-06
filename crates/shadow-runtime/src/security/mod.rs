@@ -35,6 +35,19 @@ const DEFAULT_BLOCKED_PATTERNS: &[&str] = &[
     "init 6",              // 重启 (SysV)
 ];
 
+/// 默认禁止访问的系统目录 -- 这些目录包含系统关键文件, 不应被读写
+///
+/// 用于安全策略注入 (system prompt) 和路径检查. 可通过
+/// [`SecurityPolicy::with_forbidden_paths`] 覆盖.
+const DEFAULT_FORBIDDEN_PATHS: &[&str] = &[
+    "/etc",   // 系统配置文件
+    "/root",  // root 用户主目录
+    "/boot",  // 启动文件
+    "/sys",   // 内核虚拟文件系统
+    "/proc",  // 进程虚拟文件系统
+    "/dev",   // 设备文件
+];
+
 /// 默认允许的环境变量白名单 -- 只有这些变量会传递给子进程
 ///
 /// 参考 ZeroClaw skill_tool.rs: 过滤掉可能泄露敏感信息的环境变量
@@ -122,6 +135,15 @@ pub struct SecurityPolicy {
     allowed_env_vars: Vec<String>,
     /// 工作目录 (None = 不限制)
     workspace: Option<PathBuf>,
+    /// 允许的命令白名单 (空 = 不限制, 全部允许)
+    ///
+    /// 非空时表示只允许执行白名单内的命令. 默认为空 (不限制).
+    allowed_commands: Vec<String>,
+    /// 禁止访问的路径 (系统目录等)
+    ///
+    /// 默认为 [`DEFAULT_FORBIDDEN_PATHS`]. 用于安全策略注入,
+    /// 提醒 agent 不要读写这些系统关键目录.
+    forbidden_paths: Vec<String>,
 }
 
 impl Default for SecurityPolicy {
@@ -142,6 +164,8 @@ impl SecurityPolicy {
             blocked_patterns: DEFAULT_BLOCKED_PATTERNS.iter().map(|s| (*s).to_string()).collect(),
             allowed_env_vars: SAFE_ENV_VARS.iter().map(|s| (*s).to_string()).collect(),
             workspace: None,
+            allowed_commands: Vec::new(),
+            forbidden_paths: DEFAULT_FORBIDDEN_PATHS.iter().map(|s| (*s).to_string()).collect(),
         }
     }
 
@@ -149,6 +173,24 @@ impl SecurityPolicy {
     #[must_use]
     pub fn with_workspace(mut self, workspace: PathBuf) -> Self {
         self.workspace = Some(workspace);
+        self
+    }
+
+    /// 设置允许的命令白名单 (builder 风格)
+    ///
+    /// 空列表表示不限制 (默认). 非空时, 只有列表中的命令允许执行.
+    #[must_use]
+    pub fn with_allowed_commands(mut self, commands: Vec<String>) -> Self {
+        self.allowed_commands = commands;
+        self
+    }
+
+    /// 设置禁止访问的路径 (builder 风格)
+    ///
+    /// 覆盖默认的 [`DEFAULT_FORBIDDEN_PATHS`].
+    #[must_use]
+    pub fn with_forbidden_paths(mut self, paths: Vec<String>) -> Self {
+        self.forbidden_paths = paths;
         self
     }
 
@@ -205,6 +247,16 @@ impl SecurityPolicy {
     /// 获取允许的环境变量名列表
     pub fn allowed_env_vars(&self) -> &[String] {
         &self.allowed_env_vars
+    }
+
+    /// 获取允许的命令白名单 (空 = 不限制)
+    pub fn allowed_commands(&self) -> &[String] {
+        &self.allowed_commands
+    }
+
+    /// 获取禁止访问的路径列表
+    pub fn forbidden_paths(&self) -> &[String] {
+        &self.forbidden_paths
     }
 }
 
@@ -341,6 +393,42 @@ mod tests {
     fn test_with_workspace() {
         let policy = SecurityPolicy::new().with_workspace(PathBuf::from("/tmp/work"));
         assert_eq!(policy.workspace(), Some(Path::new("/tmp/work")));
+    }
+
+    // ---- 命令白名单测试 ----
+
+    #[test]
+    fn test_allowed_commands_default_empty() {
+        // 默认白名单为空 (不限制)
+        let policy = SecurityPolicy::new();
+        assert!(policy.allowed_commands().is_empty());
+    }
+
+    #[test]
+    fn test_with_allowed_commands() {
+        let policy = SecurityPolicy::new()
+            .with_allowed_commands(vec!["ls".to_string(), "cat".to_string(), "git".to_string()]);
+        assert_eq!(policy.allowed_commands().len(), 3);
+        assert_eq!(policy.allowed_commands()[0], "ls");
+    }
+
+    // ---- 禁止路径测试 ----
+
+    #[test]
+    fn test_forbidden_paths_default_not_empty() {
+        // 默认应包含系统关键目录
+        let policy = SecurityPolicy::new();
+        assert!(!policy.forbidden_paths().is_empty());
+        assert!(policy.forbidden_paths().iter().any(|p| p == "/etc"));
+        assert!(policy.forbidden_paths().iter().any(|p| p == "/root"));
+    }
+
+    #[test]
+    fn test_with_forbidden_paths() {
+        let policy = SecurityPolicy::new()
+            .with_forbidden_paths(vec!["/custom/secret".to_string()]);
+        assert_eq!(policy.forbidden_paths().len(), 1);
+        assert_eq!(policy.forbidden_paths()[0], "/custom/secret");
     }
 
     // ---- Sandbox 测试 ----
