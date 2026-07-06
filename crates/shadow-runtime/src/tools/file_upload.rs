@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -44,9 +44,7 @@ fn is_private_ip(ip: &std::net::IpAddr) -> bool {
         std::net::IpAddr::V4(v4) => {
             v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
         }
-        std::net::IpAddr::V6(v6) => {
-            v6.is_loopback() || v6.is_unspecified()
-        }
+        std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
     }
 }
 
@@ -103,22 +101,26 @@ impl Tool for FileUploadTool {
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
-        let url = args.get("url")
+        let url = args
+            .get("url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("缺少 url 参数"))?
             .to_string();
 
-        let path_str = args.get("path")
+        let path_str = args
+            .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("缺少 path 参数"))?
             .to_string();
 
-        let field_name = args.get("field_name")
+        let field_name = args
+            .get("field_name")
             .and_then(|v| v.as_str())
             .unwrap_or("file")
             .to_string();
 
-        let headers: HashMap<String, String> = args.get("headers")
+        let headers: HashMap<String, String> = args
+            .get("headers")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
 
@@ -126,7 +128,9 @@ impl Tool for FileUploadTool {
 
         // SSRF 防护 (先检查 URL 安全, 再检查文件)
         if !Self::is_url_safe(&url) {
-            return Ok(ToolResult::err("SSRF 防护: URL 不安全 (禁止内网/localhost)"));
+            return Ok(ToolResult::err(
+                "SSRF 防护: URL 不安全 (禁止内网/localhost)",
+            ));
         }
 
         // 检查文件存在
@@ -146,7 +150,8 @@ impl Tool for FileUploadTool {
         };
 
         let file_size = file_bytes.len();
-        let filename = path.file_name()
+        let filename = path
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("upload.bin")
             .to_string();
@@ -162,8 +167,7 @@ impl Tool for FileUploadTool {
             .mime_str("application/octet-stream")
             .unwrap_or_else(|_| reqwest::multipart::Part::bytes(Vec::new()));
 
-        let form = reqwest::multipart::Form::new()
-            .part(field_name, part);
+        let form = reqwest::multipart::Form::new().part(field_name, part);
 
         let mut req = client.post(&url).multipart(form);
 
@@ -263,10 +267,13 @@ mod tests {
     async fn test_ssrf_blocked() {
         let tool = FileUploadTool::new();
         // SSRF 检查在文件存在检查之前
-        let result = tool.execute(json!({
-            "url": "http://127.0.0.1:8080",
-            "path": "/tmp/test"
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "url": "http://127.0.0.1:8080",
+                "path": "/tmp/test"
+            }))
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(result.error.unwrap().contains("SSRF"));
     }
@@ -274,10 +281,13 @@ mod tests {
     #[tokio::test]
     async fn test_file_not_found() {
         let tool = FileUploadTool::new();
-        let result = tool.execute(json!({
-            "url": "https://example.com/upload",
-            "path": "/nonexistent/file.txt"
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "url": "https://example.com/upload",
+                "path": "/nonexistent/file.txt"
+            }))
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(result.error.unwrap().contains("不存在"));
     }

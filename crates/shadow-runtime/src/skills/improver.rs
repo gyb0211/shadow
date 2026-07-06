@@ -95,7 +95,13 @@ impl SkillImprover {
         // rename (原子替换)
         tokio::fs::rename(&temp_path, &md_path)
             .await
-            .with_context(|| format!("重命名失败: {} → {}", temp_path.display(), md_path.display()))?;
+            .with_context(|| {
+                format!(
+                    "重命名失败: {} → {}",
+                    temp_path.display(),
+                    md_path.display()
+                )
+            })?;
 
         // 6. 更新内存冷却
         self.cooldowns.insert(slug.to_string(), Instant::now());
@@ -278,16 +284,15 @@ mod tests {
         make_skill_file(dir.path(), "test-skill");
         let mut improver = SkillImprover::new(dir.path().to_path_buf());
 
-        let improved = "---\nname: test-skill\ndescription: 改进后的测试\n---\n# Test\n改进后的内容\n";
+        let improved =
+            "---\nname: test-skill\ndescription: 改进后的测试\n---\n# Test\n改进后的内容\n";
         improver
             .improve_skill("test-skill", improved, "添加了新步骤")
             .await
             .unwrap();
 
-        let content = std::fs::read_to_string(
-            dir.path().join("skills/test-skill/SKILL.md"),
-        )
-        .unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join("skills/test-skill/SKILL.md")).unwrap();
         assert!(content.contains("updated_at:"));
         assert!(content.contains("improvement_reason:"));
         assert!(content.contains("<!-- Improvement:"));
@@ -302,15 +307,19 @@ mod tests {
         let mut improver = SkillImprover::new(dir.path().to_path_buf()).with_cooldown(0);
 
         let v1 = "---\nname: test-skill\ndescription: v1\n---\n# v1\n";
-        improver.improve_skill("test-skill", v1, "第一次改进").await.unwrap();
+        improver
+            .improve_skill("test-skill", v1, "第一次改进")
+            .await
+            .unwrap();
 
         let v2 = "---\nname: test-skill\ndescription: v2\n---\n# v2\n";
-        improver.improve_skill("test-skill", v2, "第二次改进").await.unwrap();
+        improver
+            .improve_skill("test-skill", v2, "第二次改进")
+            .await
+            .unwrap();
 
-        let content = std::fs::read_to_string(
-            dir.path().join("skills/test-skill/SKILL.md"),
-        )
-        .unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join("skills/test-skill/SKILL.md")).unwrap();
         assert_eq!(content.matches("<!-- Improvement:").count(), 2);
         assert!(content.contains("第一次改进"));
         assert!(content.contains("第二次改进"));

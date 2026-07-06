@@ -5,34 +5,46 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
 
-use shadow_core::{Attributable, Role, Tool, ToolResult, ToolSpec};
 use crate::cron::{CronJob, CronRun, CronScheduler};
+use shadow_core::{Attributable, Role, Tool, ToolResult, ToolSpec};
 
 pub struct CronTool {
     store: Option<Arc<CronScheduler>>,
 }
 
 impl CronTool {
-    pub fn new() -> Self { Self { store: None } }
-    pub fn with_store(store: Arc<CronScheduler>) -> Self { Self { store: Some(store) } }
+    pub fn new() -> Self {
+        Self { store: None }
+    }
+    pub fn with_store(store: Arc<CronScheduler>) -> Self {
+        Self { store: Some(store) }
+    }
 }
 
 impl Default for CronTool {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Attributable for CronTool {
-    fn role(&self) -> Role { Role::Tool }
-    fn alias(&self) -> &str { "cron" }
+    fn role(&self) -> Role {
+        Role::Tool
+    }
+    fn alias(&self) -> &str {
+        "cron"
+    }
 }
 
 #[async_trait]
 impl Tool for CronTool {
-    fn name(&self) -> &str { "cron" }
+    fn name(&self) -> &str {
+        "cron"
+    }
 
     fn description(&self) -> &str {
         "管理定时任务。add(添加) / list(列出,支持过滤) / remove(删除) / run(手动执行) / runs(执行历史,支持分页) / update(更新)"
@@ -58,10 +70,17 @@ impl Tool for CronTool {
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
-        let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("list");
+        let action = args
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("list");
         let store = match &self.store {
             Some(s) => s,
-            None => return Ok(ToolResult::err("未配置 CronScheduler。请先初始化 cron 持久化。")),
+            None => {
+                return Ok(ToolResult::err(
+                    "未配置 CronScheduler。请先初始化 cron 持久化。",
+                ));
+            }
         };
 
         match action {
@@ -75,20 +94,37 @@ impl Tool for CronTool {
         }
     }
 
-    fn timeout(&self) -> Option<Duration> { Some(Duration::from_secs(60)) }
+    fn timeout(&self) -> Option<Duration> {
+        Some(Duration::from_secs(60))
+    }
     fn spec(&self) -> ToolSpec {
-        ToolSpec { name: self.name().to_string(), description: self.description().to_string(), parameters: self.parameters_schema() }
+        ToolSpec {
+            name: self.name().to_string(),
+            description: self.description().to_string(),
+            parameters: self.parameters_schema(),
+        }
     }
 }
 
 impl CronTool {
     // ── add ──
     async fn do_add(&self, store: &CronScheduler, args: &Value) -> Result<ToolResult> {
-        let name = args.get("name").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("缺少 name"))?;
-        let schedule = args.get("schedule").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("缺少 schedule"))?;
-        let command = args.get("command").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("缺少 command"))?;
+        let name = args
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("缺少 name"))?;
+        let schedule = args
+            .get("schedule")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("缺少 schedule"))?;
+        let command = args
+            .get("command")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("缺少 command"))?;
         match store.add_job(CronJob::new(name, schedule, command)) {
-            Ok(id) => Ok(ToolResult::ok(format!("定时任务已创建: id={id}, name={name}, schedule={schedule}"))),
+            Ok(id) => Ok(ToolResult::ok(format!(
+                "定时任务已创建: id={id}, name={name}, schedule={schedule}"
+            ))),
             Err(e) => Ok(ToolResult::err(format!("创建失败: {e}"))),
         }
     }
@@ -98,18 +134,27 @@ impl CronTool {
         let filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("all");
         match store.list_jobs() {
             Ok(jobs) => {
-                let filtered: Vec<_> = jobs.into_iter().filter(|j| match filter {
-                    "enabled" => j.enabled,
-                    "disabled" => !j.enabled,
-                    _ => true,
-                }).collect();
+                let filtered: Vec<_> = jobs
+                    .into_iter()
+                    .filter(|j| match filter {
+                        "enabled" => j.enabled,
+                        "disabled" => !j.enabled,
+                        _ => true,
+                    })
+                    .collect();
                 if filtered.is_empty() {
                     return Ok(ToolResult::ok("当前没有定时任务"));
                 }
-                let mut lines = vec![format!("定时任务 ({} 个, filter={filter}):", filtered.len())];
+                let mut lines = vec![format!(
+                    "定时任务 ({} 个, filter={filter}):",
+                    filtered.len()
+                )];
                 for job in &filtered {
                     let st = if job.enabled { "启用" } else { "禁用" };
-                    lines.push(format!("  [{}] {} | {} | {} | {}", job.id, job.name, job.schedule, st, job.command));
+                    lines.push(format!(
+                        "  [{}] {} | {} | {} | {}",
+                        job.id, job.name, job.schedule, st, job.command
+                    ));
                 }
                 Ok(ToolResult::ok(lines.join("\n")))
             }
@@ -119,7 +164,10 @@ impl CronTool {
 
     // ── remove ──
     fn do_remove(&self, store: &CronScheduler, args: &Value) -> Result<ToolResult> {
-        let id = args.get("id").and_then(|v| v.as_i64()).ok_or_else(|| anyhow::anyhow!("缺少 id"))?;
+        let id = args
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| anyhow::anyhow!("缺少 id"))?;
         match store.remove_job(id) {
             Ok(()) => Ok(ToolResult::ok(format!("定时任务 {id} 已删除"))),
             Err(e) => Ok(ToolResult::err(format!("删除失败: {e}"))),
@@ -128,7 +176,10 @@ impl CronTool {
 
     // ── run (手动执行: 读取 job, 执行 command, 记录 CronRun) ──
     async fn do_run(&self, store: &CronScheduler, args: &Value) -> Result<ToolResult> {
-        let id = args.get("id").and_then(|v| v.as_i64()).ok_or_else(|| anyhow::anyhow!("缺少 id"))?;
+        let id = args
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| anyhow::anyhow!("缺少 id"))?;
 
         // 获取 job
         let job = match store.get_job(id) {
@@ -140,61 +191,115 @@ impl CronTool {
         // 执行命令
         let started = chrono::Utc::now().timestamp();
         let output_result = tokio::process::Command::new("sh")
-            .arg("-c").arg(&job.command)
-            .output().await;
+            .arg("-c")
+            .arg(&job.command)
+            .output()
+            .await;
         let finished = chrono::Utc::now().timestamp();
 
         let (status, output_text) = match output_result {
             Ok(out) => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                let combined = if stderr.is_empty() { stdout.to_string() } else { format!("{stdout}\n[stderr]\n{stderr}") };
-                let truncated = if combined.len() > 10240 { format!("{}...(截断)", &combined[..10240]) } else { combined };
-                if out.status.success() { ("success", truncated) } else { ("failed", truncated) }
+                let combined = if stderr.is_empty() {
+                    stdout.to_string()
+                } else {
+                    format!("{stdout}\n[stderr]\n{stderr}")
+                };
+                let truncated = if combined.len() > 10240 {
+                    format!("{}...(截断)", &combined[..10240])
+                } else {
+                    combined
+                };
+                if out.status.success() {
+                    ("success", truncated)
+                } else {
+                    ("failed", truncated)
+                }
             }
             Err(e) => ("failed", format!("执行失败: {e}")),
         };
 
         // 记录运行历史
         let run = CronRun {
-            id: 0, job_id: id, started_at: started, finished_at: Some(finished),
-            status: status.to_string(), output: output_text.clone(),
+            id: 0,
+            job_id: id,
+            started_at: started,
+            finished_at: Some(finished),
+            status: status.to_string(),
+            output: output_text.clone(),
         };
         let _ = store.record_run(&run);
 
-        let result_msg = format!("任务 [{}] (id={}) 手动执行: {}\n输出:\n{}", job.name, id, status, &output_text[..output_text.len().min(2000)]);
+        let result_msg = format!(
+            "任务 [{}] (id={}) 手动执行: {}\n输出:\n{}",
+            job.name,
+            id,
+            status,
+            &output_text[..output_text.len().min(2000)]
+        );
         if status == "success" {
             Ok(ToolResult::ok(result_msg))
         } else {
-            Ok(ToolResult { success: false, output: result_msg, error: Some(format!("任务执行失败: {status}")) })
+            Ok(ToolResult {
+                success: false,
+                output: result_msg,
+                error: Some(format!("任务执行失败: {status}")),
+            })
         }
     }
 
     // ── runs (执行历史, 支持 limit/offset/status_filter) ──
     fn do_runs(&self, store: &CronScheduler, args: &Value) -> Result<ToolResult> {
-        let id = args.get("id").and_then(|v| v.as_i64()).ok_or_else(|| anyhow::anyhow!("缺少 id"))?;
+        let id = args
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| anyhow::anyhow!("缺少 id"))?;
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
         let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-        let status_filter = args.get("status_filter").and_then(|v| v.as_str()).unwrap_or("all");
+        let status_filter = args
+            .get("status_filter")
+            .and_then(|v| v.as_str())
+            .unwrap_or("all");
 
         match store.list_runs(id) {
             Ok(runs) => {
                 // 状态过滤
-                let filtered: Vec<_> = runs.into_iter().filter(|r| match status_filter {
-                    "success" => r.status == "success",
-                    "failed" => r.status == "failed",
-                    "running" => r.status == "running",
-                    _ => true,
-                }).collect();
+                let filtered: Vec<_> = runs
+                    .into_iter()
+                    .filter(|r| match status_filter {
+                        "success" => r.status == "success",
+                        "failed" => r.status == "failed",
+                        "running" => r.status == "running",
+                        _ => true,
+                    })
+                    .collect();
                 // 分页
                 let paged: Vec<_> = filtered.iter().skip(offset).take(limit).collect();
                 if paged.is_empty() {
-                    return Ok(ToolResult::ok(format!("任务 {id} 暂无执行历史 (offset={offset})")));
+                    return Ok(ToolResult::ok(format!(
+                        "任务 {id} 暂无执行历史 (offset={offset})"
+                    )));
                 }
-                let mut lines = vec![format!("任务 {id} 执行历史 (共 {} 条, 显示 {}-{}):", filtered.len(), offset, offset + paged.len())];
+                let mut lines = vec![format!(
+                    "任务 {id} 执行历史 (共 {} 条, 显示 {}-{}):",
+                    filtered.len(),
+                    offset,
+                    offset + paged.len()
+                )];
                 for run in &paged {
-                    let output = if run.output.is_empty() { "(无输出)" } else { &run.output };
-                    lines.push(format!("  #{} | {} | {} | {}", run.id, run.started_at, run.status, &output[..output.len().min(200)]));
+                    let output = if run.output.is_empty() {
+                        "(无输出)"
+                    } else {
+                        &run.output
+                    };
+                    lines.push(format!(
+                        "  #{} | {} | {} | {}",
+                        run.id,
+                        run.started_at,
+                        run.status,
+                        &output[..output.len().min(200)]
+                    ));
                 }
                 Ok(ToolResult::ok(lines.join("\n")))
             }
@@ -204,7 +309,10 @@ impl CronTool {
 
     // ── update ──
     fn do_update(&self, store: &CronScheduler, args: &Value) -> Result<ToolResult> {
-        let id = args.get("id").and_then(|v| v.as_i64()).ok_or_else(|| anyhow::anyhow!("缺少 id"))?;
+        let id = args
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| anyhow::anyhow!("缺少 id"))?;
         let schedule = args.get("schedule").and_then(|v| v.as_str());
         let command = args.get("command").and_then(|v| v.as_str());
         let enabled = args.get("enabled").and_then(|v| v.as_bool());
@@ -220,17 +328,32 @@ impl CronTool {
 mod tests {
     use super::*;
 
-    #[test] fn test_metadata() { let t = CronTool::new(); assert_eq!(t.name(), "cron"); assert_eq!(t.timeout(), Some(Duration::from_secs(60))); }
+    #[test]
+    fn test_metadata() {
+        let t = CronTool::new();
+        assert_eq!(t.name(), "cron");
+        assert_eq!(t.timeout(), Some(Duration::from_secs(60)));
+    }
 
-    #[tokio::test] async fn test_no_store() {
-        let r = CronTool::new().execute(json!({"action":"list"})).await.unwrap();
+    #[tokio::test]
+    async fn test_no_store() {
+        let r = CronTool::new()
+            .execute(json!({"action":"list"}))
+            .await
+            .unwrap();
         assert!(!r.success && r.error.unwrap().contains("CronScheduler"));
     }
 
-    #[tokio::test] async fn test_add_list_remove() {
+    #[tokio::test]
+    async fn test_add_list_remove() {
         let s = Arc::new(CronScheduler::new_in_memory().unwrap());
         let t = CronTool::with_store(s);
-        let r = t.execute(json!({"action":"add","name":"test","schedule":"0 0 9 * * *","command":"echo hi"})).await.unwrap();
+        let r = t
+            .execute(
+                json!({"action":"add","name":"test","schedule":"0 0 9 * * *","command":"echo hi"}),
+            )
+            .await
+            .unwrap();
         assert!(r.success);
         let r = t.execute(json!({"action":"list"})).await.unwrap();
         assert!(r.output.contains("test"));
@@ -238,22 +361,32 @@ mod tests {
         assert!(r.success);
     }
 
-    #[tokio::test] async fn test_filter() {
+    #[tokio::test]
+    async fn test_filter() {
         let s = Arc::new(CronScheduler::new_in_memory().unwrap());
-        s.add_job(CronJob::new("on","0 0 9 * * *","echo 1")).unwrap();
-        let mut j = CronJob::new("off","0 0 10 * * *","echo 2");
+        s.add_job(CronJob::new("on", "0 0 9 * * *", "echo 1"))
+            .unwrap();
+        let mut j = CronJob::new("off", "0 0 10 * * *", "echo 2");
         j.enabled = false;
         s.add_job(j).unwrap();
         let t = CronTool::with_store(s);
-        let r = t.execute(json!({"action":"list","filter":"enabled"})).await.unwrap();
+        let r = t
+            .execute(json!({"action":"list","filter":"enabled"}))
+            .await
+            .unwrap();
         assert!(r.output.contains("1 个") && r.output.contains("on"));
-        let r = t.execute(json!({"action":"list","filter":"disabled"})).await.unwrap();
+        let r = t
+            .execute(json!({"action":"list","filter":"disabled"}))
+            .await
+            .unwrap();
         assert!(r.output.contains("1 个") && r.output.contains("off"));
     }
 
-    #[tokio::test] async fn test_run_and_runs() {
+    #[tokio::test]
+    async fn test_run_and_runs() {
         let s = Arc::new(CronScheduler::new_in_memory().unwrap());
-        s.add_job(CronJob::new("echo job","0 0 9 * * *","echo hello")).unwrap();
+        s.add_job(CronJob::new("echo job", "0 0 9 * * *", "echo hello"))
+            .unwrap();
         let t = CronTool::with_store(s);
         // 手动执行
         let r = t.execute(json!({"action":"run","id":1})).await.unwrap();
@@ -263,17 +396,28 @@ mod tests {
         let r = t.execute(json!({"action":"runs","id":1})).await.unwrap();
         assert!(r.output.contains("success"));
         // 分页
-        let r = t.execute(json!({"action":"runs","id":1,"limit":1,"offset":0})).await.unwrap();
+        let r = t
+            .execute(json!({"action":"runs","id":1,"limit":1,"offset":0}))
+            .await
+            .unwrap();
         assert!(r.output.contains("显示"));
     }
 
-    #[tokio::test] async fn test_update() {
+    #[tokio::test]
+    async fn test_update() {
         let s = Arc::new(CronScheduler::new_in_memory().unwrap());
-        s.add_job(CronJob::new("test","0 0 9 * * *","echo old")).unwrap();
+        s.add_job(CronJob::new("test", "0 0 9 * * *", "echo old"))
+            .unwrap();
         let t = CronTool::with_store(s);
-        let r = t.execute(json!({"action":"update","id":1,"command":"echo new","enabled":false})).await.unwrap();
+        let r = t
+            .execute(json!({"action":"update","id":1,"command":"echo new","enabled":false}))
+            .await
+            .unwrap();
         assert!(r.success);
-        let r = t.execute(json!({"action":"list","filter":"disabled"})).await.unwrap();
+        let r = t
+            .execute(json!({"action":"list","filter":"disabled"}))
+            .await
+            .unwrap();
         assert!(r.output.contains("echo new"));
     }
 }

@@ -6,8 +6,8 @@
 //! - 按严重度升序返回: Ok < Warning < Block < Break
 
 use serde_json::Value;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::VecDeque;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 /// 循环检测结果

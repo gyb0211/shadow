@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 
 use shadow_core::{Attributable, Role, Tool, ToolResult, ToolSpec};
@@ -53,11 +53,21 @@ impl WebSearchTool {
     }
 
     /// DuckDuckGo Lite 搜索
-    async fn search_duckduckgo(&self, query: &str, max_results: usize) -> Result<Vec<SearchResult>> {
-        let url = format!("https://lite.duckduckgo.com/lite/?q={}", urlencoding::encode(query));
-        let resp = self.client.get(&url)
+    async fn search_duckduckgo(
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let url = format!(
+            "https://lite.duckduckgo.com/lite/?q={}",
+            urlencoding::encode(query)
+        );
+        let resp = self
+            .client
+            .get(&url)
             .header("User-Agent", "Mozilla/5.0")
-            .send().await?;
+            .send()
+            .await?;
 
         let html = resp.text().await.unwrap_or_default();
 
@@ -126,7 +136,10 @@ impl WebSearchTool {
 
         let url = format!(
             "https://www.googleapis.com/customsearch/v1?key={}&cx={}&q={}&num={}",
-            api_key, cx, urlencoding::encode(query), num
+            api_key,
+            cx,
+            urlencoding::encode(query),
+            num
         );
 
         let resp = self.client.get(&url).send().await?;
@@ -136,9 +149,21 @@ impl WebSearchTool {
         if let Some(items) = json.get("items").and_then(|v| v.as_array()) {
             for item in items {
                 results.push(SearchResult {
-                    title: item.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    url: item.get("link").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    snippet: item.get("snippet").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    title: item
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    url: item
+                        .get("link")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    snippet: item
+                        .get("snippet")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                 });
             }
         }
@@ -275,15 +300,18 @@ impl Tool for WebSearchTool {
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
-        let query = args.get("query")
+        let query = args
+            .get("query")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("缺少 query 参数"))?;
 
-        let max_results = args.get("max_results")
+        let max_results = args
+            .get("max_results")
             .and_then(|v| v.as_u64())
             .unwrap_or(5) as usize;
 
-        let engine = args.get("engine")
+        let engine = args
+            .get("engine")
             .and_then(|v| v.as_str())
             .unwrap_or("duckduckgo");
 
@@ -291,9 +319,7 @@ impl Tool for WebSearchTool {
             "google" if self.google_api_key.is_some() => {
                 self.search_google(query, max_results).await
             }
-            _ => {
-                self.search_duckduckgo(query, max_results).await
-            }
+            _ => self.search_duckduckgo(query, max_results).await,
         };
 
         match results {
@@ -329,7 +355,8 @@ mod tests {
 
     #[test]
     fn test_parse_links_loose() {
-        let html = r#"<a href="https://example.com">Example Site</a> <a href="https://test.com">Test</a>"#;
+        let html =
+            r#"<a href="https://example.com">Example Site</a> <a href="https://test.com">Test</a>"#;
         let results = WebSearchTool::parse_links_loose(html, 5);
         // 宽松解析可能提取到 1-2 个结果, 只验证至少 1 个
         assert!(!results.is_empty());
@@ -344,9 +371,11 @@ mod tests {
 
     #[test]
     fn test_format_results() {
-        let results = vec![
-            SearchResult { title: "Test".into(), url: "https://example.com".into(), snippet: "A test".into() },
-        ];
+        let results = vec![SearchResult {
+            title: "Test".into(),
+            url: "https://example.com".into(),
+            snippet: "A test".into(),
+        }];
         let output = WebSearchTool::format_results(&results, "test");
         assert!(output.contains("1. Test"));
         assert!(output.contains("https://example.com"));

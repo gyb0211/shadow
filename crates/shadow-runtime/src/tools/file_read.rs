@@ -1,9 +1,9 @@
 //! FileRead 工具 -- 读取文件内容
 
-use shadow_core::{tool_attribution, Attributable, Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use shadow_core::{Attributable, Tool, ToolResult, tool_attribution};
 
 /// FileRead 工具 -- 读取指定路径的文件内容
 ///
@@ -77,10 +77,7 @@ mod tests {
         // 使用 workspace 根目录的 Cargo.toml (含 [workspace])
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
         let path = format!("{}/../../Cargo.toml", manifest_dir);
-        let result = tool
-            .execute(json!({"path": path}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"path": path})).await.unwrap();
         assert!(result.success);
         assert!(result.output.contains("[workspace]"));
     }

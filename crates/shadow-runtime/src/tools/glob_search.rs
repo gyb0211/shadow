@@ -1,9 +1,9 @@
 //! GlobSearch 工具 -- 按文件名模式搜索文件
 
-use shadow_core::{tool_attribution, Attributable, Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use shadow_core::{Attributable, Tool, ToolResult, tool_attribution};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -75,9 +75,7 @@ impl Tool for GlobSearchTool {
         .map_err(|e| anyhow::anyhow!("搜索任务执行失败: {e}"))??;
 
         if results.is_empty() {
-            return Ok(ToolResult::ok(format!(
-                "未找到匹配 '{pattern}' 的文件"
-            )));
+            return Ok(ToolResult::ok(format!("未找到匹配 '{pattern}' 的文件")));
         }
 
         Ok(ToolResult::ok(results.join("\n")))
@@ -91,13 +89,7 @@ fn collect_glob_matches(base: &Path, pattern: &str, max: usize) -> Result<Vec<St
     let regex = glob_to_regex(pattern);
     let mut results = Vec::new();
 
-    fn walk(
-        dir: &Path,
-        base: &Path,
-        regex: &regex::Regex,
-        results: &mut Vec<String>,
-        max: usize,
-    ) {
+    fn walk(dir: &Path, base: &Path, regex: &regex::Regex, results: &mut Vec<String>, max: usize) {
         if results.len() >= max {
             return;
         }

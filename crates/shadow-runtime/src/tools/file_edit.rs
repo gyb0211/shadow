@@ -3,10 +3,10 @@
 //! 不像 FileWriteTool 那样全文覆盖, 而是精确替换文件中的某段文本.
 //! 适用于对已有文件做局部修改, 避免覆盖整个文件内容.
 
-use shadow_core::{tool_attribution, Attributable, Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use shadow_core::{Attributable, Tool, ToolResult, tool_attribution};
 use std::time::Duration;
 
 /// FileEdit 工具 -- 精确替换文件中的文本片段
@@ -106,9 +106,7 @@ impl Tool for FileEditTool {
         let content = match tokio::fs::read_to_string(path).await {
             Ok(c) => c,
             Err(e) => {
-                return Ok(ToolResult::err(format!(
-                    "读取文件失败 '{path}': {e}"
-                )));
+                return Ok(ToolResult::err(format!("读取文件失败 '{path}': {e}")));
             }
         };
 
@@ -142,9 +140,7 @@ impl Tool for FileEditTool {
         // 原子写入 -- 先写临时文件再 rename, 避免写入中断导致文件损坏
         let target = std::path::Path::new(path);
         if let Err(e) = write_atomic(target, &new_content).await {
-            return Ok(ToolResult::err(format!(
-                "写入文件失败 '{path}': {e}"
-            )));
+            return Ok(ToolResult::err(format!("写入文件失败 '{path}': {e}")));
         }
 
         // 生成 diff 风格的输出
@@ -173,16 +169,14 @@ async fn write_atomic(target: &std::path::Path, content: &str) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("写入临时文件失败 '{tmp_path:?}': {e}"))?;
 
     // 原子 rename 到目标路径
-    tokio::fs::rename(&tmp_path, target)
-        .await
-        .map_err(|e| {
-            // rename 失败时清理临时文件
-            let tmp_clone = tmp_path.clone();
-            tokio::spawn(async move {
-                tokio::fs::remove_file(&tmp_clone).await.ok();
-            });
-            anyhow::anyhow!("重命名文件失败 '{target:?}': {e}")
-        })?;
+    tokio::fs::rename(&tmp_path, target).await.map_err(|e| {
+        // rename 失败时清理临时文件
+        let tmp_clone = tmp_path.clone();
+        tokio::spawn(async move {
+            tokio::fs::remove_file(&tmp_clone).await.ok();
+        });
+        anyhow::anyhow!("重命名文件失败 '{target:?}': {e}")
+    })?;
 
     Ok(())
 }

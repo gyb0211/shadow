@@ -10,15 +10,15 @@ mod loop_detector;
 
 pub use loop_detector::{LoopDetectionResult, LoopDetector};
 
+use anyhow::Result;
+use futures::StreamExt;
+use futures::stream::BoxStream;
+use parking_lot::Mutex;
 use shadow_core::{
     Attributable, AutonomyLevel, ChatChunk, ChatMessage, ChatRequest, ChatResponse, Memory,
-    MemoryStrategy, Provider, Observer, ObserverEvent, Role, SessionStore, TokenUsage,
-    ToolCall, ToolResult,
+    MemoryStrategy, Observer, ObserverEvent, Provider, Role, SessionStore, TokenUsage, ToolCall,
+    ToolResult,
 };
-use anyhow::Result;
-use futures::stream::BoxStream;
-use futures::StreamExt;
-use parking_lot::Mutex;
 use shadow_log::Action;
 use std::sync::Arc;
 
@@ -269,11 +269,7 @@ impl Agent {
         loop {
             iteration += 1;
             if iteration > self.config.max_iterations {
-                shadow_log::record!(
-                    WARN,
-                    Action::Fail,
-                    "工具调用超过最大循环次数, 终止"
-                );
+                shadow_log::record!(WARN, Action::Fail, "工具调用超过最大循环次数, 终止");
                 final_content = "工具调用次数超过上限, 终止对话.".to_string();
                 break;
             }
@@ -283,11 +279,7 @@ impl Agent {
                 let tokens = estimate_tokens(&messages);
                 if tokens > self.config.context_token_budget {
                     trim_history(&mut messages, self.config.context_token_budget);
-                    shadow_log::record!(
-                        INFO,
-                        Action::Note,
-                        "历史超过 token 预算, 已预裁剪"
-                    );
+                    shadow_log::record!(INFO, Action::Note, "历史超过 token 预算, 已预裁剪");
                 }
             }
 
@@ -313,11 +305,7 @@ impl Agent {
                 Err(e) => {
                     // 尝试从上下文溢出中恢复
                     if try_recover_context_overflow(&mut messages, &e) {
-                        shadow_log::record!(
-                            WARN,
-                            Action::Note,
-                            "上下文溢出, 已裁剪历史, 重试"
-                        );
+                        shadow_log::record!(WARN, Action::Note, "上下文溢出, 已裁剪历史, 重试");
                         continue;
                     }
                     return Err(e);
@@ -383,11 +371,7 @@ impl Agent {
                     let tool_duration_ms = tool_start.elapsed().as_millis() as u64;
 
                     // 记录工具调用事件 (脱敏后)
-                    self.record_tool_event(
-                        &tool_call.name,
-                        &result,
-                        tool_duration_ms,
-                    );
+                    self.record_tool_event(&tool_call.name, &result, tool_duration_ms);
 
                     // 将工具结果添加到消息 (脱敏后)
                     let tool_content = if result.success {
@@ -400,11 +384,8 @@ impl Agent {
                     };
 
                     // P0: 循环检测 -- 记录本次调用并处理结果
-                    let det_result = loop_detector.record(
-                        &tool_call.name,
-                        &tool_call.arguments,
-                        &tool_content,
-                    );
+                    let det_result =
+                        loop_detector.record(&tool_call.name, &tool_call.arguments, &tool_content);
                     // (action_tag, message) -- action_tag 用于后续分支判断
                     let (det_tag, det_msg): (u8, Option<String>) = match det_result {
                         LoopDetectionResult::Ok => (0, None),
@@ -454,16 +435,15 @@ impl Agent {
 
                     // Warning(1) 时注入提示消息
                     if det_tag == 1
-                        && let Some(msg) = det_msg {
-                            messages.push(ChatMessage {
-                                role: "system".to_string(),
-                                content: format!(
-                                    "你似乎在重复调用工具, 请尝试不同方法. ({msg})"
-                                ),
-                                tool_call_id: None,
-                                ..Default::default()
-                            });
-                        }
+                        && let Some(msg) = det_msg
+                    {
+                        messages.push(ChatMessage {
+                            role: "system".to_string(),
+                            content: format!("你似乎在重复调用工具, 请尝试不同方法. ({msg})"),
+                            tool_call_id: None,
+                            ..Default::default()
+                        });
+                    }
                 }
                 if should_break {
                     break;
@@ -492,11 +472,7 @@ impl Agent {
                 let mut should_break = false;
                 for (tool_call, result, tool_duration_ms) in results {
                     // 记录工具调用事件 (脱敏后)
-                    self.record_tool_event(
-                        &tool_call.name,
-                        &result,
-                        tool_duration_ms,
-                    );
+                    self.record_tool_event(&tool_call.name, &result, tool_duration_ms);
 
                     // 将工具结果添加到消息 (脱敏后)
                     let tool_content = if result.success {
@@ -509,11 +485,8 @@ impl Agent {
                     };
 
                     // P0: 循环检测 -- 记录本次调用并处理结果
-                    let det_result = loop_detector.record(
-                        &tool_call.name,
-                        &tool_call.arguments,
-                        &tool_content,
-                    );
+                    let det_result =
+                        loop_detector.record(&tool_call.name, &tool_call.arguments, &tool_content);
                     let (det_tag, det_msg): (u8, Option<String>) = match det_result {
                         LoopDetectionResult::Ok => (0, None),
                         LoopDetectionResult::Warning(msg) => {
@@ -562,16 +535,15 @@ impl Agent {
 
                     // Warning(1) 时注入提示消息
                     if det_tag == 1
-                        && let Some(msg) = det_msg {
-                            messages.push(ChatMessage {
-                                role: "system".to_string(),
-                                content: format!(
-                                    "你似乎在重复调用工具, 请尝试不同方法. ({msg})"
-                                ),
-                                tool_call_id: None,
-                                ..Default::default()
-                            });
-                        }
+                        && let Some(msg) = det_msg
+                    {
+                        messages.push(ChatMessage {
+                            role: "system".to_string(),
+                            content: format!("你似乎在重复调用工具, 请尝试不同方法. ({msg})"),
+                            tool_call_id: None,
+                            ..Default::default()
+                        });
+                    }
                 }
                 if should_break {
                     break;
@@ -630,18 +602,10 @@ impl Agent {
                     ..Default::default()
                 };
                 if let Err(e) = store.append_message(&id, &user_msg).await {
-                    shadow_log::record!(
-                        WARN,
-                        Action::Fail,
-                        format!("追加用户消息失败: {e}")
-                    );
+                    shadow_log::record!(WARN, Action::Fail, format!("追加用户消息失败: {e}"));
                 }
                 if let Err(e) = store.append_message(&id, &assistant_msg).await {
-                    shadow_log::record!(
-                        WARN,
-                        Action::Fail,
-                        format!("追加助手消息失败: {e}")
-                    );
+                    shadow_log::record!(WARN, Action::Fail, format!("追加助手消息失败: {e}"));
                 }
             }
         }
@@ -655,11 +619,7 @@ impl Agent {
                 .after_chat(user_message, &final_content, sid.as_deref())
                 .await
             {
-                shadow_log::record!(
-                    WARN,
-                    Action::Fail,
-                    format!("after_chat 记忆存储失败: {e}")
-                );
+                shadow_log::record!(WARN, Action::Fail, format!("after_chat 记忆存储失败: {e}"));
             }
         }
 
@@ -683,11 +643,7 @@ impl Agent {
                 )
                 .await
                 {
-                    shadow_log::record!(
-                        WARN,
-                        Action::Fail,
-                        format!("技能审查异步任务失败: {e}")
-                    );
+                    shadow_log::record!(WARN, Action::Fail, format!("技能审查异步任务失败: {e}"));
                 }
             });
         }
@@ -813,13 +769,10 @@ impl Agent {
         if let Some(store) = &self.session_store {
             let sid = self.current_session_id.lock().take();
             if let Some(id) = sid
-                && let Err(e) = store.delete(&id).await {
-                    shadow_log::record!(
-                        WARN,
-                        Action::Fail,
-                        format!("删除会话失败: {e}")
-                    );
-                }
+                && let Err(e) = store.delete(&id).await
+            {
+                shadow_log::record!(WARN, Action::Fail, format!("删除会话失败: {e}"));
+            }
         }
     }
 
@@ -945,7 +898,10 @@ impl AgentBuilder {
     }
 
     /// 设置技能改进器 (用于对话后异步技能审查)
-    pub fn skill_improver(mut self, improver: Arc<tokio::sync::Mutex<crate::skills::SkillImprover>>) -> Self {
+    pub fn skill_improver(
+        mut self,
+        improver: Arc<tokio::sync::Mutex<crate::skills::SkillImprover>>,
+    ) -> Self {
         self.skill_improver = Some(improver);
         self
     }
@@ -1041,10 +997,7 @@ fn try_recover_context_overflow(messages: &mut Vec<ChatMessage>, error: &anyhow:
     trim_history(messages, target);
 
     // 注入裁剪提示 (在所有 system 消息后)
-    let system_count = messages
-        .iter()
-        .take_while(|m| m.role == "system")
-        .count();
+    let system_count = messages.iter().take_while(|m| m.role == "system").count();
     messages.insert(
         system_count,
         ChatMessage {
@@ -1083,15 +1036,9 @@ fn scrub_credentials(text: &str) -> String {
     static RE_BEARER: OnceLock<Regex> = OnceLock::new();
     static RE_TOKEN: OnceLock<Regex> = OnceLock::new();
 
-    let re_sk = RE_SK.get_or_init(|| {
-        Regex::new(r"sk-[a-zA-Z0-9]{20,}").unwrap()
-    });
-    let re_bearer = RE_BEARER.get_or_init(|| {
-        Regex::new(r"Bearer\s+[a-zA-Z0-9._-]{20,}").unwrap()
-    });
-    let re_token = RE_TOKEN.get_or_init(|| {
-        Regex::new(r"token[=:]\s*[a-zA-Z0-9]{20,}").unwrap()
-    });
+    let re_sk = RE_SK.get_or_init(|| Regex::new(r"sk-[a-zA-Z0-9]{20,}").unwrap());
+    let re_bearer = RE_BEARER.get_or_init(|| Regex::new(r"Bearer\s+[a-zA-Z0-9._-]{20,}").unwrap());
+    let re_token = RE_TOKEN.get_or_init(|| Regex::new(r"token[=:]\s*[a-zA-Z0-9]{20,}").unwrap());
 
     let result = re_sk.replace_all(text, "sk-***");
     let result = re_bearer.replace_all(&result, "Bearer ***");
@@ -1219,9 +1166,10 @@ mod context_tests {
         let recovered = try_recover_context_overflow(&mut msgs, &err);
         assert!(recovered);
         // 应注入裁剪提示
-        assert!(msgs
-            .iter()
-            .any(|m| m.content.contains("部分早期对话历史已裁剪")));
+        assert!(
+            msgs.iter()
+                .any(|m| m.content.contains("部分早期对话历史已裁剪"))
+        );
     }
 
     #[test]
@@ -1236,7 +1184,12 @@ mod context_tests {
 
     #[test]
     fn try_recover_context_overflow_various_keywords() {
-        let keywords = ["token too long", "context overflow", "maximum length", "overflow error"];
+        let keywords = [
+            "token too long",
+            "context overflow",
+            "maximum length",
+            "overflow error",
+        ];
         for kw in keywords {
             let mut msgs = vec![
                 msg("system", "sys"),
@@ -1309,4 +1262,3 @@ async fn consume_stream(
         reasoning_content,
     })
 }
-

@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 
 use shadow_core::{Attributable, Role, Tool, ToolResult, ToolSpec};
@@ -71,7 +71,9 @@ impl Tool for SpawnSubagentTool {
     }
 
     async fn execute(&self, _args: Value) -> Result<ToolResult> {
-        Ok(ToolResult::err("未配置 TaskRouter。请启用 proxy feature 并初始化 shadow-proxy。"))
+        Ok(ToolResult::err(
+            "未配置 TaskRouter。请启用 proxy feature 并初始化 shadow-proxy。",
+        ))
     }
 
     fn timeout(&self) -> Option<Duration> {
@@ -102,7 +104,10 @@ mod tests {
     #[tokio::test]
     async fn test_no_router_error() {
         let tool = SpawnSubagentTool::new();
-        let result = tool.execute(json!({"action": "list_agents"})).await.unwrap();
+        let result = tool
+            .execute(json!({"action": "list_agents"}))
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(result.error.unwrap().contains("TaskRouter"));
     }

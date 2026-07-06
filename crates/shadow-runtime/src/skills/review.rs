@@ -3,8 +3,8 @@
 //! 参考 Hermes _spawn_background_review + ZeroClaw skills/review.rs
 //! 简化版: 对话后异步调用 LLM 分析, 记录建议 (不自动执行)
 
-use std::path::PathBuf;
 use shadow_core::{ChatMessage, ChatRequest, Provider};
+use std::path::PathBuf;
 
 /// review Agent 的系统提示
 const REVIEW_PROMPT: &str = r#"你是 Shadow 的后台技能审查 Agent。分析刚才的对话, 决定是否应该改变技能库。
@@ -86,11 +86,7 @@ pub async fn maybe_run_skill_review(
             );
         }
         Err(e) => {
-            shadow_log::record!(
-                WARN,
-                shadow_log::Action::Fail,
-                format!("技能审查失败: {e}")
-            );
+            shadow_log::record!(WARN, shadow_log::Action::Fail, format!("技能审查失败: {e}"));
         }
     }
 
@@ -126,10 +122,26 @@ mod tests {
     #[test]
     fn count_tool_results_filters() {
         let history = vec![
-            ChatMessage { role: "user".into(), content: "hi".into(), ..Default::default() },
-            ChatMessage { role: "tool".into(), content: "result".into(), ..Default::default() },
-            ChatMessage { role: "assistant".into(), content: "ok".into(), ..Default::default() },
-            ChatMessage { role: "tool".into(), content: "result2".into(), ..Default::default() },
+            ChatMessage {
+                role: "user".into(),
+                content: "hi".into(),
+                ..Default::default()
+            },
+            ChatMessage {
+                role: "tool".into(),
+                content: "result".into(),
+                ..Default::default()
+            },
+            ChatMessage {
+                role: "assistant".into(),
+                content: "ok".into(),
+                ..Default::default()
+            },
+            ChatMessage {
+                role: "tool".into(),
+                content: "result2".into(),
+                ..Default::default()
+            },
         ];
         assert_eq!(count_tool_results(&history), 2);
     }
@@ -137,9 +149,11 @@ mod tests {
     #[test]
     fn format_recent_history_truncates() {
         let long = "x".repeat(1000);
-        let history = vec![
-            ChatMessage { role: "user".into(), content: long, ..Default::default() },
-        ];
+        let history = vec![ChatMessage {
+            role: "user".into(),
+            content: long,
+            ..Default::default()
+        }];
         let formatted = format_recent_history(&history, 10);
         assert!(formatted.len() < 600); // 500 + 一些格式字符
     }

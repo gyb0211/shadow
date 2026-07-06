@@ -1,9 +1,9 @@
 //! FileWrite 工具 -- 写入文件内容
 
-use shadow_core::{tool_attribution, Attributable, Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use shadow_core::{Attributable, Tool, ToolResult, tool_attribution};
 
 /// FileWrite 工具 -- 将内容写入指定路径的文件
 ///
@@ -66,14 +66,18 @@ impl Tool for FileWriteTool {
             .ok_or_else(|| anyhow::anyhow!("缺少 content 参数"))?;
 
         // 是否追加模式 (默认 false)
-        let append = args.get("append").and_then(|v| v.as_bool()).unwrap_or(false);
+        let append = args
+            .get("append")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         // 确保父目录存在
         let target = std::path::Path::new(path);
         if let Some(parent) = target.parent()
-            && !parent.as_os_str().is_empty() {
-                tokio::fs::create_dir_all(parent).await.ok();
-            }
+            && !parent.as_os_str().is_empty()
+        {
+            tokio::fs::create_dir_all(parent).await.ok();
+        }
 
         if append {
             // 追加模式: 直接追加到文件末尾 (不需要原子写入)
@@ -108,16 +112,14 @@ async fn write_atomic(target: &std::path::Path, content: &str) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("写入临时文件失败 '{tmp_path:?}': {e}"))?;
 
     // 原子 rename 到目标路径
-    tokio::fs::rename(&tmp_path, target)
-        .await
-        .map_err(|e| {
-            // rename 失败时清理临时文件
-            let tmp_clone = tmp_path.clone();
-            tokio::spawn(async move {
-                tokio::fs::remove_file(&tmp_clone).await.ok();
-            });
-            anyhow::anyhow!("重命名文件失败 '{target:?}': {e}")
-        })?;
+    tokio::fs::rename(&tmp_path, target).await.map_err(|e| {
+        // rename 失败时清理临时文件
+        let tmp_clone = tmp_path.clone();
+        tokio::spawn(async move {
+            tokio::fs::remove_file(&tmp_clone).await.ok();
+        });
+        anyhow::anyhow!("重命名文件失败 '{target:?}': {e}")
+    })?;
 
     Ok(())
 }

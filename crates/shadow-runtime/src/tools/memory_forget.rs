@@ -2,11 +2,11 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
 
-use shadow_core::{tool_attribution, Attributable, Memory, Tool, ToolResult};
+use shadow_core::{Attributable, Memory, Tool, ToolResult, tool_attribution};
 
 /// MemoryForget 工具 -- 按 key 删除指定记忆条目
 ///
@@ -92,10 +92,7 @@ mod tests {
             .unwrap();
 
         let tool = MemoryForgetTool::new(Arc::clone(&mem));
-        let result = tool
-            .execute(json!({"key": "lang"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"key": "lang"})).await.unwrap();
 
         assert!(result.success);
         assert!(result.output.contains("已删除记忆"));
@@ -111,10 +108,7 @@ mod tests {
         let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(dir.path()).unwrap());
 
         let tool = MemoryForgetTool::new(mem);
-        let result = tool
-            .execute(json!({"key": "nonexistent"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"key": "nonexistent"})).await.unwrap();
 
         assert!(!result.success);
         assert!(result.error.unwrap().contains("未找到记忆"));

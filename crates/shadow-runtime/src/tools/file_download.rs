@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 
 use shadow_core::{Attributable, Role, Tool, ToolResult, ToolSpec};
@@ -33,8 +33,7 @@ impl FileDownloadTool {
 
     /// SSRF 防护 -- 检查 URL 是否安全
     fn check_url(url: &str) -> Result<()> {
-        let parsed = url::Url::parse(url)
-            .map_err(|e| anyhow::anyhow!("无效的 URL: {e}"))?;
+        let parsed = url::Url::parse(url).map_err(|e| anyhow::anyhow!("无效的 URL: {e}"))?;
 
         match parsed.scheme() {
             "http" | "https" => {}
@@ -63,9 +62,7 @@ fn is_private_ip(ip: &std::net::IpAddr) -> bool {
         std::net::IpAddr::V4(v4) => {
             v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
         }
-        std::net::IpAddr::V6(v6) => {
-            v6.is_loopback() || v6.is_unspecified()
-        }
+        std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
     }
 }
 
@@ -125,15 +122,20 @@ impl Tool for FileDownloadTool {
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
-        let url = args.get("url")
+        let url = args
+            .get("url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("缺少 url 参数"))?;
 
-        let path = args.get("path")
+        let path = args
+            .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("缺少 path 参数"))?;
 
-        let overwrite = args.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(false);
+        let overwrite = args
+            .get("overwrite")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         // SSRF 防护
         if let Err(e) = Self::check_url(url) {
@@ -264,10 +266,13 @@ mod tests {
     #[tokio::test]
     async fn test_ssrf_blocked() {
         let tool = FileDownloadTool::new();
-        let result = tool.execute(json!({
-            "url": "http://127.0.0.1:8080/file.zip",
-            "path": "/tmp/test_download.zip"
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "url": "http://127.0.0.1:8080/file.zip",
+                "path": "/tmp/test_download.zip"
+            }))
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(result.error.unwrap().contains("SSRF"));
     }

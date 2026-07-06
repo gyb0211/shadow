@@ -3,11 +3,11 @@
 //! 装饰器不修改 Tool trait 本身, 而是通过组合 (持有 inner) 包装工具,
 //! 在 execute() 前后注入额外逻辑 (速率限制、路径安全检查等).
 
-use shadow_core::{tool_attribution, Attributable, Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use serde_json::Value;
+use shadow_core::{Attributable, Tool, ToolResult, tool_attribution};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 

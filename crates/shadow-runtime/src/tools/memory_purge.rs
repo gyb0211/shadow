@@ -2,11 +2,11 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
 
-use shadow_core::{tool_attribution, Attributable, Memory, MemoryCategory, Tool, ToolResult};
+use shadow_core::{Attributable, Memory, MemoryCategory, Tool, ToolResult, tool_attribution};
 
 /// MemoryPurge 工具 -- 批量清除指定分类的记忆
 ///
@@ -173,16 +173,10 @@ mod tests {
         assert!(result.output.contains("2/2"));
 
         // core 应被清空, daily 应保留
-        let core_entries = mem
-            .list(Some(&MemoryCategory::Core))
-            .await
-            .unwrap();
+        let core_entries = mem.list(Some(&MemoryCategory::Core)).await.unwrap();
         assert!(core_entries.is_empty());
 
-        let daily_entries = mem
-            .list(Some(&MemoryCategory::Daily))
-            .await
-            .unwrap();
+        let daily_entries = mem.list(Some(&MemoryCategory::Daily)).await.unwrap();
         assert_eq!(daily_entries.len(), 1);
     }
 

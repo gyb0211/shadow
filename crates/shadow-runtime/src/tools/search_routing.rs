@@ -6,7 +6,7 @@
 //! - 隐私/匿名搜索 -> DuckDuckGo (不追踪)
 //! - 默认 -> DuckDuckGo
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// 搜索引擎类型
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,17 +31,43 @@ pub fn route_query(query: &str) -> SearchEngine {
     let lower = query.to_lowercase();
 
     // 代码/技术关键词 -> Bing
-    let code_keywords = ["rust", "python", "java", "javascript", "typescript", "golang",
-        "code", "function", "error", "stack trace", "compile", "api", "github",
-        "regex", "sql", "docker", "kubernetes", "linux", "shell", "bash",
-        "cargo", "npm", "pip", "crash", "bug", "debug"];
+    let code_keywords = [
+        "rust",
+        "python",
+        "java",
+        "javascript",
+        "typescript",
+        "golang",
+        "code",
+        "function",
+        "error",
+        "stack trace",
+        "compile",
+        "api",
+        "github",
+        "regex",
+        "sql",
+        "docker",
+        "kubernetes",
+        "linux",
+        "shell",
+        "bash",
+        "cargo",
+        "npm",
+        "pip",
+        "crash",
+        "bug",
+        "debug",
+    ];
     if code_keywords.iter().any(|k| lower.contains(k)) {
         return SearchEngine::Bing;
     }
 
     // 新闻/时事关键词 -> Google
-    let news_keywords = ["新闻", "today", "latest", "breaking", "update", "2024", "2025", "2026",
-        "刚刚", "最新", "今天", "发生", "热点", "时事"];
+    let news_keywords = [
+        "新闻", "today", "latest", "breaking", "update", "2024", "2025", "2026", "刚刚", "最新",
+        "今天", "发生", "热点", "时事",
+    ];
     if news_keywords.iter().any(|k| lower.contains(k)) {
         return SearchEngine::Google;
     }
@@ -98,7 +124,10 @@ mod tests {
 
     #[test]
     fn test_route_privacy() {
-        assert_eq!(route_query("private anonymous search"), SearchEngine::DuckDuckGo);
+        assert_eq!(
+            route_query("private anonymous search"),
+            SearchEngine::DuckDuckGo
+        );
         assert_eq!(route_query("隐私匿名搜索"), SearchEngine::DuckDuckGo);
     }
 

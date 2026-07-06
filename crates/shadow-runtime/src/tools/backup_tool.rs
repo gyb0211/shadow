@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 use std::time::Duration;
 
@@ -104,15 +104,18 @@ impl Tool for BackupTool {
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
-        let path_str = args.get("path")
+        let path_str = args
+            .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("缺少 path 参数"))?;
 
-        let suffix = args.get("suffix")
+        let suffix = args
+            .get("suffix")
             .and_then(|v| v.as_str())
             .unwrap_or(".bak");
 
-        let max_backups = args.get("max_backups")
+        let max_backups = args
+            .get("max_backups")
             .and_then(|v| v.as_u64())
             .unwrap_or(5) as usize;
 
@@ -146,7 +149,8 @@ impl Tool for BackupTool {
         } else if path.is_dir() {
             // 目录备份: tar.gz 压缩
             let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-            let dir_name = path.file_name()
+            let dir_name = path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("backup");
             let backup_path = format!("{path_str}_{timestamp}.tar.gz");
@@ -176,7 +180,8 @@ impl Tool for BackupTool {
                         .flatten()
                         .flatten()
                         .filter(|e| {
-                            e.file_name().to_str()
+                            e.file_name()
+                                .to_str()
                                 .map(|n| n.starts_with(&pattern) && n.ends_with(".tar.gz"))
                                 .unwrap_or(false)
                         })
@@ -239,10 +244,13 @@ mod tests {
         f.write_all(b"hello backup").unwrap();
 
         let tool = BackupTool::new();
-        let result = tool.execute(json!({
-            "path": file_path.to_str().unwrap(),
-            "suffix": ".bak"
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "path": file_path.to_str().unwrap(),
+                "suffix": ".bak"
+            }))
+            .await
+            .unwrap();
 
         assert!(result.success);
         assert!(result.output.contains("备份完成"));
@@ -258,9 +266,12 @@ mod tests {
     #[tokio::test]
     async fn test_backup_nonexistent() {
         let tool = BackupTool::new();
-        let result = tool.execute(json!({
-            "path": "/nonexistent/path/file.txt"
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "path": "/nonexistent/path/file.txt"
+            }))
+            .await
+            .unwrap();
 
         assert!(!result.success);
         assert!(result.error.unwrap().contains("不存在"));
@@ -273,10 +284,13 @@ mod tests {
         std::fs::write(&file_path, "data").unwrap();
 
         let tool = BackupTool::new();
-        let result = tool.execute(json!({
-            "path": file_path.to_str().unwrap(),
-            "suffix": ".old"
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "path": file_path.to_str().unwrap(),
+                "suffix": ".old"
+            }))
+            .await
+            .unwrap();
 
         assert!(result.success);
         let backup_path = format!("{}.old", file_path.to_str().unwrap());
@@ -294,10 +308,13 @@ mod tests {
         std::fs::write(&old_backup, "old content").unwrap();
 
         let tool = BackupTool::new();
-        let result = tool.execute(json!({
-            "path": file_path.to_str().unwrap(),
-            "suffix": ".bak"
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "path": file_path.to_str().unwrap(),
+                "suffix": ".bak"
+            }))
+            .await
+            .unwrap();
 
         assert!(result.success);
         // 新备份应该覆盖旧的

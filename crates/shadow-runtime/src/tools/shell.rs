@@ -5,10 +5,10 @@
 //! - 工作目录限制 (可选, 防止越权访问)
 //! - 环境变量过滤 (只传递白名单变量, 防止泄露密钥)
 
-use shadow_core::{tool_attribution, Attributable, Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use shadow_core::{Attributable, Tool, ToolResult, tool_attribution};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -183,10 +183,7 @@ mod tests {
     #[tokio::test]
     async fn shell_invalid_command() {
         let tool = ShellTool::default();
-        let result = tool
-            .execute(json!({"command": "false"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"command": "false"})).await.unwrap();
         assert!(!result.success);
     }
 
@@ -202,10 +199,7 @@ mod tests {
     #[tokio::test]
     async fn shell_dangerous_rm_rf_root() {
         let tool = ShellTool::default();
-        let result = tool
-            .execute(json!({"command": "rm -rf /"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"command": "rm -rf /"})).await.unwrap();
         assert!(!result.success);
         assert!(result.error.as_ref().unwrap().contains("危险命令"));
     }
@@ -281,10 +275,7 @@ mod tests {
     #[tokio::test]
     async fn shell_dangerous_reboot() {
         let tool = ShellTool::default();
-        let result = tool
-            .execute(json!({"command": "reboot"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"command": "reboot"})).await.unwrap();
         assert!(!result.success);
         assert!(result.error.as_ref().unwrap().contains("危险命令"));
     }
@@ -301,11 +292,7 @@ mod tests {
             .unwrap();
         // --version 应成功 (curl 已安装) 或失败, 但不应命中危险命令
         if !result.success {
-            assert!(!result
-                .error
-                .as_ref()
-                .unwrap()
-                .contains("危险命令"));
+            assert!(!result.error.as_ref().unwrap().contains("危险命令"));
         }
     }
 
@@ -351,10 +338,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let policy = SecurityPolicy::new().with_workspace(tmp.path().to_path_buf());
         let tool = ShellTool::new(policy);
-        let result = tool
-            .execute(json!({"command": "pwd"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"command": "pwd"})).await.unwrap();
         assert!(result.success);
         // pwd 应输出临时目录路径
         assert!(result.output.contains(tmp.path().to_str().unwrap()));

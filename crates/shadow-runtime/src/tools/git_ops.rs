@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 
 use shadow_core::{Attributable, Role, Tool, ToolResult, ToolSpec};
@@ -15,10 +15,28 @@ pub struct GitOpsTool;
 
 /// 允许的 Git 子命令 (白名单)
 const ALLOWED_COMMANDS: &[&str] = &[
-    "status", "diff", "log", "add", "commit", "branch",
-    "checkout", "push", "pull", "merge", "rebase", "fetch",
-    "stash", "tag", "show", "blame", "restore", "reset --soft",
-    "reset --mixed", "reset --hard", "rev-parse", "remote",
+    "status",
+    "diff",
+    "log",
+    "add",
+    "commit",
+    "branch",
+    "checkout",
+    "push",
+    "pull",
+    "merge",
+    "rebase",
+    "fetch",
+    "stash",
+    "tag",
+    "show",
+    "blame",
+    "restore",
+    "reset --soft",
+    "reset --mixed",
+    "reset --hard",
+    "rev-parse",
+    "remote",
 ];
 
 impl GitOpsTool {
@@ -29,9 +47,9 @@ impl GitOpsTool {
     /// 检查 Git 子命令是否在白名单中
     fn is_allowed(subcommand: &str) -> bool {
         let sub = subcommand.trim();
-        ALLOWED_COMMANDS.iter().any(|&allowed| {
-            sub == allowed || sub.starts_with(allowed)
-        })
+        ALLOWED_COMMANDS
+            .iter()
+            .any(|&allowed| sub == allowed || sub.starts_with(allowed))
     }
 }
 
@@ -78,7 +96,8 @@ impl Tool for GitOpsTool {
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
-        let command = args.get("command")
+        let command = args
+            .get("command")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("缺少 command 参数"))?;
 
@@ -185,7 +204,10 @@ mod tests {
     #[tokio::test]
     async fn test_disallowed_command() {
         let tool = GitOpsTool::new();
-        let result = tool.execute(json!({"command": "filter-branch"})).await.unwrap();
+        let result = tool
+            .execute(json!({"command": "filter-branch"}))
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(result.error.unwrap().contains("不允许"));
     }

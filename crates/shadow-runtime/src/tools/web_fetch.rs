@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 
 use shadow_core::{Attributable, Role, Tool, ToolResult, ToolSpec};
@@ -99,7 +99,11 @@ impl WebFetchTool {
         while i < chars.len() {
             if lower[i..].starts_with("<script") || lower[i..].starts_with("<style") {
                 // 跳过 script/style
-                let close_tag = if lower[i..].starts_with("<script") { "</script>" } else { "</style>" };
+                let close_tag = if lower[i..].starts_with("<script") {
+                    "</script>"
+                } else {
+                    "</style>"
+                };
                 if let Some(pos) = lower[i..].find(close_tag) {
                     i += pos + close_tag.len();
                 } else {
@@ -109,7 +113,14 @@ impl WebFetchTool {
             }
 
             // 标题
-            for (tag, prefix) in [("<h1", "# "), ("<h2", "## "), ("<h3", "### "), ("<h4", "#### "), ("<h5", "##### "), ("<h6", "###### ")] {
+            for (tag, prefix) in [
+                ("<h1", "# "),
+                ("<h2", "## "),
+                ("<h3", "### "),
+                ("<h4", "#### "),
+                ("<h5", "##### "),
+                ("<h6", "###### "),
+            ] {
                 if lower[i..].starts_with(tag) {
                     md.push_str(prefix);
                     if let Some(gt) = chars[i..].iter().position(|&c| c == '>') {
@@ -144,7 +155,8 @@ impl WebFetchTool {
                         if let Some(gt) = rest.find('>') {
                             let text_start = gt + 1;
                             if let Some(close) = rest[text_start..].find("</a>") {
-                                let link_text = Self::strip_html(&rest[text_start..text_start + close]);
+                                let link_text =
+                                    Self::strip_html(&rest[text_start..text_start + close]);
                                 md.push_str(&format!("[{link_text}]({href})"));
                                 i += text_start + close + 4;
                                 continue;
@@ -270,15 +282,18 @@ impl Tool for WebFetchTool {
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
-        let url = args.get("url")
+        let url = args
+            .get("url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("缺少 url 参数"))?;
 
-        let format = args.get("format")
+        let format = args
+            .get("format")
             .and_then(|v| v.as_str())
             .unwrap_or("text");
 
-        let max_length = args.get("max_length")
+        let max_length = args
+            .get("max_length")
             .and_then(|v| v.as_u64())
             .unwrap_or(50_000) as usize;
 
@@ -328,7 +343,11 @@ impl Tool for WebFetchTool {
 
         // 截断
         let result = if processed.len() > max_length {
-            format!("{}\n...(截断, 共 {} 字符)", &processed[..max_length], processed.len())
+            format!(
+                "{}\n...(截断, 共 {} 字符)",
+                &processed[..max_length],
+                processed.len()
+            )
         } else {
             processed
         };

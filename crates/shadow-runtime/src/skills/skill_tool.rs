@@ -5,10 +5,10 @@
 //! - 命令模板中的 `{arg_name}` 占位符会被模型提供的参数值替换
 //! - 锁定的参数 (command 模板和 arg 名称) 不可被模型覆盖
 
-use shadow_core::{Attributable, Role, Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use shadow_core::{Attributable, Role, Tool, ToolResult};
 use std::time::Duration;
 
 use super::SkillTool;
@@ -127,10 +127,7 @@ impl Tool for SkillShellTool {
         let mut command = self.command.clone();
 
         for arg_name in &self.args {
-            let value = args
-                .get(arg_name)
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let value = args.get(arg_name).and_then(|v| v.as_str()).unwrap_or("");
             // 替换 {arg_name} 占位符
             command = command.replace(&format!("{{{}}}", arg_name), value);
         }
@@ -277,7 +274,10 @@ mod tests {
     #[tokio::test]
     async fn test_execute_multiple_args() {
         let tool = make_tool("echo", "echo {a} {b}", vec!["a", "b"]);
-        let result = tool.execute(json!({"a": "hello", "b": "world"})).await.unwrap();
+        let result = tool
+            .execute(json!({"a": "hello", "b": "world"}))
+            .await
+            .unwrap();
         assert!(result.success);
         assert!(result.output.contains("hello world"));
     }

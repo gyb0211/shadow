@@ -10,7 +10,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -52,9 +52,7 @@ fn is_private_ip(ip: &std::net::IpAddr) -> bool {
         std::net::IpAddr::V4(v4) => {
             v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
         }
-        std::net::IpAddr::V6(v6) => {
-            v6.is_loopback() || v6.is_unspecified()
-        }
+        std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
     }
 }
 
@@ -112,12 +110,14 @@ impl Tool for FileUploadBundleTool {
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
-        let url = args.get("url")
+        let url = args
+            .get("url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("缺少 url 参数"))?
             .to_string();
 
-        let paths: Vec<String> = args.get("paths")
+        let paths: Vec<String> = args
+            .get("paths")
             .and_then(|v| v.as_array())
             .ok_or_else(|| anyhow::anyhow!("缺少 paths 参数 (应为字符串数组)"))?
             .iter()
@@ -128,18 +128,22 @@ impl Tool for FileUploadBundleTool {
             return Ok(ToolResult::err("文件路径列表为空"));
         }
 
-        let field_prefix = args.get("field_name")
+        let field_prefix = args
+            .get("field_name")
             .and_then(|v| v.as_str())
             .unwrap_or("files")
             .to_string();
 
-        let headers: HashMap<String, String> = args.get("headers")
+        let headers: HashMap<String, String> = args
+            .get("headers")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
 
         // SSRF 防护 (先检查)
         if !Self::is_url_safe(&url) {
-            return Ok(ToolResult::err("SSRF 防护: URL 不安全 (禁止内网/localhost)"));
+            return Ok(ToolResult::err(
+                "SSRF 防护: URL 不安全 (禁止内网/localhost)",
+            ));
         }
 
         // 检查所有文件是否存在且是文件
@@ -178,7 +182,8 @@ impl Tool for FileUploadBundleTool {
                 }
             };
 
-            let filename = path.file_name()
+            let filename = path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("upload.bin")
                 .to_string();
@@ -221,12 +226,18 @@ impl Tool for FileUploadBundleTool {
 
                 let summary = format!(
                     "批量上传: {} 个文件 -> HTTP {}\n响应:\n{}",
-                    valid_files.len(), status_code, body_display
+                    valid_files.len(),
+                    status_code,
+                    body_display
                 );
 
                 // 如果有部分文件出错, 附加警告
                 let full_output = if !errors.is_empty() {
-                    format!("{summary}\n\n警告 ({} 个文件跳过):\n{}", errors.len(), errors.join("\n"))
+                    format!(
+                        "{summary}\n\n警告 ({} 个文件跳过):\n{}",
+                        errors.len(),
+                        errors.join("\n")
+                    )
                 } else {
                     summary
                 };
@@ -270,7 +281,9 @@ mod tests {
 
     #[test]
     fn test_url_safety() {
-        assert!(FileUploadBundleTool::is_url_safe("https://example.com/upload"));
+        assert!(FileUploadBundleTool::is_url_safe(
+            "https://example.com/upload"
+        ));
         assert!(!FileUploadBundleTool::is_url_safe("http://localhost:8080"));
         assert!(!FileUploadBundleTool::is_url_safe("http://192.168.1.1"));
         assert!(!FileUploadBundleTool::is_url_safe("ftp://example.com"));
@@ -296,10 +309,13 @@ mod tests {
     #[tokio::test]
     async fn test_ssrf_blocked() {
         let tool = FileUploadBundleTool::new();
-        let result = tool.execute(json!({
-            "url": "http://127.0.0.1:8080",
-            "paths": ["/tmp/test1.txt"]
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "url": "http://127.0.0.1:8080",
+                "paths": ["/tmp/test1.txt"]
+            }))
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(result.error.unwrap().contains("SSRF"));
     }
@@ -307,10 +323,13 @@ mod tests {
     #[tokio::test]
     async fn test_empty_paths() {
         let tool = FileUploadBundleTool::new();
-        let result = tool.execute(json!({
-            "url": "https://example.com/upload",
-            "paths": []
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "url": "https://example.com/upload",
+                "paths": []
+            }))
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(result.error.unwrap().contains("为空"));
     }
@@ -325,10 +344,13 @@ mod tests {
     #[tokio::test]
     async fn test_all_files_nonexistent() {
         let tool = FileUploadBundleTool::new();
-        let result = tool.execute(json!({
-            "url": "https://example.com/upload",
-            "paths": ["/nonexistent/a.txt", "/nonexistent/b.txt"]
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "url": "https://example.com/upload",
+                "paths": ["/nonexistent/a.txt", "/nonexistent/b.txt"]
+            }))
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(result.error.unwrap().contains("没有有效的文件"));
     }
@@ -342,13 +364,19 @@ mod tests {
 
         let tool = FileUploadBundleTool::new();
         // 一个存在一个不存在 -> SSRF 先返回
-        let result = tool.execute(json!({
-            "url": "https://example.com/upload",
-            "paths": [file1.to_str().unwrap(), "/nonexistent/missing.txt"]
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "url": "https://example.com/upload",
+                "paths": [file1.to_str().unwrap(), "/nonexistent/missing.txt"]
+            }))
+            .await
+            .unwrap();
         // URL 安全 -> 继续检查文件 -> 1 个有效 1 个无效 -> 尝试上传到 example.com
         // example.com 不支持 POST upload, 会返回 HTTP 错误
         // 但不会返回 "没有有效的文件" 错误
-        assert!(result.output.contains("批量上传") || result.error.as_deref().unwrap_or("").contains("上传"));
+        assert!(
+            result.output.contains("批量上传")
+                || result.error.as_deref().unwrap_or("").contains("上传")
+        );
     }
 }

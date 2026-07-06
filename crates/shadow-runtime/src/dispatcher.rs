@@ -90,10 +90,17 @@ impl XmlToolDispatcher {
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown")
                     .to_string();
-                let arguments = val.get("arguments").cloned().unwrap_or(serde_json::Value::Null);
+                let arguments = val
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
                 // XML 协议无 id, 用序号生成
                 let id = format!("xml-{}", calls.len());
-                calls.push(ToolCall { id, name, arguments });
+                calls.push(ToolCall {
+                    id,
+                    name,
+                    arguments,
+                });
             }
 
             // 继续查找剩余文本

@@ -2,11 +2,13 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
 
-use shadow_core::{tool_attribution, Attributable, Memory, MemoryCategory, MemoryEntry, Tool, ToolResult};
+use shadow_core::{
+    Attributable, Memory, MemoryCategory, MemoryEntry, Tool, ToolResult, tool_attribution,
+};
 
 /// MemoryExport 工具 -- 将记忆导出为指定格式
 ///
@@ -151,15 +153,25 @@ mod tests {
 
     /// 准备测试数据: 存入 3 条不同分类的记忆
     async fn setup(mem: &Arc<dyn Memory>) {
-        mem.store("lang", "Rust 是一门系统编程语言", MemoryCategory::Core, None)
-            .await
-            .unwrap();
+        mem.store(
+            "lang",
+            "Rust 是一门系统编程语言",
+            MemoryCategory::Core,
+            None,
+        )
+        .await
+        .unwrap();
         mem.store("todo", "今天要写测试", MemoryCategory::Daily, None)
             .await
             .unwrap();
-        mem.store("ctx", "用户在讨论记忆工具", MemoryCategory::Conversation, None)
-            .await
-            .unwrap();
+        mem.store(
+            "ctx",
+            "用户在讨论记忆工具",
+            MemoryCategory::Conversation,
+            None,
+        )
+        .await
+        .unwrap();
     }
 
     /// 测试: 默认 json 格式导出全部
@@ -186,10 +198,7 @@ mod tests {
         setup(&mem).await;
 
         let tool = MemoryExportTool::new(Arc::clone(&mem));
-        let result = tool
-            .execute(json!({"format": "markdown"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"format": "markdown"})).await.unwrap();
 
         assert!(result.success);
         assert!(result.output.contains("| Key |"));
@@ -205,10 +214,7 @@ mod tests {
         setup(&mem).await;
 
         let tool = MemoryExportTool::new(Arc::clone(&mem));
-        let result = tool
-            .execute(json!({"format": "text"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"format": "text"})).await.unwrap();
 
         assert!(result.success);
         assert!(result.output.contains("[core] lang"));
@@ -255,10 +261,7 @@ mod tests {
         setup(&mem).await;
 
         let tool = MemoryExportTool::new(Arc::clone(&mem));
-        let result = tool
-            .execute(json!({"format": "xml"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"format": "xml"})).await.unwrap();
 
         assert!(!result.success);
         assert!(result.error.unwrap().contains("不支持的格式"));

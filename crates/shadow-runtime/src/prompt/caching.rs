@@ -5,7 +5,7 @@
 //! 2-4. 最后 3 条非 system 消息 (滚动窗口)
 //! 效果: 多轮对话输入 token 成本降低 ~75%
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// 应用 system_and_3 缓存策略
 ///

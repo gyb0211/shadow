@@ -1,9 +1,9 @@
 //! ContentSearch 工具 -- 在文件内容中搜索文本 (类似 grep)
 
-use shadow_core::{tool_attribution, Attributable, Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use shadow_core::{Attributable, Tool, ToolResult, tool_attribution};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -77,9 +77,7 @@ impl Tool for ContentSearchTool {
         .map_err(|e| anyhow::anyhow!("搜索任务执行失败: {e}"))??;
 
         if results.is_empty() {
-            return Ok(ToolResult::ok(format!(
-                "未找到包含 '{pattern}' 的内容"
-            )));
+            return Ok(ToolResult::ok(format!("未找到包含 '{pattern}' 的内容")));
         }
 
         Ok(ToolResult::ok(results.join("\n")))
@@ -90,13 +88,7 @@ impl Tool for ContentSearchTool {
 fn search_content(base: &Path, pattern: &str, max: usize) -> Result<Vec<String>> {
     let mut results = Vec::new();
 
-    fn walk(
-        dir: &Path,
-        _base: &Path,
-        pattern: &str,
-        results: &mut Vec<String>,
-        max: usize,
-    ) {
+    fn walk(dir: &Path, _base: &Path, pattern: &str, results: &mut Vec<String>, max: usize) {
         if results.len() >= max {
             return;
         }
@@ -115,22 +107,25 @@ fn search_content(base: &Path, pattern: &str, max: usize) -> Result<Vec<String>>
             if path.is_dir() {
                 // 跳过隐藏目录 (如 .git, .cargo)
                 if let Some(name) = path.file_name().and_then(|n| n.to_str())
-                    && name.starts_with('.') {
-                        continue;
-                    }
+                    && name.starts_with('.')
+                {
+                    continue;
+                }
                 walk(&path, _base, pattern, results, max);
             } else if path.is_file() {
                 // 跳过隐藏文件
                 if let Some(name) = path.file_name().and_then(|n| n.to_str())
-                    && name.starts_with('.') {
-                        continue;
-                    }
+                    && name.starts_with('.')
+                {
+                    continue;
+                }
 
                 // 跳过超大文件 (超过 1MB)
                 if let Ok(meta) = entry.metadata()
-                    && meta.len() > 1024 * 1024 {
-                        continue;
-                    }
+                    && meta.len() > 1024 * 1024
+                {
+                    continue;
+                }
 
                 search_file(&path, pattern, results, max);
             }

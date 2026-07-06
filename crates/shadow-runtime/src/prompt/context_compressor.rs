@@ -10,13 +10,18 @@ const CHARS_PER_TOKEN: usize = 4;
 
 /// 估算消息列表的 token 数 (粗略: 1 token ≈ 4 字符)
 pub fn estimate_tokens(messages: &[ChatMessage]) -> usize {
-    messages.iter().map(|m| {
-        let content_len = m.content.chars().count();
-        let tool_calls_len: usize = m.tool_calls.iter()
-            .map(|tc| tc.name.len() + tc.arguments.to_string().len())
-            .sum();
-        (content_len + tool_calls_len) / CHARS_PER_TOKEN
-    }).sum()
+    messages
+        .iter()
+        .map(|m| {
+            let content_len = m.content.chars().count();
+            let tool_calls_len: usize = m
+                .tool_calls
+                .iter()
+                .map(|tc| tc.name.len() + tc.arguments.to_string().len())
+                .sum();
+            (content_len + tool_calls_len) / CHARS_PER_TOKEN
+        })
+        .sum()
 }
 
 /// 判断是否需要压缩
@@ -29,7 +34,8 @@ pub fn should_compress(messages: &[ChatMessage], max_tokens: usize) -> bool {
 /// 将 role="tool" 的消息中, 超过 keep_recent 条的旧消息内容替换为占位符
 pub fn prune_old_tool_outputs(messages: &mut Vec<ChatMessage>, keep_recent: usize) {
     // 收集 tool 消息的索引 (从后往前)
-    let tool_indices: Vec<usize> = messages.iter()
+    let tool_indices: Vec<usize> = messages
+        .iter()
         .enumerate()
         .filter(|(_, m)| m.role == "tool")
         .map(|(i, _)| i)
@@ -61,7 +67,9 @@ pub fn prune_to_fit(messages: &mut Vec<ChatMessage>, max_tokens: usize) -> usize
         }
 
         // 找到最旧的未被清理的 tool 消息
-        let oldest = messages.iter().enumerate()
+        let oldest = messages
+            .iter()
+            .enumerate()
             .find(|(_, m)| m.role == "tool" && m.content != PRUNED_PLACEHOLDER)
             .map(|(i, _)| i);
 
@@ -92,7 +100,7 @@ mod tests {
     #[test]
     fn test_estimate_tokens() {
         let msgs = vec![
-            make_msg("user", "hello world"),  // 11 chars / 4 ≈ 2
+            make_msg("user", "hello world"),   // 11 chars / 4 ≈ 2
             make_msg("assistant", "hi there"), // 8 chars / 4 ≈ 2
         ];
         let tokens = estimate_tokens(&msgs);
@@ -125,10 +133,7 @@ mod tests {
 
     #[test]
     fn test_prune_keeps_all_if_fewer_than_limit() {
-        let mut msgs = vec![
-            make_msg("tool", "result 1"),
-            make_msg("tool", "result 2"),
-        ];
+        let mut msgs = vec![make_msg("tool", "result 1"), make_msg("tool", "result 2")];
 
         prune_old_tool_outputs(&mut msgs, 5);
 
@@ -146,15 +151,17 @@ mod tests {
 
         let pruned = prune_to_fit(&mut msgs, 50);
         assert!(pruned > 0);
-        assert!(estimate_tokens(&msgs) <= 50 || msgs.iter().all(|m| m.content == PRUNED_PLACEHOLDER || m.role != "tool"));
+        assert!(
+            estimate_tokens(&msgs) <= 50
+                || msgs
+                    .iter()
+                    .all(|m| m.content == PRUNED_PLACEHOLDER || m.role != "tool")
+        );
     }
 
     #[test]
     fn test_no_prune_when_no_tool_messages() {
-        let mut msgs = vec![
-            make_msg("user", "hello"),
-            make_msg("assistant", "hi"),
-        ];
+        let mut msgs = vec![make_msg("user", "hello"), make_msg("assistant", "hi")];
         let pruned = prune_to_fit(&mut msgs, 1);
         assert_eq!(pruned, 0);
     }

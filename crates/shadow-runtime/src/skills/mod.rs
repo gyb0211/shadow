@@ -44,9 +44,9 @@ pub use review::maybe_run_skill_review;
 pub use skill_http::SkillHttpTool;
 pub use skill_tool::SkillShellTool;
 
-use shadow_core::Tool;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use shadow_core::Tool;
 use std::path::Path;
 
 // ── 数据结构 ──────────────────────────────────────────────────────────
@@ -134,10 +134,7 @@ impl SkillsService {
                     }
                     "builtin" => {
                         // TODO: 后续实现内置类型工具
-                        tracing::debug!(
-                            "跳过未实现的技能工具类型: builtin ({})",
-                            tool_def.name
-                        );
+                        tracing::debug!("跳过未实现的技能工具类型: builtin ({})", tool_def.name);
                     }
                     _ => {
                         tracing::warn!("未知技能工具类型: {}", tool_def.kind);
@@ -184,8 +181,8 @@ pub fn parse_skill_md(content: &str) -> Result<Skill> {
 
     // 解析 frontmatter YAML
     let yaml_value = parse_yaml(&frontmatter)?;
-    let fm: SkillFrontmatter = serde_json::from_value(yaml_value)
-        .context("解析 frontmatter 失败")?;
+    let fm: SkillFrontmatter =
+        serde_json::from_value(yaml_value).context("解析 frontmatter 失败")?;
 
     if fm.name.is_empty() {
         return Err(anyhow::anyhow!("技能名称 (name) 不能为空"));
@@ -522,11 +519,7 @@ pub fn load_skills_from_dir(skills_dir: &Path) -> Result<Vec<Skill>> {
         };
 
         // 只处理子目录
-        if !entry
-            .file_type()
-            .map(|t| t.is_dir())
-            .unwrap_or(false)
-        {
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             continue;
         }
 
@@ -667,10 +660,7 @@ tools:
         let content = "just some text without frontmatter";
         let result = parse_skill_md(content);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("frontmatter"));
+        assert!(result.unwrap_err().to_string().contains("frontmatter"));
     }
 
     #[test]
@@ -678,10 +668,7 @@ tools:
         let content = "---\nname: test\nthis has no closing marker";
         let result = parse_skill_md(content);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("未闭合"));
+        assert!(result.unwrap_err().to_string().contains("未闭合"));
     }
 
     #[test]
@@ -689,10 +676,7 @@ tools:
         let content = "---\nname: \ndescription: test\n---\nbody";
         let result = parse_skill_md(content);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("名称"));
+        assert!(result.unwrap_err().to_string().contains("名称"));
     }
 
     #[test]

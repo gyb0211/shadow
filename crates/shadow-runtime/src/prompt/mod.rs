@@ -10,29 +10,49 @@
 //! - [`injection_guard`]: Prompt 注入防护 -- 检测上下文文件中的注入攻击
 //! - [`caching`]: Anthropic prompt 缓存 -- system_and_3 策略
 //! - [`truncation`]: 工具输出截断 -- 头尾保留 + JSON 感知
+//! - [`bootstrap`]: Bootstrap 文件系统 -- 加载 workspace 身份文件注入 prompt
+//! - [`tools_payload`]: ToolsPayload 多态 -- 不同 provider 的工具格式适配
+//! - [`prompt_guided`]: PromptGuided 降级 -- 不支持原生工具时用文本解析
+//! - [`persona`]: Persona 系统 -- 多角色切换
 
-use shadow_core::AutonomyLevel;
 use chrono::Local;
+use shadow_core::AutonomyLevel;
 use std::path::PathBuf;
 
 // ── 子模块 ─────────────────────────────────────────────────────────
-/// 安全策略注入 -- 将具体安全约束写入 system prompt
-pub mod safety_injection;
+/// Bootstrap 文件系统 -- 加载 workspace 身份文件注入 prompt
+pub mod bootstrap;
+/// Anthropic prompt 缓存 -- system_and_3 策略
+pub mod caching;
 /// 上下文压缩 -- 工具输出预清理 (不含 LLM 摘要, 那个需要 Provider)
 pub mod context_compressor;
 /// Prompt 注入防护 -- 检测上下文文件中的注入攻击
 pub mod injection_guard;
-/// Anthropic prompt 缓存 -- system_and_3 策略
-pub mod caching;
+/// Persona 系统 -- 多角色切换
+pub mod persona;
+/// PromptGuided 降级 -- 不支持原生工具时用文本解析
+pub mod prompt_guided;
+/// 安全策略注入 -- 将具体安全约束写入 system prompt
+pub mod safety_injection;
+/// ToolsPayload 多态 -- 不同 provider 的工具格式适配
+pub mod tools_payload;
 /// 工具输出截断 -- 头尾保留 + JSON 感知
 pub mod truncation;
 
 // 重新导出子模块的公共 API, 方便外部通过 `prompt::` 直接使用
-pub use context_compressor::{estimate_tokens, prune_old_tool_outputs, prune_to_fit, should_compress};
-pub use injection_guard::{scan_context_content, ScanResult};
-pub use safety_injection::SafetyInjectionSection;
-pub use truncation::{truncate_tool_message, truncate_tool_result};
+pub use bootstrap::BootstrapSection;
 pub use caching::apply_cache_control;
+pub use context_compressor::{
+    estimate_tokens, prune_old_tool_outputs, prune_to_fit, should_compress,
+};
+pub use injection_guard::{ScanResult, scan_context_content};
+pub use persona::{Persona, PersonaSection, default_persona, get_persona, list_personas};
+pub use prompt_guided::{
+    ParsedToolCall, build_prompt_guided_instructions, parse_prompt_guided_response,
+};
+pub use safety_injection::SafetyInjectionSection;
+pub use tools_payload::{ToolFormat, ToolsPayload, convert_tools};
+pub use truncation::{truncate_tool_message, truncate_tool_result};
 
 /// 系统提示段 -- 可插拔的系统提示组成部分
 pub trait PromptSection: Send + Sync {

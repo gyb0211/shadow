@@ -1,9 +1,9 @@
 //! MemoryRecall 工具 -- 检索相关记忆
 
-use shadow_core::{tool_attribution, Attributable, Memory, Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use shadow_core::{Attributable, Memory, Tool, ToolResult, tool_attribution};
 use std::sync::Arc;
 use std::time::Duration;
 

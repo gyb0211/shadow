@@ -68,15 +68,15 @@ pub use memory_recall::MemoryRecallTool;
 pub use memory_store::MemoryStoreTool;
 pub use registry::ToolRegistry;
 pub use shell::ShellTool;
-pub use skill_manage::{SkillListTool, SkillViewTool, SkillManageTool};
+pub use skill_manage::{SkillListTool, SkillManageTool, SkillViewTool};
 pub use spawn_subagent::SpawnSubagentTool;
 pub use web_fetch::WebFetchTool;
 pub use web_search::WebSearchTool;
 pub use wrapper::{PathGuardedTool, RateLimitedTool, ToolWrapper};
 
+use crate::security::SecurityPolicy;
 use shadow_core::Memory;
 use std::sync::Arc;
-use crate::security::SecurityPolicy;
 
 /// 创建默认工具集 -- 返回所有内置工具, 用装饰器包装敏感工具
 pub fn default_tools(memory: Option<Arc<dyn Memory>>) -> ToolRegistry {
@@ -100,13 +100,34 @@ pub fn default_tools_with_workspace(
     )));
 
     // 文件工具 -- 路径安全
-    registry.register(Box::new(PathGuardedTool::new(Box::new(FileReadTool), workspace.clone())));
-    registry.register(Box::new(PathGuardedTool::new(Box::new(FileWriteTool), workspace.clone())));
-    registry.register(Box::new(PathGuardedTool::new(Box::new(FileEditTool), workspace.clone())));
-    registry.register(Box::new(PathGuardedTool::new(Box::new(FileDownloadTool::new()), workspace.clone())));
-    registry.register(Box::new(PathGuardedTool::new(Box::new(FileUploadTool::new()), workspace.clone())));
-    registry.register(Box::new(PathGuardedTool::new(Box::new(FileUploadBundleTool::new()), workspace.clone())));
-    registry.register(Box::new(PathGuardedTool::new(Box::new(BackupTool::new()), workspace.clone())));
+    registry.register(Box::new(PathGuardedTool::new(
+        Box::new(FileReadTool),
+        workspace.clone(),
+    )));
+    registry.register(Box::new(PathGuardedTool::new(
+        Box::new(FileWriteTool),
+        workspace.clone(),
+    )));
+    registry.register(Box::new(PathGuardedTool::new(
+        Box::new(FileEditTool),
+        workspace.clone(),
+    )));
+    registry.register(Box::new(PathGuardedTool::new(
+        Box::new(FileDownloadTool::new()),
+        workspace.clone(),
+    )));
+    registry.register(Box::new(PathGuardedTool::new(
+        Box::new(FileUploadTool::new()),
+        workspace.clone(),
+    )));
+    registry.register(Box::new(PathGuardedTool::new(
+        Box::new(FileUploadBundleTool::new()),
+        workspace.clone(),
+    )));
+    registry.register(Box::new(PathGuardedTool::new(
+        Box::new(BackupTool::new()),
+        workspace.clone(),
+    )));
 
     // 文件搜索
     registry.register(Box::new(GlobSearchTool));

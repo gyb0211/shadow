@@ -4,13 +4,13 @@
 //! 1. before_chat 注入的 memory_context 出现在传给 provider 的 system 消息中
 //! 2. after_chat 在对话后被调用, 记忆被存储 (可被下一轮 recall)
 
+use anyhow::Result;
+use async_trait::async_trait;
 use shadow_core::{Attributable, ChatRequest, ChatResponse, Memory, Provider, Role, TokenUsage};
-use shadow_memory::sqlite::SqliteMemory;
 use shadow_memory::DefaultMemoryStrategy;
+use shadow_memory::sqlite::SqliteMemory;
 use shadow_runtime::agent::{Agent, StreamDelta};
 use std::sync::{Arc, Mutex};
-use async_trait::async_trait;
-use anyhow::Result;
 
 /// 捕获请求 + 返回预设响应的 mock provider
 struct CapturingProvider {
@@ -19,13 +19,19 @@ struct CapturingProvider {
 }
 
 impl Attributable for CapturingProvider {
-    fn role(&self) -> Role { Role::Provider }
-    fn alias(&self) -> &str { "mock" }
+    fn role(&self) -> Role {
+        Role::Provider
+    }
+    fn alias(&self) -> &str {
+        "mock"
+    }
 }
 
 #[async_trait]
 impl Provider for CapturingProvider {
-    fn provider_type(&self) -> &str { "mock" }
+    fn provider_type(&self) -> &str {
+        "mock"
+    }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         // 捕获 system 消息内容
@@ -53,9 +59,14 @@ async fn before_chat_injects_memory_into_system_prompt() {
     let mem = Arc::new(SqliteMemory::new(dir.path()).unwrap());
 
     // 预置一条记忆, recall "Rust" 时应命中
-    mem.store("rust", "Rust 是一门系统编程语言", shadow_core::MemoryCategory::Core, None)
-        .await
-        .unwrap();
+    mem.store(
+        "rust",
+        "Rust 是一门系统编程语言",
+        shadow_core::MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
 
     let captured_system: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let provider = Arc::new(CapturingProvider {

@@ -17,10 +17,10 @@
 //! 模型调用 `skill__lookup` 并传入 `{"ip": "8.8.8.8"}` 时,
 //! 会请求 `https://ipinfo.io/8.8.8.8/json` 并返回响应体.
 
-use shadow_core::{Attributable, Role, Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use shadow_core::{Attributable, Role, Tool, ToolResult};
 use std::time::Duration;
 
 use super::SkillTool;
@@ -50,7 +50,10 @@ impl SkillHttpTool {
     /// - `tool_def`: 技能工具定义 (command 字段作为 URL 模板)
     pub fn new(skill_name: &str, tool_def: SkillTool) -> Self {
         let full_name = format!("{}__{}", skill_name, tool_def.name);
-        Self { full_name, tool_def }
+        Self {
+            full_name,
+            tool_def,
+        }
     }
 }
 

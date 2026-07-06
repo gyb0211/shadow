@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -27,8 +27,7 @@ impl HttpRequestTool {
 
     /// SSRF 防护 -- 检查 URL 是否安全
     pub(crate) fn is_url_safe(url: &str) -> Result<()> {
-        let parsed = url::Url::parse(url)
-            .map_err(|e| anyhow::anyhow!("无效的 URL: {e}"))?;
+        let parsed = url::Url::parse(url).map_err(|e| anyhow::anyhow!("无效的 URL: {e}"))?;
 
         // 仅允许 http/https
         match parsed.scheme() {
@@ -139,23 +138,26 @@ impl Tool for HttpRequestTool {
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
-        let url = args.get("url")
+        let url = args
+            .get("url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("缺少 url 参数"))?;
 
-        let method = args.get("method")
+        let method = args
+            .get("method")
             .and_then(|v| v.as_str())
             .unwrap_or("GET")
             .to_uppercase();
 
-        let headers: HashMap<String, String> = args.get("headers")
+        let headers: HashMap<String, String> = args
+            .get("headers")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
 
-        let body = args.get("body")
-            .and_then(|v| v.as_str());
+        let body = args.get("body").and_then(|v| v.as_str());
 
-        let timeout_secs = args.get("timeout_secs")
+        let timeout_secs = args
+            .get("timeout_secs")
             .and_then(|v| v.as_u64())
             .unwrap_or(30);
 
@@ -181,7 +183,10 @@ impl Tool for HttpRequestTool {
         // 添加请求体
         if let Some(b) = body {
             // 如果 Content-Type 未设置, 默认 application/json
-            if !headers.keys().any(|k| k.eq_ignore_ascii_case("content-type")) {
+            if !headers
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case("content-type"))
+            {
                 req = req.header("Content-Type", "application/json");
             }
             req = req.body(b.to_string());
@@ -208,7 +213,11 @@ impl Tool for HttpRequestTool {
                 let body_text = resp.text().await.unwrap_or_default();
                 let truncated = body_text.len() > 10_240;
                 let body_display = if truncated {
-                    format!("{}...\n(截断, 共 {} 字节)", &body_text[..10_240], body_text.len())
+                    format!(
+                        "{}...\n(截断, 共 {} 字节)",
+                        &body_text[..10_240],
+                        body_text.len()
+                    )
                 } else {
                     body_text
                 };
@@ -294,9 +303,12 @@ mod tests {
     #[tokio::test]
     async fn test_ssrf_blocked() {
         let tool = HttpRequestTool::new();
-        let result = tool.execute(json!({
-            "url": "http://127.0.0.1:8080"
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "url": "http://127.0.0.1:8080"
+            }))
+            .await
+            .unwrap();
 
         assert!(!result.success);
         assert!(result.error.unwrap().contains("SSRF"));

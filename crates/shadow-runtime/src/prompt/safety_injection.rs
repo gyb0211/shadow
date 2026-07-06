@@ -148,10 +148,7 @@ mod tests {
         assert!(text.contains("安全策略注入"), "应包含标题");
         // 自治等级
         assert!(text.contains("[自治等级]"), "应包含自治等级");
-        assert!(
-            text.contains("完全自主模式"),
-            "Full 等级应包含完全自主描述"
-        );
+        assert!(text.contains("完全自主模式"), "Full 等级应包含完全自主描述");
         // 黑名单 (默认包含 rm -rf /, mkfs 等)
         assert!(text.contains("[命令黑名单]"), "应包含命令黑名单");
         assert!(text.contains("rm -rf /"), "黑名单应包含 rm -rf /");
@@ -166,17 +163,13 @@ mod tests {
             "无工作目录限制时不应输出该行"
         );
         // 默认无白名单 -> 不应出现白名单行
-        assert!(
-            !text.contains("[命令白名单]"),
-            "白名单为空时不应输出该行"
-        );
+        assert!(!text.contains("[命令白名单]"), "白名单为空时不应输出该行");
     }
 
     /// 测试: Supervised 自治等级描述
     #[test]
     fn test_autonomy_supervised() {
-        let section =
-            SafetyInjectionSection::new(SecurityPolicy::new(), AutonomyLevel::Supervised);
+        let section = SafetyInjectionSection::new(SecurityPolicy::new(), AutonomyLevel::Supervised);
         let text = section.render(&make_ctx());
         assert!(
             text.contains("受监督模式"),
@@ -212,8 +205,7 @@ mod tests {
     /// 测试: 设置工作目录后应输出工作目录限制行
     #[test]
     fn test_render_with_workspace() {
-        let policy =
-            SecurityPolicy::new().with_workspace(PathBuf::from("/tmp/shadow-workspace"));
+        let policy = SecurityPolicy::new().with_workspace(PathBuf::from("/tmp/shadow-workspace"));
         let section = SafetyInjectionSection::new(policy, AutonomyLevel::Supervised);
         let text = section.render(&make_ctx());
 

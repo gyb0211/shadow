@@ -27,7 +27,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use cron::Schedule;
 use parking_lot::Mutex;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::path::Path;
 
 use shadow_log::Action;
@@ -573,8 +573,8 @@ mod tests {
     #[test]
     fn add_job() {
         let scheduler = CronScheduler::new_in_memory().unwrap();
-        let job = CronJob::new("测试任务", "0 * * * * *", "echo hello")
-            .with_agent_alias("test-agent");
+        let job =
+            CronJob::new("测试任务", "0 * * * * *", "echo hello").with_agent_alias("test-agent");
         let id = scheduler.add_job(job).unwrap();
         // ID 应为正数 (SQLite 自增主键从 1 开始)
         assert!(id > 0);
@@ -764,10 +764,12 @@ mod tests {
         let job = CronJob::new("坏表达式", "not a cron expr", "echo error");
         let result = scheduler.add_job(job);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("无效的 cron 表达式"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("无效的 cron 表达式")
+        );
     }
 
     /// 测试: 更新下次运行时间
