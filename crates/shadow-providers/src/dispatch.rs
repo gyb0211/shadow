@@ -10,7 +10,7 @@ use anyhow::Result;
 use futures::stream::{unfold, BoxStream};
 use futures::StreamExt;
 use shadow_core::provider::ChatChunk;
-use shadow_core::{ChatRequest, ChatResponse, Provider};
+use shadow_core::{ChatRequest, ChatResponse, ModelProvider};
 use std::sync::Arc;
 use tracing::Instrument;
 
@@ -19,23 +19,23 @@ use tracing::Instrument;
 /// 当前主路径用 `ProviderDispatchRef` (零开销借用). 保留此 Arc-backed 版本
 /// 供 Phase 2 Reliable 层 / 异步任务所有权场景使用.
 pub struct ProviderDispatch {
-    inner: Arc<dyn Provider>,
+    inner: Arc<dyn ModelProvider>,
 }
 
 /// 引用 dispatch -- 短期借用, 零开销
 pub struct ProviderDispatchRef<'a> {
-    inner: &'a dyn Provider,
+    inner: &'a dyn ModelProvider,
 }
 
 impl ProviderDispatch {
     #[must_use]
-    pub fn new(inner: Arc<dyn Provider>) -> Self {
+    pub fn new(inner: Arc<dyn ModelProvider>) -> Self {
         Self { inner }
     }
 
-    /// 从引用构造 dispatch (Router 用: model_providers[i].1 是 Box<dyn Provider>)
+    /// 从引用构造 dispatch (Router 用: model_providers[i].1 是 Box<dyn ModelProvider>)
     #[must_use]
-    pub fn from_ref(inner: &dyn Provider) -> ProviderDispatchRef<'_> {
+    pub fn from_ref(inner: &dyn ModelProvider) -> ProviderDispatchRef<'_> {
         ProviderDispatchRef { inner }
     }
 

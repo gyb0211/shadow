@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use shadow_core::{Attributable, ChatRequest, ChatResponse, Memory, Provider, Role, TokenUsage};
+use shadow_core::{Attributable, ChatRequest, ChatResponse, Memory, ModelProvider, Role, TokenUsage};
 use shadow_memory::DefaultMemoryStrategy;
 use shadow_memory::sqlite::SqliteMemory;
 use shadow_runtime::agent::{Agent, StreamDelta};
@@ -28,7 +28,7 @@ impl Attributable for CapturingProvider {
 }
 
 #[async_trait]
-impl Provider for CapturingProvider {
+impl ModelProvider for CapturingProvider {
     fn provider_type(&self) -> &str {
         "mock"
     }

@@ -3,7 +3,7 @@
 //! 注意: 不实际调用 chat/list_models (会触发网络请求); 只验证构造与元数据.
 
 use shadow_providers::{create_reliable_provider, RetryPolicy};
-use shadow_core::{Attributable, Provider, Role};
+use shadow_core::{Attributable, ModelProvider, Role};
 
 #[test]
 fn create_reliable_provider_returns_attributable() {

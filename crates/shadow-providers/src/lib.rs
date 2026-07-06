@@ -20,7 +20,7 @@ pub use rate_limit::TokenBucket;
 pub use reliable::{KeyRotator, ReliableModelProvider, RetryPolicy};
 pub use router::RouterModelProvider;
 
-use shadow_core::{ModelProviderRuntimeOptions, Provider};
+use shadow_core::{ModelProvider, ModelProviderRuntimeOptions};
 use anyhow::Result;
 use std::sync::Arc;
 
@@ -31,7 +31,7 @@ pub fn create_provider(
     provider_type: &str,
     api_key: Option<&str>,
     base_url: Option<&str>,
-) -> Result<Arc<dyn Provider>> {
+) -> Result<Arc<dyn ModelProvider>> {
     create_provider_with_opts(
         provider_type,
         api_key,
@@ -48,20 +48,20 @@ pub fn create_provider(
 /// - `base_url`: 自定义 base_url (None 时按 family 选默认)
 /// - `opts`: 运行时选项 (auth_style / timeout / extra_headers / ...)
 ///
-/// 返回 `Arc<dyn Provider>`, 因为 Agent.provider 字段类型是 Arc.
+/// 返回 `Arc<dyn ModelProvider>`, 因为 Agent.provider 字段类型是 Arc.
 pub fn create_provider_with_opts(
     alias: &str,
     api_key: Option<&str>,
     base_url: Option<&str>,
     opts: ModelProviderRuntimeOptions,
-) -> Result<Arc<dyn Provider>> {
+) -> Result<Arc<dyn ModelProvider>> {
     match alias {
         "openai" | "openrouter" | "ollama" | "compatible" => {
             OpenAiProvider::new_with_opts(alias, api_key, base_url, opts)
-                .map(|p| Arc::new(p) as Arc<dyn Provider>)
+                .map(|p| Arc::new(p) as Arc<dyn ModelProvider>)
         }
         "anthropic" => AnthropicProvider::new_with_alias(alias, api_key, base_url, opts)
-            .map(|p| Arc::new(p) as Arc<dyn Provider>),
+            .map(|p| Arc::new(p) as Arc<dyn ModelProvider>),
         _ => anyhow::bail!("未知的 provider family: {alias}"),
     }
 }
@@ -78,7 +78,7 @@ pub fn create_provider_with_opts(
 /// - `policy`: 重试/退避策略 (max_retries / initial_backoff_ms / max_backoff_ms / jitter_pct)
 /// - `requests_per_minute`: 限流 (0 = 无限流)
 ///
-/// 返回 `Arc<dyn Provider>` -- 内部已 Reliable 包装.
+/// 返回 `Arc<dyn ModelProvider>` -- 内部已 Reliable 包装.
 pub fn create_reliable_provider(
     alias: &str,
     family: &str,
@@ -87,10 +87,10 @@ pub fn create_reliable_provider(
     fallback_models: Vec<String>,
     policy: RetryPolicy,
     requests_per_minute: u32,
-) -> Result<Arc<dyn Provider>> {
+) -> Result<Arc<dyn ModelProvider>> {
     // 1. 构造 Compat 层 provider -- 按 family 选择具体实现
     //    返回 (dyn Provider, dyn KeyRotator) 双重 Arc, 共享同一底层对象
-    let (inner_provider, rotator): (Arc<dyn Provider>, Arc<dyn KeyRotator>) = match family {
+    let (inner_provider, rotator): (Arc<dyn ModelProvider>, Arc<dyn KeyRotator>) = match family {
         "anthropic" => {
             let p = Arc::new(AnthropicProvider::new_with_alias(
                 alias,
@@ -125,5 +125,5 @@ pub fn create_reliable_provider(
     if !fallback_models.is_empty() {
         reliable = reliable.with_fallback_models(fallback_models);
     }
-    Ok(Arc::new(reliable) as Arc<dyn Provider>)
+    Ok(Arc::new(reliable) as Arc<dyn ModelProvider>)
 }

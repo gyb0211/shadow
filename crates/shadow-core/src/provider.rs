@@ -101,7 +101,7 @@ pub struct ModelProviderRuntimeOptions {
 
 /// 流式聊天块 -- SSE 增量
 ///
-/// Provider::chat_stream() 返回 BoxStream<Result<ChatChunk>>,
+/// ModelProvider::chat_stream() 返回 BoxStream<Result<ChatChunk>>,
 /// 调用方逐块消费, 实现逐字/逐词显示.
 #[derive(Debug, Clone)]
 pub enum ChatChunk {
@@ -131,7 +131,7 @@ pub enum ChatChunk {
 /// 通过工厂函数按字符串 key 注册。
 /// 借鉴 ZeroClaw ModelProvider, 重命名自 agent-core。
 #[async_trait]
-pub trait Provider: Attributable {
+pub trait ModelProvider: Attributable {
     /// 提供商类型名 (如 "openai", "anthropic")
     fn provider_type(&self) -> &str;
 
@@ -195,7 +195,7 @@ impl Attributable for DefaultProvider {
 }
 
 #[async_trait]
-impl Provider for DefaultProvider {
+impl ModelProvider for DefaultProvider {
     fn provider_type(&self) -> &str {
         "default"
     }

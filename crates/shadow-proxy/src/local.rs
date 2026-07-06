@@ -4,7 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::StreamExt;
-use shadow_core::{ChatMessage, ChatRequest, Provider};
+use shadow_core::{ChatMessage, ChatRequest, ModelProvider};
 use std::sync::Arc;
 
 use crate::card::AgentCard;
@@ -13,7 +13,7 @@ use crate::transport::AgentTransport;
 /// 进程内 agent -- 共享 Provider, 不同 system prompt / model
 pub struct LocalAgent {
     card: AgentCard,
-    provider: Arc<dyn Provider>,
+    provider: Arc<dyn ModelProvider>,
     model: String,
     system_prompt: Option<String>,
     temperature: Option<f64>,
@@ -23,7 +23,7 @@ impl LocalAgent {
     pub fn new(
         name: &str,
         capabilities: Vec<String>,
-        provider: Arc<dyn Provider>,
+        provider: Arc<dyn ModelProvider>,
         model: String,
     ) -> Self {
         Self {
@@ -91,7 +91,7 @@ impl AgentTransport for LocalAgent {
 mod tests {
     use super::*;
     use crate::transport::AgentTransport;
-    use shadow_core::{Attributable, ChatResponse, ChatRequest, Provider, Role, TokenUsage};
+    use shadow_core::{Attributable, ChatResponse, ChatRequest, ModelProvider, Role, TokenUsage};
 
     struct MockProvider;
 
@@ -101,7 +101,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl Provider for MockProvider {
+    impl ModelProvider for MockProvider {
         fn provider_type(&self) -> &str { "mock" }
         async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse> {
             Ok(ChatResponse {
@@ -119,7 +119,7 @@ mod tests {
 
     #[tokio::test]
     async fn local_agent_chat() {
-        let provider: Arc<dyn Provider> = Arc::new(MockProvider);
+        let provider: Arc<dyn ModelProvider> = Arc::new(MockProvider);
         let agent = LocalAgent::new("test", vec!["coding".into()], provider, "test-model".into());
 
         let result = agent.chat("hello").await.unwrap();

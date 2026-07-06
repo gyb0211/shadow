@@ -4,7 +4,7 @@
 //! 这是微内核架构的 "ABI 层"。
 //!
 //! 核心导出:
-//!   - [`Provider`]       LLM 推理后端
+//!   - [`ModelProvider`]       LLM 推理后端
 //!   - [`Memory`]         长期记忆存储
 //!   - [`Tool`]           Agent 可调用工具
 //!   - [`Channel`]        消息平台渠道
@@ -28,7 +28,7 @@ pub use attribution::{Attributable, Role};
 pub use channel::{Channel, ChannelMessage, CliChannel, SendMessage};
 pub use memory::{Memory, MemoryCategory, MemoryEntry, MemoryStrategy, NoneMemory};
 pub use observer::{NoopObserver, Observer, ObserverEvent};
-pub use provider::{AuthStyle, ChatChunk, ChatMessage, ChatRequest, ChatResponse, ModelProviderRuntimeOptions, Provider, TokenUsage, ToolCall, DefaultProvider};
+pub use provider::{AuthStyle, ChatChunk, ChatMessage, ChatRequest, ChatResponse, ModelProvider, ModelProviderRuntimeOptions, TokenUsage, ToolCall, DefaultProvider};
 pub use session_store::{JsonlSessionStore, Session, SessionMetadata, SessionStore};
 pub use tool::{Tool, ToolResult, ToolSpec, ToolAttribution};
 pub use workspace::Workspace;
