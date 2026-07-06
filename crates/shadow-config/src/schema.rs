@@ -29,6 +29,14 @@ pub struct Config {
     /// Router 配置 (可选) -- 配置后启用跨 provider 路由与 fallback
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub router: Option<crate::provider::RouterConfig>,
+
+    /// 人格配置 (可选) -- key 为 persona 名称, value 为 system_prompt
+    /// 配置示例:
+    /// [personas]
+    /// helpful = "你是一个乐于助人的助手."
+    /// pirate = "Arrr! 你是海盗船长!"
+    #[serde(default)]
+    pub personas: HashMap<String, String>,
 }
 
 impl Default for Config {
@@ -39,6 +47,7 @@ impl Default for Config {
             providers: ProvidersConfig::default(),
             memory: MemorySection::default(),
             router: None,
+            personas: HashMap::new(),
         }
     }
 }
