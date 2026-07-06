@@ -1,6 +1,6 @@
 //! Router -- 按 alias 路由到具体 family provider + 跨 provider fallback
 //!
-//! 3 层架构的顶层。Agent 只面对 `dyn Provider`, 不感知后端是 OpenAiProvider
+//! 3 层架构的顶层。Agent 只面对 `dyn ModelProvider`, 不感知后端是 OpenAiProvider
 //! 还是未来的 AnthropicNative。Router 接收请求, 按 model 字段中的 hint (MVP 阶段)
 //! 或 default 转发到注册的 inner provider.
 //!
@@ -18,7 +18,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use shadow_core::provider::ChatChunk;
-use shadow_core::{Attributable, ChatRequest, ChatResponse, Provider, Role};
+use shadow_core::{Attributable, ChatRequest, ChatResponse, ModelProvider, Role};
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
@@ -34,7 +34,7 @@ pub struct RouterModelProvider {
     /// 例: "reasoning" → (2, "claude-opus-4")
     routes: HashMap<String, (usize, String)>,
 
-    model_providers: Vec<(String, Box<dyn Provider>)>,
+    model_providers: Vec<(String, Box<dyn ModelProvider>)>,
 
     default_index: usize,
 
@@ -54,7 +54,7 @@ impl RouterModelProvider {
     #[must_use]
     pub fn new(
         default_alias: impl Into<String>,
-        model_providers: Vec<(String, Box<dyn Provider>)>,
+        model_providers: Vec<(String, Box<dyn ModelProvider>)>,
         routes: Vec<(String, Route)>,
         default_model: String,
     ) -> Self {
@@ -74,7 +74,7 @@ impl RouterModelProvider {
     #[must_use]
     pub fn with_fallback_chains(
         default_alias: impl Into<String>,
-        model_providers: Vec<(String, Box<dyn Provider>)>,
+        model_providers: Vec<(String, Box<dyn ModelProvider>)>,
         routes: Vec<(String, Route)>,
         default_model: String,
         fallback_chains: Vec<(String, Vec<String>)>,
@@ -144,7 +144,7 @@ impl RouterModelProvider {
     }
 
     /// 借用默认 provider (用于非路由方法: provider_type / list_models / ...)
-    fn default_provider(&self) -> &dyn Provider {
+    fn default_provider(&self) -> &dyn ModelProvider {
         let (_, provider) = &self.model_providers[self.default_index];
         &**provider
     }
@@ -160,7 +160,7 @@ impl Attributable for RouterModelProvider {
 }
 
 #[async_trait]
-impl Provider for RouterModelProvider {
+impl ModelProvider for RouterModelProvider {
     fn provider_type(&self) -> &str {
         self.default_provider().provider_type()
     }
@@ -282,7 +282,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl Provider for MockProvider {
+    impl ModelProvider for MockProvider {
         fn provider_type(&self) -> &str {
             "mock"
         }
@@ -310,7 +310,7 @@ mod tests {
         let provider = Box::new(MockProvider {
             name: "default".to_string(),
             models: vec!["gpt-4o".to_string()],
-        }) as Box<dyn Provider>;
+        }) as Box<dyn ModelProvider>;
 
         let router = RouterModelProvider::new(
             "test",
@@ -335,12 +335,12 @@ mod tests {
         let default_provider = Box::new(MockProvider {
             name: "cheap".to_string(),
             models: vec!["gpt-4o-mini".to_string()],
-        }) as Box<dyn Provider>;
+        }) as Box<dyn ModelProvider>;
 
         let reasoning_provider = Box::new(MockProvider {
             name: "smart".to_string(),
             models: vec!["o1".to_string()],
-        }) as Box<dyn Provider>;
+        }) as Box<dyn ModelProvider>;
 
         let router = RouterModelProvider::new(
             "test",
@@ -386,7 +386,7 @@ mod tests {
         let provider = Box::new(MockProvider {
             name: "default".to_string(),
             models: vec!["gpt-4o".to_string(), "gpt-4o-mini".to_string()],
-        }) as Box<dyn Provider>;
+        }) as Box<dyn ModelProvider>;
 
         let router = RouterModelProvider::new(
             "test",
@@ -404,7 +404,7 @@ mod tests {
         let provider = Box::new(MockProvider {
             name: "default".to_string(),
             models: vec![],
-        }) as Box<dyn Provider>;
+        }) as Box<dyn ModelProvider>;
 
         let router = RouterModelProvider::new(
             "my-router",
@@ -435,7 +435,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl Provider for FailProvider {
+    impl ModelProvider for FailProvider {
         fn provider_type(&self) -> &str {
             "fail"
         }
@@ -463,11 +463,11 @@ mod tests {
         let primary = Box::new(FailProvider {
             name: "primary".to_string(),
             err_msg: "primary down".to_string(),
-        }) as Box<dyn Provider>;
+        }) as Box<dyn ModelProvider>;
         let backup = Box::new(MockProvider {
             name: "backup".to_string(),
             models: vec![],
-        }) as Box<dyn Provider>;
+        }) as Box<dyn ModelProvider>;
 
         let router = RouterModelProvider::with_fallback_chains(
             "test",
@@ -490,11 +490,11 @@ mod tests {
         let primary = Box::new(FailProvider {
             name: "primary".to_string(),
             err_msg: "primary down".to_string(),
-        }) as Box<dyn Provider>;
+        }) as Box<dyn ModelProvider>;
         let backup = Box::new(FailProvider {
             name: "backup".to_string(),
             err_msg: "backup down".to_string(),
-        }) as Box<dyn Provider>;
+        }) as Box<dyn ModelProvider>;
 
         let router = RouterModelProvider::with_fallback_chains(
             "test",
@@ -518,11 +518,11 @@ mod tests {
         let primary = Box::new(FailProvider {
             name: "primary".to_string(),
             err_msg: "primary down".to_string(),
-        }) as Box<dyn Provider>;
+        }) as Box<dyn ModelProvider>;
         let backup = Box::new(MockProvider {
             name: "backup".to_string(),
             models: vec![],
-        }) as Box<dyn Provider>;
+        }) as Box<dyn ModelProvider>;
 
         let router = RouterModelProvider::with_fallback_chains(
             "test",
@@ -546,11 +546,11 @@ mod tests {
         let primary = Box::new(MockProvider {
             name: "primary".to_string(),
             models: vec![],
-        }) as Box<dyn Provider>;
+        }) as Box<dyn ModelProvider>;
         let smart = Box::new(MockProvider {
             name: "smart".to_string(),
             models: vec![],
-        }) as Box<dyn Provider>;
+        }) as Box<dyn ModelProvider>;
 
         let router = RouterModelProvider::with_fallback_chains(
             "test",
@@ -581,7 +581,7 @@ mod tests {
         let primary = Box::new(FailProvider {
             name: "primary".to_string(),
             err_msg: "no chain".to_string(),
-        }) as Box<dyn Provider>;
+        }) as Box<dyn ModelProvider>;
 
         let router = RouterModelProvider::new(
             "test",

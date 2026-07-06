@@ -13,8 +13,8 @@
 use crate::error::ChatError;
 use crate::reliable::KeyRotator;
 use shadow_core::{
-    Attributable, AuthStyle, ChatRequest, ChatResponse, ModelProviderRuntimeOptions, Provider, Role,
-    TokenUsage, ToolCall,
+    Attributable, AuthStyle, ChatRequest, ChatResponse, ModelProvider,
+    ModelProviderRuntimeOptions, Role, TokenUsage, ToolCall,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -157,7 +157,7 @@ impl KeyRotator for AnthropicProvider {
 }
 
 #[async_trait]
-impl Provider for AnthropicProvider {
+impl ModelProvider for AnthropicProvider {
     fn provider_type(&self) -> &str {
         "anthropic"
     }

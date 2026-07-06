@@ -69,7 +69,7 @@ impl Observer for UiObserver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shadow_core::{ChatRequest, ChatResponse, Provider, TokenUsage};
+    use shadow_core::{ChatRequest, ChatResponse, ModelProvider, TokenUsage};
     use anyhow::Result;
 
     struct StubProvider;
@@ -82,7 +82,7 @@ mod tests {
         }
     }
     #[async_trait]
-    impl Provider for StubProvider {
+    impl ModelProvider for StubProvider {
         fn provider_type(&self) -> &str {
             "stub"
         }

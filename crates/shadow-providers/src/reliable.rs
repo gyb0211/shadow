@@ -1,6 +1,6 @@
 //! ReliableModelProvider -- 重试 / 退避 / key 轮换 / 限流 / fallback_models
 //!
-//! Decorator 模式包裹 inner provider (通常 OpenAiProvider). 实现 Provider trait,
+//! Decorator 模式包裹 inner provider (通常 OpenAiProvider). 实现 ModelProvider trait,
 //! Router 透明使用 -- 不感知 Reliable 存在.
 //!
 //! 错误分类由 [`crate::error::ChatError`] 提供:
@@ -17,7 +17,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use shadow_core::provider::ChatChunk;
-use shadow_core::{Attributable, ChatRequest, ChatResponse, Provider, Role};
+use shadow_core::{Attributable, ChatRequest, ChatResponse, ModelProvider, Role};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -91,7 +91,7 @@ impl RetryPolicy {
 /// Reliable 包装层 -- 在 inner provider 之上加重试 / 退避 / key 轮换 / 限流 / fallback_models
 pub struct ReliableModelProvider {
     alias: String,
-    inner: Arc<dyn Provider>,
+    inner: Arc<dyn ModelProvider>,
     policy: RetryPolicy,
     /// key 池 (用于轮换). 空 Vec 表示单 key 模式 (无轮换).
     keys: Vec<String>,
@@ -108,7 +108,7 @@ pub struct ReliableModelProvider {
 impl ReliableModelProvider {
     /// 构造 -- 简单形态 (仅重试, 无 key 轮换/限流/fallback)
     #[must_use]
-    pub fn new(alias: impl Into<String>, inner: Arc<dyn Provider>, policy: RetryPolicy) -> Self {
+    pub fn new(alias: impl Into<String>, inner: Arc<dyn ModelProvider>, policy: RetryPolicy) -> Self {
         Self {
             alias: alias.into(),
             inner,
@@ -149,7 +149,7 @@ impl ReliableModelProvider {
 
     /// 借用 inner -- 测试 / Router 内省用
     #[must_use]
-    pub fn inner(&self) -> &dyn Provider {
+    pub fn inner(&self) -> &dyn ModelProvider {
         self.inner.as_ref()
     }
 
@@ -263,7 +263,7 @@ impl Attributable for ReliableModelProvider {
 }
 
 #[async_trait]
-impl Provider for ReliableModelProvider {
+impl ModelProvider for ReliableModelProvider {
     fn provider_type(&self) -> &str {
         self.inner.provider_type()
     }
@@ -371,7 +371,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl Provider for MockProvider {
+    impl ModelProvider for MockProvider {
         fn provider_type(&self) -> &str {
             "mock"
         }
@@ -430,7 +430,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl Provider for KeyAwareMock {
+    impl ModelProvider for KeyAwareMock {
         fn provider_type(&self) -> &str {
             "mock-keyed"
         }
@@ -615,7 +615,7 @@ mod tests {
 
     #[tokio::test]
     async fn stream_retries_only_pre_stream() {
-        // MockProvider 没实现 chat_stream, 但通过 Provider trait 默认实现会调 chat()
+        // MockProvider 没实现 chat_stream, 但通过 ModelProvider trait 默认实现会调 chat()
         let mock = MockProvider::new("test", vec![transient_err(), ok_response("done")]);
         let calls = mock.call_count.clone();
         let reliable = ReliableModelProvider::new("test", mock, fast_policy());

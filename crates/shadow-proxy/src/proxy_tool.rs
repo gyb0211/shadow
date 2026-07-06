@@ -239,7 +239,7 @@ mod tests {
     use crate::AgentCard;
     use crate::AgentRegistry;
     use crate::transport::AgentTransport;
-    use shadow_core::{Attributable, ChatResponse, ChatRequest, Provider, Role, TokenUsage};
+    use shadow_core::{Attributable, ChatResponse, ChatRequest, ModelProvider, Role, TokenUsage};
 
     struct MockProvider;
 
@@ -249,7 +249,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl Provider for MockProvider {
+    impl ModelProvider for MockProvider {
         fn provider_type(&self) -> &str { "mock" }
         async fn chat(&self, _: ChatRequest) -> Result<ChatResponse> {
             Ok(ChatResponse {
@@ -270,7 +270,7 @@ mod tests {
         let registry = Arc::new(AgentRegistry::new());
         let router = Arc::new(TaskRouter::new(Arc::clone(&registry)));
 
-        let provider: Arc<dyn Provider> = Arc::new(MockProvider);
+        let provider: Arc<dyn ModelProvider> = Arc::new(MockProvider);
         let agent = LocalAgent::new("worker", vec!["coding".into()], provider, "model".into());
         registry.register(agent.card().clone()).unwrap();
         router.register_transport("worker", Arc::new(agent));
@@ -329,7 +329,7 @@ mod tests {
         let registry = Arc::new(AgentRegistry::new());
         let router = Arc::new(TaskRouter::new(Arc::clone(&registry)));
 
-        let provider: Arc<dyn Provider> = Arc::new(MockProvider);
+        let provider: Arc<dyn ModelProvider> = Arc::new(MockProvider);
         let agent = LocalAgent::new("coder", vec!["coding".into()], provider, "model".into());
         registry.register(agent.card().clone()).unwrap();
         router.register_transport("coder", Arc::new(agent));

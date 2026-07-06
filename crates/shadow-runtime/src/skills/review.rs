@@ -3,7 +3,7 @@
 //! 参考 Hermes _spawn_background_review + ZeroClaw skills/review.rs
 //! 简化版: 对话后异步调用 LLM 分析, 记录建议 (不自动执行)
 
-use shadow_core::{ChatMessage, ChatRequest, Provider};
+use shadow_core::{ChatMessage, ChatRequest, ModelProvider};
 use std::path::PathBuf;
 
 /// review Agent 的系统提示
@@ -37,7 +37,7 @@ pub async fn maybe_run_skill_review(
     _workspace_dir: PathBuf,
     history: &[ChatMessage],
     nudge_threshold: usize,
-    provider: &dyn Provider,
+    provider: &dyn ModelProvider,
     model: &str,
 ) -> anyhow::Result<()> {
     // 1. 检查工具调用次数是否达到阈值

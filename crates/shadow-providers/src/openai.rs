@@ -6,8 +6,8 @@
 use crate::error::ChatError;
 use crate::reliable::KeyRotator;
 use shadow_core::{
-    Attributable, AuthStyle, ChatChunk, ChatRequest, ChatResponse, ModelProviderRuntimeOptions,
-    Provider, Role, TokenUsage, ToolCall,
+    Attributable, AuthStyle, ChatChunk, ChatRequest, ChatResponse, ModelProvider,
+    ModelProviderRuntimeOptions, Role, TokenUsage, ToolCall,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -148,7 +148,7 @@ impl KeyRotator for OpenAiProvider {
 }
 
 #[async_trait]
-impl Provider for OpenAiProvider {
+impl ModelProvider for OpenAiProvider {
     fn provider_type(&self) -> &str {
         &self.provider_type
     }

@@ -219,13 +219,13 @@ async fn chat_command(
 /// kernel-only 模式: 直连 provider, 最简对话
 #[cfg(not(feature = "runtime"))]
 async fn chat_direct(
-    provider: std::sync::Arc<dyn shadow_core::Provider>,
+    provider: std::sync::Arc<dyn shadow_core::ModelProvider>,
     _memory: std::sync::Arc<dyn shadow_core::Memory>,
     model: String,
     temperature: f64,
     message: Option<String>,
 ) -> Result<()> {
-    use shadow_core::{ChatMessage, ChatRequest, Provider};
+    use shadow_core::{ChatMessage, ChatRequest, ModelProvider};
 
     let system = ChatMessage {
         role: "system".to_string(),
@@ -322,7 +322,7 @@ async fn chat_direct(
 #[allow(clippy::too_many_arguments)]
 async fn chat_via_agent(
     workspace_root: &std::path::Path,
-    provider: std::sync::Arc<dyn shadow_core::Provider>,
+    provider: std::sync::Arc<dyn shadow_core::ModelProvider>,
     memory: std::sync::Arc<dyn shadow_core::Memory>,
     config: &shadow_config::Config,
     resolved: &shadow_config::ResolvedProvider,
