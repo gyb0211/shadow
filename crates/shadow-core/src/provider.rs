@@ -4,15 +4,16 @@ use crate::attribution::Attributable;
 use crate::attribution::Role;
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use crate::ToolSpec;
 
 /// 聊天消息
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChatMessage {
-    pub role: String,      // "system" / "user" / "assistant" / "tool"
+    pub role: String, // "system" / "user" / "assistant" / "tool"
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
@@ -28,12 +29,12 @@ pub struct ChatMessage {
 
 /// 聊天请求
 #[derive(Debug, Clone)]
-pub struct ChatRequest {
+pub struct ChatRequest<'a> {
     pub messages: Vec<ChatMessage>,
     pub model: String,
     pub temperature: Option<f64>,
     pub max_tokens: Option<u32>,
-    pub tools: Vec<crate::tool::ToolSpec>,
+    pub tools: Option<&'a [ToolSpec]>,
 }
 
 /// 聊天响应
@@ -125,6 +126,30 @@ pub enum ChatChunk {
     },
 }
 
+#[derive(Clone, Default)]
+pub struct ProviderCapabilities {
+    /// 原生工具调用
+    pub native_tool_calling: bool,
+    /// 视觉图片支持
+    pub vision: bool,
+
+    /// 提示词缓存
+    pub prompt_caching: bool,
+    /// 思考能力
+    pub extended_thinking: bool,
+}
+
+#[derive(Clone, Default)]
+pub struct ModelInfo {
+    pub id: String,
+    pub pricing: Option<f64>,
+}
+
+const BASE_TEMPERATURE: f64 = 0.7;
+const BASE_MAX_TOKEN: u32 = 4096;
+const BASE_TIMEOUT_SECS: u32 = 120;
+const BASE_WIRE_API: &str = "chat_completions";
+
 /// 模型提供商 trait
 ///
 /// 每个 LLM 后端实现此 trait (OpenAI/Anthropic/Ollama...)
@@ -132,45 +157,88 @@ pub enum ChatChunk {
 /// 借鉴 ZeroClaw ModelProvider, 重命名自 agent-core。
 #[async_trait]
 pub trait ModelProvider: Attributable {
-    /// 提供商类型名 (如 "openai", "anthropic")
-    fn provider_type(&self) -> &str;
-
-    /// 同步聊天
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse>;
-
-    /// 流式聊天 -- 返回 BoxStream, 逐块推送 ChatChunk
-    ///
-    /// 默认实现: 调用 chat() 获取完整响应, 包装成单个 Done chunk.
-    /// 支持 SSE 的 provider 应覆写此方法.
-    async fn chat_stream(
-        &self,
-        request: ChatRequest,
-    ) -> Result<BoxStream<'static, Result<ChatChunk>>> {
-        let response = self.chat(request).await?;
-        let stream = futures::stream::once(async move {
-            Ok(ChatChunk::Done {
-                content: response.content,
-                tool_calls: response.tool_calls,
-                usage: response.usage,
-                reasoning_content: response.reasoning_content,
-            })
-        })
-        .boxed();
-        Ok(stream)
+    /// 模型能力
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities::default()
     }
 
-    /// 列出可用模型
-    async fn list_models(&self) -> Result<Vec<String>>;
-
-    /// 是否支持原生工具调用
-    fn supports_native_tools(&self) -> bool {
-        false
+    fn default_max_token(&self) -> u32 {
+        BASE_MAX_TOKEN
     }
 
     /// 默认温度
     fn default_temperature(&self) -> f64 {
-        0.7
+        BASE_TEMPERATURE
     }
+
+    fn default_timeout_secs(&self) -> u32 {
+        BASE_TIMEOUT_SECS
+    }
+    fn default_wire_api(&self) -> &str {
+        BASE_WIRE_API
+    }
+
+    fn supports_native_tools(&self) -> bool{
+        self.capabilities().native_tool_calling
+    }
+
+    async fn simple_chat(
+        &self,
+        message: &str,
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<String> {
+        self.chat_with_system(None, message, model, temperature)
+            .await
+    }
+
+    async fn chat_with_system(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<String>;
+
+    /// 列出可用模型
+    async fn list_models(&self) -> Result<Vec<String>> {
+        Ok(vec![])
+    }
+
+    async fn list_models_with_pricing(&self) -> Result<Vec<ModelInfo>> {
+        Ok(self
+            .list_models()
+            .await?
+            .into_iter()
+            .map(|id| ModelInfo { id, pricing: None }).collect())
+
+    }
+
+
+    async fn chat_with_history(&self, messages:&[ChatMessage], model:&str, temperature: Option<f64>) -> Result<String>{
+        let system = messages.iter().find(|m| m.role == "system").map(|m| m.content.as_str());
+        let user = messages.iter().rfind(|m| m.role == "user").map(|m| m.content.as_str()).unwrap_or("");
+        self.chat_with_system(system, user, model, temperature).await
+    }
+
+    async fn chat(&self, request: ChatRequest<'_>, model: &str, temperature:Option<f64>) -> Result<ChatResponse>{
+        if let Some(tools) = request.tools && !tools.is_empty() && self.supports_native_tools() {
+            let tool_instructions = match self.convert_tools(tools) {
+
+            };
+
+
+
+        }
+        Ok(ChatResponse{
+            content: "".to_string(),
+            tool_calls: vec![],
+            usage: Default::default(),
+            reasoning_content: None,
+        })
+    }
+
+
 }
 
 /// 默认提供商 -- 用于未配置时的占位
@@ -181,7 +249,9 @@ pub struct DefaultProvider {
 impl DefaultProvider {
     #[must_use]
     pub fn new(name: &str) -> Self {
-        Self { name: name.to_string() }
+        Self {
+            name: name.to_string(),
+        }
     }
 }
 

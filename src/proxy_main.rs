@@ -24,7 +24,7 @@ struct Cli {
     bind: String,
 
     /// 端口 (HTTP 模式)
-    #[arg(short, long, default_value_t = 9090)]
+    #[arg(short, long, default_value_t = 9091)]
     port: u16,
 
     /// 使用 stdio 模式 (JSON-RPC over stdin/stdout)
@@ -40,7 +40,7 @@ struct Cli {
     verbose: bool,
 
     /// 启动时自动发现本地 agent (PATH 探测 + 端口探测)
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = true)]
     discover: bool,
 }
 
