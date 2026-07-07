@@ -16,7 +16,7 @@ use crate::rate_limit::TokenBucket;
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use shadow_core::provider::StreamChunk;
+use shadow_core::kennel::provider::StreamChunk;
 use shadow_core::{Attributable, ChatRequest, ChatResponse, ModelProvider, Role};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;

@@ -13,24 +13,23 @@
 //!   - [`SessionStore`]   会话持久化 (新)
 //!   - [`Attributable`]   归因系统
 
-pub mod agent_runtime;
-pub mod attribution;
 pub mod channel;
-pub mod memory;
-pub mod observer;
-pub mod provider;
+mod kennel;
+pub mod runtime;
 pub mod session_store;
-pub mod tool;
 pub mod workspace;
 
-pub use agent_runtime::AgentRuntime;
-pub use attribution::{Attributable, Role};
-pub use channel::{Channel, ChannelMessage, CliChannel, SendMessage};
-pub use memory::{Memory, MemoryCategory, MemoryEntry, MemoryStrategy, NoneMemory};
-pub use observer::{NoopObserver, Observer, ObserverEvent};
-pub use provider::{AuthStyle, ChatMessage, ChatRequest, ChatResponse, ModelProvider, ModelProviderRuntimeOptions, TokenUsage, ToolCall, StreamChunk, StreamEvent, StreamError, StreamOptions, ProviderCapabilities, ModelInfo, ToolsPayload};
+pub use channel::{Channel, ChannelMessage, SendMessage};
+pub use kennel::attribution::{Attributable, Role};
+pub use kennel::memory::{Memory, MemoryCategory, MemoryEntry, MemoryStrategy};
+pub use kennel::observer::{Observer, ObserverEvent};
+pub use kennel::provider::{
+    AuthStyle, ChatMessage, ChatRequest, ChatResponse, ModelInfo, ModelProvider,
+    ModelProviderRuntimeOptions, ProviderCapabilities, StreamChunk, StreamError, StreamEvent,
+    StreamOptions, TokenUsage, ToolCall, ToolsPayload,
+};
+pub use kennel::tool::{Tool, ToolResult, ToolSpec};
 pub use session_store::{JsonlSessionStore, Session, SessionMetadata, SessionStore};
-pub use tool::{Tool, ToolResult, ToolSpec, ToolAttribution};
 pub use workspace::Workspace;
 
 /// 代理自主级别
@@ -46,4 +45,3 @@ pub enum AutonomyLevel {
     /// 只读, 写操作被拒绝
     ReadOnly,
 }
-

@@ -1,6 +1,6 @@
 //! 模型提供商 trait -- LLM 推理后端抽象
 
-use crate::attribution::Attributable;
+use crate::kennel::attribution::Attributable;
 use anyhow::Ok;
 use anyhow::Result;
 use async_trait::async_trait;

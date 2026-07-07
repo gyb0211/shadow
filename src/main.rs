@@ -19,8 +19,14 @@ use shadow_log::Action;
 #[derive(Parser)]
 #[command(name = "shadow")]
 #[command(version)]
-#[command(about = format!("影子 -- trait 驱动的 AI agent 运行时{}", mode_label()))]
+#[command(about = format!("影子 -- trait 驱动的 AI agent 运行时"))]
 struct Cli {
+    #[arg(long, global = true)]
+    config_dir: Option<String>,
+
+    #[arg(long, global = true, value_enum)]
+    log_level: Option<LogLevel>,
+
     /// 全局: 详细日志
     #[arg(short, long, global = true)]
     verbose: bool,
@@ -29,15 +35,36 @@ struct Cli {
     command: Commands,
 }
 
-/// 返回当前构建模式标签
-const fn mode_label() -> &'static str {
-    #[cfg(feature = "runtime")]
-    {
-        " [完整版]"
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+enum LogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+impl LogLevel {
+    fn as_directive(self) -> &'static str{
+        match self {
+            LogLevel::Error => "error",
+            LogLevel::Warn => "warn",
+            LogLevel::Info => "info",
+            LogLevel::Debug => "debug",
+            LogLevel::Trace => "trace",
+        }
     }
-    #[cfg(not(feature = "runtime"))]
-    {
-        " [kernel-only]"
+}
+
+// todo shadow eval cmd
+#[derive(Subcommand, Debug)]
+enum EvalCommands {
+    Run{
+        #[arg(long)]
+        suite: Option<String>,
+
+        mode: Option<String>,
+
+        // format: commands::eval::OutputFormat,
     }
 }
 
@@ -47,46 +74,32 @@ fn is_terminal() -> bool {
     std::io::stdin().is_terminal()
 }
 
-#[derive(Subcommand)]
+fn parse_temperature(s: &str) -> std::result::Result<f64, String>{
+    let t = s.parse().map(|e| format!("{e}"))?;
+    config::schema::validate_temperature(t)
+}
+
+#[derive(Subcommand, Debug)]
 enum Commands {
-    /// 启动对话 (交互式或单次)
-    Chat {
-        /// 单次消息 (不进入交互模式)
+    #[command(long_about="\
+    Start the AI agent loop.
+
+    Examples:
+        shadow agent -a assistant                   # interactive session
+        shadow agent -a assistant -m \"Hello\"      # single chat
+    ")]
+    Agent {
+        #[arg(short='a', long)]
+        agent: String,
         #[arg(short, long)]
         message: Option<String>,
-
-        /// 强制行式 (不走 TUI)
-        #[arg(short = 'P', long, default_value_t = false)]
-        plain: bool,
-    },
-
-    /// 配置管理
-    Config {
-        #[command(subcommand)]
-        action: ConfigAction,
-    },
-
-    /// 记忆管理
-    Memory {
-        #[command(subcommand)]
-        action: MemoryAction,
-    },
-
-    /// 启动 Proxy Server (A2A + ACP broker)
-    #[cfg(feature = "proxy")]
-    Proxy {
-        /// 绑定地址 (HTTP 模式)
-        #[arg(long, default_value = "127.0.0.1")]
-        bind: String,
-
-        /// 端口 (HTTP 模式)
-        #[arg(short, long, default_value_t = 9090)]
-        port: u16,
-
-        /// 使用 stdio 模式 (JSON-RPC over stdin/stdout, 给 CLI/IDE 调用)
-        #[arg(long, default_value_t = false)]
-        stdio: bool,
-    },
+        #[arg(short='p', long)]
+        model_provider: Option<String>,
+        #[arg( long)]
+        model: Option<String>,
+        #[arg(short, long, value_parser=parse_temperature)]
+        temperature: Option<f64>,
+    }
 }
 
 #[derive(Subcommand)]
@@ -130,34 +143,47 @@ async fn main() -> Result<()> {
     let mut config = shadow_config::load_or_init()?;
 
     match cli.command {
-        Commands::Chat { message, plain } => {
-            if message.is_none() && !plain && is_terminal() {
-                // TUI 模式 (默认)
-                #[cfg(feature = "tui")]
-                {
-                    shadow_tui::run_tui(config).await?;
-                    return Ok(());
-                }
-                #[cfg(not(feature = "tui"))]
-                {
-                    chat_command(workspace_root, config, message).await?;
-                }
-            } else {
-                chat_command(workspace_root, config, message).await?;
+        Commands::Agent {
+            agent: agent_alias,
+            message,
+            model_provider,
+            model,
+            temperature
+        } => {
+            if config.agent(&agent_alias).is_none(){
+                anyhow::bail!("`shadow agent --agent {agent_alias}` is not configured (no [agents.{agent_alias}] entry)")
             }
-        }
+            let agent_entry = config.model_provider_for_agent(&agent_alias);
+            let final_temperature = temperature.unwrap_or_else(|| agent_entry.and_then(|e| e.temperature).unwrap_or(0.7));
+            if let Some(p) = model_provider {
 
-        Commands::Config { action } => {
-            config_command(&mut config, action);
-        }
+            }else if config.model_provider_for_agent(&agent_alias).is_none(){
+                anyhow::bail!(
+                    "No model model_provider configured for agent {agent_alias}.\
+                    Pass --model-provider <type> or run `shadow quickstart` to configured one."
+                );
+            }
 
-        Commands::Memory { action } => {
-            memory_command(workspace_root, config, action).await?;
-        }
+            let (provider_name, resolved_entry) = config.resolved_model_provider_for_agent(&agent_alias)
+                .map(|(ty, _alias, entry)|(ty, Some(entry))).unwrap_or(("openai", None));
 
-        #[cfg(feature = "proxy")]
-        Commands::Proxy { bind, port, stdio } => {
-            proxy_command(bind, port, stdio).await?;
+            let model_provider = shadow_providers::create_model_provider(provider_name, resolved_entry.and_then(|e| e.api_key.as_deref()))?;
+
+            let model_name = resolved_entry.and_then(|e| e.model.as_deref()).unwrap_or("default");
+
+            match message {
+                Some(msg) => {
+                    let response = shadow_providers::ProviderDispatch::from_ref(model_provider)
+                        .simple_chat(&msg, model_name, Some(final_temperature)).await?;
+                    println!("{response}");
+                }
+                None => {
+
+                }
+            }
+
+            return Ok(())
+
         }
     }
 
@@ -172,10 +198,8 @@ async fn chat_command(
     message: Option<String>,
 ) -> Result<()> {
     // 解析 provider 引用 (如 "openai.default" 或 "custom.minimax1")
-    let resolved = shadow_config::resolve_provider(
-        &config.providers.families,
-        &config.agent.model_provider,
-    )?;
+    let resolved =
+        shadow_config::resolve_provider(&config.providers.families, &config.agent.model_provider)?;
 
     let model = resolved.effective_model(&config.agent.model).to_string();
     let temperature = resolved.effective_temperature();
@@ -204,7 +228,17 @@ async fn chat_command(
     #[cfg(feature = "runtime")]
     {
         // 完整版: 通过 Agent (带历史/observer/工具)
-        chat_via_agent(workspace_root, provider, memory, &config, &resolved, model, temperature, message).await?;
+        chat_via_agent(
+            workspace_root,
+            provider,
+            memory,
+            &config,
+            &resolved,
+            model,
+            temperature,
+            message,
+        )
+        .await?;
     }
 
     #[cfg(not(feature = "runtime"))]
@@ -249,7 +283,10 @@ async fn chat_direct(
         println!("{}", response.text.unwrap_or_default());
     } else {
         // 交互式对话
-        println!("影子 v{} [kernel-only] -- 输入 /quit 退出", env!("CARGO_PKG_VERSION"));
+        println!(
+            "影子 v{} [kernel-only] -- 输入 /quit 退出",
+            env!("CARGO_PKG_VERSION")
+        );
         println!("---");
 
         let mut history = vec![system];
@@ -342,29 +379,25 @@ async fn chat_via_agent(
     };
 
     // 创建观察者 (日志观察者, 捕获事件到 JSONL)
-    let observer: std::sync::Arc<dyn shadow_core::Observer> =
-        std::sync::Arc::new(LogObserver);
+    let observer: std::sync::Arc<dyn shadow_core::Observer> = std::sync::Arc::new(LogObserver);
 
     // 工具执行回调 -- CLI 实时显示工具调用
     let callback: std::sync::Arc<dyn shadow_runtime::agent::ToolEventCallback> =
-        std::sync::Arc::new(|event: &str, detail: &str| {
-            match event {
-                "tool_start" => eprintln!("  [工具] {detail}"),
-                "tool_success" => eprintln!("  [完成] {detail}"),
-                "tool_error" => eprintln!("  [失败] {detail}"),
-                "tool_timeout" => eprintln!("  [超时] {detail}"),
-                "tool_approval_skipped" => eprintln!("  [跳过] {detail}"),
-                _ => {}
-            }
+        std::sync::Arc::new(|event: &str, detail: &str| match event {
+            "tool_start" => eprintln!("  [工具] {detail}"),
+            "tool_success" => eprintln!("  [完成] {detail}"),
+            "tool_error" => eprintln!("  [失败] {detail}"),
+            "tool_timeout" => eprintln!("  [超时] {detail}"),
+            "tool_approval_skipped" => eprintln!("  [跳过] {detail}"),
+            _ => {}
         });
 
     // 注册默认工具集 (传入 memory, 注册记忆工具)
     let tools = shadow_runtime::tools::default_tools(Some(std::sync::Arc::clone(&memory)));
 
     // 创建会话存储 (JSONL 文件持久化, 路径来自 Workspace)
-    let session_store: std::sync::Arc<dyn shadow_core::SessionStore> = std::sync::Arc::new(
-        shadow_core::JsonlSessionStore::new(workspace_root),
-    );
+    let session_store: std::sync::Arc<dyn shadow_core::SessionStore> =
+        std::sync::Arc::new(shadow_core::JsonlSessionStore::new(workspace_root));
 
     let agent = shadow_runtime::agent::Agent::builder()
         .alias(&agent_config.alias)
@@ -401,7 +434,10 @@ async fn chat_via_agent(
         println!();
     } else {
         // 交互式对话
-        println!("影子 v{} [完整版] -- 输入 /quit 退出", env!("CARGO_PKG_VERSION"));
+        println!(
+            "影子 v{} [完整版] -- 输入 /quit 退出",
+            env!("CARGO_PKG_VERSION")
+        );
         println!("---");
 
         let stdin = std::io::stdin();
@@ -471,26 +507,44 @@ impl shadow_core::Observer for LogObserver {
     fn record_event(&self, event: &shadow_core::ObserverEvent) {
         use shadow_core::ObserverEvent;
         match event {
-            ObserverEvent::LlmRequest { model, message_count } => {
+            ObserverEvent::LlmRequest {
+                model,
+                message_count,
+            } => {
                 shadow_log::record!(
                     INFO,
                     Action::Send,
                     format!("LLM 请求: model={}, messages={}", model, message_count)
                 );
             }
-            ObserverEvent::LlmResponse { model, duration_ms, tokens } => {
+            ObserverEvent::LlmResponse {
+                model,
+                duration_ms,
+                tokens,
+            } => {
                 shadow_log::record!(
                     INFO,
                     Action::Receive,
-                    format!("LLM 响应: model={}, duration={}ms, tokens={}", model, duration_ms, tokens)
+                    format!(
+                        "LLM 响应: model={}, duration={}ms, tokens={}",
+                        model, duration_ms, tokens
+                    )
                 );
             }
-            ObserverEvent::ToolCall { tool, success, duration_ms, output_preview } => {
+            ObserverEvent::ToolCall {
+                tool,
+                success,
+                duration_ms,
+                output_preview,
+            } => {
                 let outcome = if *success { "成功" } else { "失败" };
                 shadow_log::record!(
                     INFO,
                     Action::Invoke,
-                    format!("工具调用: {} ({}, {}ms)\n{}", tool, outcome, duration_ms, output_preview)
+                    format!(
+                        "工具调用: {} ({}, {}ms)\n{}",
+                        tool, outcome, duration_ms, output_preview
+                    )
                 );
             }
             ObserverEvent::SessionStart { session_id } => {
@@ -537,7 +591,7 @@ fn config_command(config: &mut shadow_config::Config, action: ConfigAction) {
                     println!("[providers.{family}.{alias}]");
                     for (i, key) in entry.api_keys.iter().enumerate() {
                         let masked = if key.len() > 8 {
-                            format!("{}...{}", &key[..4], &key[key.len()-4..])
+                            format!("{}...{}", &key[..4], &key[key.len() - 4..])
                         } else {
                             "***".to_string()
                         };
@@ -568,7 +622,10 @@ fn config_command(config: &mut shadow_config::Config, action: ConfigAction) {
                     if shadow_config::save(config).is_ok() {
                         println!("✓ 已设置 {key} = {value}");
                         if changed {
-                            println!("  (配置已保存到 {})", shadow_config::config_path().display());
+                            println!(
+                                "  (配置已保存到 {})",
+                                shadow_config::config_path().display()
+                            );
                         }
                     } else {
                         eprintln!("✗ 保存配置失败");
@@ -623,12 +680,10 @@ async fn memory_command(
                 }
             }
         }
-        MemoryAction::Get { key } => {
-            match memory.get(&key).await? {
-                Some(entry) => println!("{}: {}", entry.key, entry.content),
-                None => println!("(未找到: {key})"),
-            }
-        }
+        MemoryAction::Get { key } => match memory.get(&key).await? {
+            Some(entry) => println!("{}: {}", entry.key, entry.content),
+            None => println!("(未找到: {key})"),
+        },
         MemoryAction::Forget { key } => {
             memory.forget(&key).await?;
             println!("(已删除: {key})");
@@ -652,16 +707,30 @@ fn config_set(config: &mut shadow_config::Config, key: &str, value: &str) -> Res
     let parts: Vec<&str> = key.split('.').collect();
 
     match parts.as_slice() {
-        ["agent", "alias"] => { config.agent.alias = value.to_string(); Ok(true) }
-        ["agent", "model"] => { config.agent.model = value.to_string(); Ok(true) }
-        ["agent", "model_provider"] => { config.agent.model_provider = value.to_string(); Ok(true) }
+        ["agent", "alias"] => {
+            config.agent.alias = value.to_string();
+            Ok(true)
+        }
+        ["agent", "model"] => {
+            config.agent.model = value.to_string();
+            Ok(true)
+        }
+        ["agent", "model_provider"] => {
+            config.agent.model_provider = value.to_string();
+            Ok(true)
+        }
         ["agent", "temperature"] => {
-            let v: f64 = value.parse().map_err(|_| "temperature 需要数字".to_string())?;
+            let v: f64 = value
+                .parse()
+                .map_err(|_| "temperature 需要数字".to_string())?;
             config.agent.temperature = Some(v);
             Ok(true)
         }
         ["agent", "autonomy"] => match value {
-            "full" | "supervised" | "read_only" => { config.agent.autonomy = value.to_string(); Ok(true) }
+            "full" | "supervised" | "read_only" => {
+                config.agent.autonomy = value.to_string();
+                Ok(true)
+            }
             _ => Err("autonomy 必须是: full / supervised / read_only".to_string()),
         },
         ["agent", "max_iterations"] => {
@@ -672,24 +741,41 @@ fn config_set(config: &mut shadow_config::Config, key: &str, value: &str) -> Res
             config.agent.max_history = value.parse().map_err(|_| "需要正整数".to_string())?;
             Ok(true)
         }
-        ["agent", "system_prompt"] => { config.agent.system_prompt = Some(value.to_string()); Ok(true) }
+        ["agent", "system_prompt"] => {
+            config.agent.system_prompt = Some(value.to_string());
+            Ok(true)
+        }
         ["memory", "backend"] => match value {
-            "none" | "markdown" => { config.memory.backend = value.to_string(); Ok(true) }
+            "none" | "markdown" => {
+                config.memory.backend = value.to_string();
+                Ok(true)
+            }
             _ => Err("backend 必须是: none / markdown".to_string()),
         },
         ["providers", family, alias, field] => {
             let entry = config.providers.find_or_create(family, alias);
             match *field {
                 // api_key / api_keys 都接受 -- 单值替换整个列表
-                "api_key" | "api_keys" => { entry.api_keys = vec![value.to_string()]; Ok(true) }
-                "model" => { entry.model = Some(value.to_string()); Ok(true) }
-                "base_url" => { entry.base_url = Some(value.to_string()); Ok(true) }
+                "api_key" | "api_keys" => {
+                    entry.api_keys = vec![value.to_string()];
+                    Ok(true)
+                }
+                "model" => {
+                    entry.model = Some(value.to_string());
+                    Ok(true)
+                }
+                "base_url" => {
+                    entry.base_url = Some(value.to_string());
+                    Ok(true)
+                }
                 "temperature" => {
                     let v: f64 = value.parse().map_err(|_| "需要数字".to_string())?;
                     entry.temperature = Some(v);
                     Ok(true)
                 }
-                _ => Err(format!("未知的 provider 字段: {field} (支持: api_key/model/base_url/temperature)")),
+                _ => Err(format!(
+                    "未知的 provider 字段: {field} (支持: api_key/model/base_url/temperature)"
+                )),
             }
         }
         _ => Err(format!("无法识别的配置路径: {key}")),
@@ -700,7 +786,9 @@ fn config_set(config: &mut shadow_config::Config, key: &str, value: &str) -> Res
 
 #[cfg(feature = "proxy")]
 async fn proxy_command(bind: String, port: u16, stdio: bool) -> Result<()> {
-    use shadow_proxy::{AgentRegistry, TaskRouter, AgentCard, ProxyCore, HttpTransport, StdioTransport};
+    use shadow_proxy::{
+        AgentCard, AgentRegistry, HttpTransport, ProxyCore, StdioTransport, TaskRouter,
+    };
 
     let registry = std::sync::Arc::new(AgentRegistry::new());
     let router = std::sync::Arc::new(TaskRouter::new(std::sync::Arc::clone(&registry)));

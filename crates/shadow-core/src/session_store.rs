@@ -9,8 +9,8 @@
 //! 文件 `{id}.meta.json` 存储. 旧 session (无 sidecar) load 时元信息字段
 //! 全为 None, list_with_metadata 用文件 mtime + jsonl 行数推导.
 
-use crate::attribution::{Attributable, Role};
-use crate::provider::ChatMessage;
+use crate::kennel::attribution::{Attributable, Role};
+use crate::kennel::provider::ChatMessage;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

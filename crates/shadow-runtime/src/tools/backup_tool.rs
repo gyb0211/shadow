@@ -217,18 +217,6 @@ impl Tool for BackupTool {
             Ok(ToolResult::err(format!("不支持的路径类型: {path_str}")))
         }
     }
-
-    fn timeout(&self) -> Option<Duration> {
-        Some(Duration::from_secs(60))
-    }
-
-    fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            name: self.name().to_string(),
-            description: self.description().to_string(),
-            parameters: self.parameters_schema(),
-        }
-    }
 }
 
 #[cfg(test)]

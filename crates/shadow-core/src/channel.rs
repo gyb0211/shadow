@@ -1,6 +1,6 @@
 //! 渠道 trait -- 消息平台集成
 
-use crate::attribution::{Attributable, Role};
+use crate::kennel::attribution::{Attributable, Role};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -39,26 +39,3 @@ pub trait Channel: Attributable {
     }
 }
 
-/// CLI 渠道 -- 最简实现, 用于交互式对话
-pub struct CliChannel;
-
-impl Attributable for CliChannel {
-    fn role(&self) -> Role {
-        Role::Channel
-    }
-    fn alias(&self) -> &str {
-        "cli"
-    }
-}
-
-#[async_trait]
-impl Channel for CliChannel {
-    fn name(&self) -> &str {
-        "cli"
-    }
-
-    async fn send(&self, message: &SendMessage) -> Result<()> {
-        println!("{}", message.content);
-        Ok(())
-    }
-}
