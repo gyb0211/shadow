@@ -27,7 +27,7 @@ pub struct NativeToolDispatcher;
 
 impl ToolDispatcher for NativeToolDispatcher {
     fn parse_response(&self, response: &ChatResponse) -> (String, Vec<ToolCall>) {
-        (response.content.clone(), response.tool_calls.clone())
+        (response.text.clone().unwrap_or_default(), response.tool_calls.clone())
     }
 
     fn format_results(&self, results: &[ToolResult]) -> ChatMessage {
@@ -49,8 +49,6 @@ impl ToolDispatcher for NativeToolDispatcher {
         ChatMessage {
             role: "tool".to_string(),
             content,
-            tool_call_id: None,
-            ..Default::default()
         }
     }
 
@@ -127,8 +125,9 @@ impl XmlToolDispatcher {
 
 impl ToolDispatcher for XmlToolDispatcher {
     fn parse_response(&self, response: &ChatResponse) -> (String, Vec<ToolCall>) {
-        let tool_calls = Self::parse_tool_calls(&response.content);
-        let content = Self::strip_tool_calls(&response.content);
+        let text = response.text.clone().unwrap_or_default();
+        let tool_calls = Self::parse_tool_calls(&text);
+        let content = Self::strip_tool_calls(&text);
         (content, tool_calls)
     }
 
@@ -151,8 +150,6 @@ impl ToolDispatcher for XmlToolDispatcher {
         ChatMessage {
             role: "user".to_string(),
             content,
-            tool_call_id: None,
-            ..Default::default()
         }
     }
 
@@ -170,10 +167,9 @@ mod tests {
     /// 构造测试用 ChatResponse
     fn make_response(content: &str, tool_calls: Vec<ToolCall>) -> ChatResponse {
         ChatResponse {
-            content: content.to_string(),
+            text: Some(content.to_string()),
             tool_calls,
-            usage: TokenUsage::default(),
-            reasoning_content: None,
+            usage: Some(TokenUsage::default()),
         }
     }
 

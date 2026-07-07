@@ -206,8 +206,6 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
                 state.chat.messages.push(shadow_core::ChatMessage {
                     role: "assistant".into(),
                     content: delta,
-                    tool_call_id: None,
-                    tool_calls: vec![], reasoning_content: None,
                 });
             } else if let Some(last) = state.chat.messages.last_mut() {
                 last.content.push_str(&delta);
@@ -218,7 +216,6 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
             }
         }
         AppEvent::AgentStreamReasoning(delta) => {
-            // 流式思考增量: 追加到最后一条正在生成的 assistant 消息的 reasoning_content
             let need_new = match state.chat.messages.last() {
                 Some(last) => last.role != "assistant" || !state.chat.agent_busy,
                 None => true,
@@ -227,20 +224,15 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
                 state.chat.messages.push(shadow_core::ChatMessage {
                     role: "assistant".into(),
                     content: String::new(),
-                    tool_call_id: None,
-                    tool_calls: vec![], reasoning_content: Some(delta),
                 });
             } else if let Some(last) = state.chat.messages.last_mut() {
-                match &mut last.reasoning_content {
-                    Some(rc) => rc.push_str(&delta),
-                    None => last.reasoning_content = Some(delta),
+                    last.push_str(&delta);
                 }
-            }
+            
             if state.chat.pinned_to_bottom {
                 state.chat.scroll_offset = 0;
             }
-        }
-        AppEvent::AgentMessage { content, reasoning_content } => {
+        
             // 完整回复: 如果最后一条是正在生成的 assistant 消息, 替换内容
             // (原始内容含 <think> 标签, 由 MessageList 按开关过滤显示)
             let replace_last = match state.chat.messages.last() {
@@ -250,16 +242,12 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
             if replace_last {
                 if let Some(last) = state.chat.messages.last_mut() {
                     last.content = content;
-                    if let Some(rc) = reasoning_content {
-                        last.reasoning_content = Some(rc);
                     }
                 }
-            } else {
+             else {
                 state.chat.messages.push(shadow_core::ChatMessage {
                     role: "assistant".into(),
                     content,
-                    tool_call_id: None,
-                    tool_calls: vec![], reasoning_content,
                 });
             }
             // 只有钉在底部时才跟随最新消息 (参考 ZeroClaw pinned_to_bottom)
@@ -277,8 +265,6 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
             state.chat.messages.push(shadow_core::ChatMessage {
                 role: "tool".into(),
                 content,
-                tool_call_id: None,
-                tool_calls: vec![], reasoning_content: None,
             });
             if state.chat.pinned_to_bottom {
                 state.chat.scroll_offset = 0;
@@ -295,8 +281,6 @@ fn handle_event(state: &mut AppState, ev: AppEvent) -> Result<()> {
             state.chat.messages.push(shadow_core::ChatMessage {
                 role: "assistant".into(),
                 content: format!("[错误] {e}"),
-                tool_call_id: None,
-                tool_calls: vec![], reasoning_content: None,
             });
             state.chat.agent_busy = false;
         }
@@ -394,7 +378,6 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
                         state.chat.input_history.push(text.clone());
                         state.chat.messages.push(shadow_core::ChatMessage {
                             role: "user".into(), content: text.clone(),
-                            tool_call_id: None, tool_calls: vec![], reasoning_content: None,
                         });
                         state.chat.input.clear();
                         state.chat.cursor = 0;
@@ -425,11 +408,8 @@ fn handle_key(state: &mut AppState, k: KeyEvent) -> Result<()> {
                                     });
                                 match agent.chat_with_stream(&text, Some(on_delta)).await {
                                     Ok(resp) => {
-                                        // resp 是原始内容 (含 <think> 标签), reasoning_content 已在 consume_stream 中捕获
-                                        // 但 chat_with_stream 返回 String, reasoning_content 需要从 agent 获取
                                         let _ = tx.send(AppEvent::AgentMessage {
                                             content: resp,
-                                            reasoning_content: None, // reasoning_content 在 delta 流中已推送, 最终消息不需要重复
                                         }).await;
                                     }
                                     Err(e) => {
@@ -540,7 +520,6 @@ mod tests {
         let mut s = AppState::new();
         s.chat.messages.push(ChatMessage {
             role: "user".into(), content: "hi".into(),
-            tool_call_id: None, tool_calls: vec![], reasoning_content: None,
         });
         s.last_error = Some("err".into());
         handle_key(&mut s, key(KeyCode::Char('l'), KeyModifiers::CONTROL)).unwrap();

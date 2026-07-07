@@ -83,15 +83,24 @@ mod tests {
     }
     #[async_trait]
     impl ModelProvider for StubProvider {
-        fn provider_type(&self) -> &str {
-            "stub"
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            _model: &str,
+            _temperature: Option<f64>,
+        ) -> Result<String> {
+            Ok("ok".to_string())
         }
-        async fn chat(&self, _: ChatRequest) -> Result<ChatResponse> {
+        async fn chat(
+            &self,
+            _: ChatRequest<'_>,
+            _model: &str,
+            _temperature: Option<f64>,
+        ) -> Result<ChatResponse> {
             Ok(ChatResponse {
-                content: "ok".into(),
-                tool_calls: vec![],
-                usage: TokenUsage::default(),
-                reasoning_content: None,
+                text: Some("ok".into()),
+                usage: Some(TokenUsage::default()),
             })
         }
         async fn list_models(&self) -> Result<Vec<String>> {

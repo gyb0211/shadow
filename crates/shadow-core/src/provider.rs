@@ -8,9 +8,9 @@ use futures::StreamExt;
 use futures::stream;
 use serde::{ Deserialize, Serialize };
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::str;
 use std::sync::Arc;
-use std::vec;
 use crate::ToolSpec;
 
 /// 聊天消息
@@ -39,7 +39,7 @@ pub struct ChatRequest<'a> {
 /// 聊天响应
 #[derive(Debug, Clone)]
 pub struct ChatResponse {
-    pub text: Option<Strimg>,
+    pub text: Option<String>,
     pub tool_calls: Vec<ToolCall>,
     pub usage: Option<TokenUsage>,
     /// 思考模型的原始推理内容 (DeepSeek-R1 等 API 返回的 reasoning_content 字段)
@@ -93,7 +93,7 @@ type StreamResult<T> = std::result::Result<T, StreamError>;
 
 /// 流式聊天块 -- SSE 增量
 ///
-/// ModelProvider::chat_stream() 返回 BoxStream<Result<ChatChunk>>,
+/// ModelProvider::chat_stream() 返回 BoxStream<Result<StreamChunk>>,
 /// 调用方逐块消费, 实现逐字/逐词显示.
 #[derive(Debug, Clone)]
 pub struct StreamChunk {
@@ -326,8 +326,8 @@ pub trait ModelProvider: Attributable {
             return Ok(ChatResponse {
                 text: Some(text),
                 tool_calls: vec![],
-                usage: None,
                 reasoning_content: None,
+                usage: None,
             });
         }
 
@@ -335,9 +335,9 @@ pub trait ModelProvider: Attributable {
 
         Ok(ChatResponse {
             text: Some(text),
-            tool_calls: vec![],
+                tool_calls: vec![],
+                reasoning_content: None,
             usage: None,
-            reasoning_content: None,
         })
     }
 
@@ -351,9 +351,9 @@ pub trait ModelProvider: Attributable {
         let text = self.chat_with_history(messages, model, temperature).await?;
         Ok(ChatResponse {
             text: Some(text),
-            tool_calls: vec![],
+                tool_calls: vec![],
+                reasoning_content: None,
             usage: None,
-            reasoning_content: None,
         })
     }
 

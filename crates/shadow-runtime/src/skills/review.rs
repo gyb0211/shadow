@@ -58,27 +58,27 @@ pub async fn maybe_run_skill_review(
         ChatMessage {
             role: "system".into(),
             content: REVIEW_PROMPT.to_string(),
-            ..Default::default()
         },
         ChatMessage {
             role: "user".into(),
             content: format!("分析以下对话, 决定是否需要改进技能:\n\n{recent}"),
-            ..Default::default()
         },
     ];
 
+    let temperature = Some(0.3);
     let request = ChatRequest {
-        messages,
+        messages: &messages,
         model: model.to_string(),
-        temperature: Some(0.3),
+        temperature,
         max_tokens: Some(2000),
-        tools: vec![],
+        tools: None,
     };
 
     // 3. 调用 LLM 分析
-    match provider.chat(request).await {
+    match provider.chat(request, model, temperature).await {
         Ok(response) => {
-            let preview: String = response.content.chars().take(500).collect();
+            let text = response.text.unwrap_or_default();
+            let preview: String = text.chars().take(500).collect();
             shadow_log::record!(
                 INFO,
                 shadow_log::Action::Note,
@@ -125,22 +125,18 @@ mod tests {
             ChatMessage {
                 role: "user".into(),
                 content: "hi".into(),
-                ..Default::default()
             },
             ChatMessage {
                 role: "tool".into(),
                 content: "result".into(),
-                ..Default::default()
             },
             ChatMessage {
                 role: "assistant".into(),
                 content: "ok".into(),
-                ..Default::default()
             },
             ChatMessage {
                 role: "tool".into(),
                 content: "result2".into(),
-                ..Default::default()
             },
         ];
         assert_eq!(count_tool_results(&history), 2);
@@ -152,7 +148,6 @@ mod tests {
         let history = vec![ChatMessage {
             role: "user".into(),
             content: long,
-            ..Default::default()
         }];
         let formatted = format_recent_history(&history, 10);
         assert!(formatted.len() < 600); // 500 + 一些格式字符
@@ -164,7 +159,6 @@ mod tests {
             .map(|i| ChatMessage {
                 role: "user".into(),
                 content: format!("msg{i}"),
-                ..Default::default()
             })
             .collect();
         let formatted = format_recent_history(&history, 5);

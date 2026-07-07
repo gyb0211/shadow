@@ -54,30 +54,27 @@ impl AgentTransport for LocalAgent {
             messages.push(ChatMessage {
                 role: "system".into(),
                 content: sys.clone(),
-                ..Default::default()
             });
         }
         messages.push(ChatMessage {
             role: "user".into(),
             content: prompt.to_string(),
-            ..Default::default()
         });
 
         let request = ChatRequest {
-            messages,
+            messages: &messages,
             model: self.model.clone(),
             temperature: self.temperature,
             max_tokens: None,
-            tools: vec![],
+            tools: None,
         };
 
-        let response = self.provider.chat(request).await?;
-        Ok(response.content)
+        let response = self.provider.chat(request, &self.model, self.temperature).await?;
+        Ok(response.text.unwrap_or_default())
     }
 
     async fn chat_stream(&self, prompt: &str) -> BoxStream<'_, Result<String>> {
         // 简化版: 先同步获取, 再包装成 stream
-        // 完整版应调用 provider.chat_stream()
         let result = self.chat(prompt).await;
         futures::stream::once(async move { result }).boxed()
     }
@@ -91,7 +88,7 @@ impl AgentTransport for LocalAgent {
 mod tests {
     use super::*;
     use crate::transport::AgentTransport;
-    use shadow_core::{Attributable, ChatResponse, ChatRequest, ModelProvider, Role, TokenUsage};
+    use shadow_core::{Attributable, ChatResponse, ModelProvider, Role, TokenUsage};
 
     struct MockProvider;
 
@@ -102,16 +99,26 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ModelProvider for MockProvider {
-        fn provider_type(&self) -> &str { "mock" }
-        async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse> {
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            _model: &str,
+            _temperature: Option<f64>,
+        ) -> Result<String> {
+            Ok("mock response".to_string())
+        }
+        async fn chat(
+            &self,
+            _request: ChatRequest<'_>,
+            _model: &str,
+            _temperature: Option<f64>,
+        ) -> Result<ChatResponse> {
             Ok(ChatResponse {
-                content: "mock response".to_string(),
-                reasoning_content: None,
-                tool_calls: vec![],
-                usage: TokenUsage::default(),
+                text: Some("mock response".to_string()),
+                usage: Some(TokenUsage::default()),
             })
         }
-        // chat_stream 使用默认实现
         async fn list_models(&self) -> Result<Vec<String>> {
             Ok(vec!["mock-model".into()])
         }

@@ -20,7 +20,6 @@ pub struct MessageList<'a> {
     pub messages: &'a [ChatMessage],
     /// 滚动偏移 (从底部向上算). 0 = 跟随最新消息.
     pub scroll_from_bottom: usize,
-    /// 是否显示思考内容 (reasoning_content)
     pub show_thinking: bool,
 }
 
@@ -101,7 +100,6 @@ impl<'a> Widget for MessageList<'a> {
             // show_thinking=true 时先渲染思考内容 (dim 样式, 带 "(thinking) " 前缀)
             // content 字段只含回答 (think 标签已在 provider 层分离), 不需要 strip
             if self.show_thinking
-                && let Some(rc) = &msg.reasoning_content
                     && !rc.is_empty() {
                         let mut rc_lines = rc.lines();
                         match rc_lines.next() {
@@ -219,7 +217,6 @@ mod tests {
         ChatMessage {
             role: role.to_string(),
             content: content.to_string(),
-            ..Default::default()
         }
     }
 
@@ -329,9 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_content_shown_when_thinking_enabled() {
         let mut m = msg("assistant", "answer");
-        m.reasoning_content = Some("my thoughts".to_string());
         let messages = vec![m];
         let buf = render_to_buffer(MessageList::new(&messages).show_thinking(true), 40, 5);
         // 第一行应该是 (thinking) 前缀
@@ -342,9 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_content_hidden_when_thinking_disabled() {
         let mut m = msg("assistant", "answer");
-        m.reasoning_content = Some("my thoughts".to_string());
         let messages = vec![m];
         let buf = render_to_buffer(MessageList::new(&messages).show_thinking(false), 40, 3);
         // 第一行应该是 assistant 标签, 不含 thinking

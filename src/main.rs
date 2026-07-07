@@ -230,8 +230,6 @@ async fn chat_direct(
     let system = ChatMessage {
         role: "system".to_string(),
         content: "你是一个有用的 AI 助手.".to_string(),
-        tool_call_id: None,
-        tool_calls: vec![], reasoning_content: None,
     };
 
     if let Some(msg) = message {
@@ -239,8 +237,6 @@ async fn chat_direct(
         let user = ChatMessage {
             role: "user".to_string(),
             content: msg,
-            tool_call_id: None,
-            tool_calls: vec![], reasoning_content: None,
         };
         let request = ChatRequest {
             messages: vec![system, user],
@@ -250,7 +246,7 @@ async fn chat_direct(
             tools: vec![],
         };
         let response = provider.chat(request).await?;
-        println!("{}", response.content);
+        println!("{}", response.text.unwrap_or_default());
     } else {
         // 交互式对话
         println!("影子 v{} [kernel-only] -- 输入 /quit 退出", env!("CARGO_PKG_VERSION"));
@@ -283,8 +279,6 @@ async fn chat_direct(
             history.push(ChatMessage {
                 role: "user".to_string(),
                 content: trimmed.to_string(),
-                tool_call_id: None,
-                tool_calls: vec![], reasoning_content: None,
             });
 
             let request = ChatRequest {
@@ -299,9 +293,7 @@ async fn chat_direct(
                 Ok(response) => {
                     history.push(ChatMessage {
                         role: "assistant".to_string(),
-                        content: response.content.clone(),
-                        tool_call_id: None,
-                        tool_calls: vec![], reasoning_content: None,
+                        content: response.text.clone().unwrap_or_default(),
                     });
                     println!("\n{}\n", response.content);
                 }

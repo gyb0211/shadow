@@ -36,7 +36,6 @@ mod tests {
         let mut state = ChatState::default();
         state.messages.push(ChatMessage {
             role: "user".into(), content: "hi".into(),
-            tool_call_id: None, tool_calls: vec![], reasoning_content: None,
         });
 
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));

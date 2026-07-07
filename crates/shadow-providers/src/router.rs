@@ -17,7 +17,6 @@ use crate::dispatch::ProviderDispatch;
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use shadow_core::provider::ChatChunk;
 use shadow_core::{Attributable, ChatRequest, ChatResponse, ModelProvider, Role};
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
@@ -161,92 +160,21 @@ impl Attributable for RouterModelProvider {
 
 #[async_trait]
 impl ModelProvider for RouterModelProvider {
-    fn provider_type(&self) -> &str {
-        self.default_provider().provider_type()
-    }
-
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
-        let (provider_idx, resolved_model) = self.resolve(&request.model);
-        let mut last_err: Option<anyhow::Error>;
-
-        // 先尝试主 provider
-        {
-            let (_, provider) = &self.model_providers[provider_idx];
-            let mut req = request.clone();
-            req.model = resolved_model;
-            match ProviderDispatch::from_ref(&**provider).chat(req).await {
-                Ok(resp) => return Ok(resp),
-                Err(err) => {
-                    warn!(provider_idx, error = %err, "主 provider 失败, 尝试 fallback chain");
-                    last_err = Some(err);
-                }
-            }
-        }
-
-        // 走 fallback chain
-        if let Some(chain) = self.fallback_chain_for(&request.model) {
-            for &idx in chain {
-                if idx == provider_idx {
-                    continue; // 主 provider 已试过, 不重复
-                }
-                let (name, provider) = &self.model_providers[idx];
-                info!(fallback = %name, "切换到 fallback provider");
-                // chain 中的 provider 用 request.model 原值 (不再做 hint→model 替换)
-                match ProviderDispatch::from_ref(&**provider).chat(request.clone()).await {
-                    Ok(resp) => return Ok(resp),
-                    Err(err) => {
-                        warn!(fallback = %name, error = %err, "fallback provider 也失败");
-                        last_err = Some(err);
-                    }
-                }
-            }
-        }
-
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("router: 所有 provider 均失败 (chat)")))
-    }
-
-    async fn chat_stream(
+    async fn chat_with_system(
         &self,
-        request: ChatRequest,
-    ) -> Result<BoxStream<'static, Result<ChatChunk>>> {
-        // 流式: 只在 pre-stream 阶段尝试 fallback. Ok(stream) 后不再 fallback.
-        let (provider_idx, resolved_model) = self.resolve(&request.model);
-        let mut last_err: Option<anyhow::Error>;
-
-        {
-            let (_, provider) = &self.model_providers[provider_idx];
-            let mut req = request.clone();
-            req.model = resolved_model;
-            match ProviderDispatch::from_ref(&**provider).chat_stream(req).await {
-                Ok(stream) => return Ok(stream),
-                Err(err) => {
-                    warn!(provider_idx, error = %err, "主 provider stream 建立失败, 尝试 fallback");
-                    last_err = Some(err);
-                }
-            }
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<String> {
+        let (provider_idx, resolved_model) = self.resolve(model);
+        let (_, provider) = &self.model_providers[provider_idx];
+        let mut messages = Vec::new();
+        if let Some(sys) = system_prompt {
+            messages.push(shadow_core::ChatMessage::system(sys));
         }
-
-        if let Some(chain) = self.fallback_chain_for(&request.model) {
-            for &idx in chain {
-                if idx == provider_idx {
-                    continue;
-                }
-                let (name, provider) = &self.model_providers[idx];
-                debug!(fallback = %name, "stream 切换到 fallback provider");
-                match ProviderDispatch::from_ref(&**provider)
-                    .chat_stream(request.clone())
-                    .await
-                {
-                    Ok(stream) => return Ok(stream),
-                    Err(err) => {
-                        warn!(fallback = %name, error = %err, "stream fallback 失败");
-                        last_err = Some(err);
-                    }
-                }
-            }
-        }
-
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("router: 所有 stream provider 均失败")))
+        messages.push(shadow_core::ChatMessage { role: "user".into(), content: message.into() });
+        provider.chat_with_history(&messages, &resolved_model, temperature).await
     }
 
     async fn list_models(&self) -> Result<Vec<String>> {

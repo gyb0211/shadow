@@ -380,9 +380,6 @@ mod tests {
         ChatMessage {
             role: role.to_string(),
             content: content.to_string(),
-            tool_call_id: None,
-            tool_calls: vec![],
-            reasoning_content: None,
         }
     }
 

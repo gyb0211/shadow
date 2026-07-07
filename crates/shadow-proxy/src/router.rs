@@ -148,16 +148,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ModelProvider for MockProvider {
-        fn provider_type(&self) -> &str { "mock" }
-        async fn chat(&self, _: ChatRequest) -> Result<ChatResponse> {
-            Ok(ChatResponse {
-                content: "hello from mock".into(),
-                reasoning_content: None,
-                tool_calls: vec![],
-                usage: TokenUsage::default(),
-            })
-        }
-        // chat_stream 使用默认实现
+        async fn chat_with_system(&self, _system: Option<&str>, _msg: &str, _model: &str, _temp: Option<f64>) -> Result<String> { Ok("mock".into()) }
         async fn list_models(&self) -> Result<Vec<String>> {
             Ok(vec!["mock-model".into()])
         }

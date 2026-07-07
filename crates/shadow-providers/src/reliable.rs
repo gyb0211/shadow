@@ -16,7 +16,7 @@ use crate::rate_limit::TokenBucket;
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use shadow_core::provider::ChatChunk;
+use shadow_core::provider::StreamChunk;
 use shadow_core::{Attributable, ChatRequest, ChatResponse, ModelProvider, Role};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -190,7 +190,7 @@ impl ReliableModelProvider {
     }
 
     /// 同步 chat 重试循环 -- 支持 key 轮换 + fallback_models
-    async fn chat_with_retry(&self, request: ChatRequest) -> Result<ChatResponse> {
+    async fn chat_with_retry(&self, request: ChatRequest<'_>) -> Result<ChatResponse> {
         // 模型列表: 原始 model + fallback_models
         let mut models_to_try: Vec<String> = vec![request.model.clone()];
         models_to_try.extend(self.fallback_models.iter().cloned());
@@ -200,8 +200,7 @@ impl ReliableModelProvider {
             if model_idx > 0 {
                 info!(new_model = %model, "切换到 fallback 模型");
             }
-            let mut req = request.clone();
-            req.model = model.clone();
+            let temperature = request.temperature;
 
             let mut keys_tried_this_model = 0usize;
             for attempt in 0..=self.policy.max_retries {
@@ -211,7 +210,7 @@ impl ReliableModelProvider {
                     tokio::time::sleep(backoff).await;
                 }
                 self.pre_call().await;
-                match self.inner.chat(req.clone()).await {
+                match self.inner.chat(request.clone(), model, temperature).await {
                     Ok(resp) => return Ok(resp),
                     Err(err) => {
                         let class_opt = Self::classify_error(&err);
@@ -264,60 +263,34 @@ impl Attributable for ReliableModelProvider {
 
 #[async_trait]
 impl ModelProvider for ReliableModelProvider {
-    fn provider_type(&self) -> &str {
-        self.inner.provider_type()
-    }
-
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
-        self.chat_with_retry(request).await
-    }
-
-    /// 流式 chat -- 只重试 pre-stream 错误 (建立连接失败).
-    /// Ok(BoxStream) 返回后, mid-stream 错误直接透传, 不再重试.
-    /// 不参与 fallback_models (流式 fallback 会导致 chunk 序列错乱).
-    async fn chat_stream(
+    /// chat_with_system -- 带重试/key 轮换/fallback 的单轮调用
+    async fn chat_with_system(
         &self,
-        request: ChatRequest,
-    ) -> Result<BoxStream<'static, Result<ChatChunk>>> {
-        let mut last_err: Option<anyhow::Error> = None;
-        let mut keys_tried = 0usize;
-        for attempt in 0..=self.policy.max_retries {
-            if attempt > 0 {
-                let backoff = self.policy.compute_backoff(attempt);
-                debug!(attempt, max_retries = self.policy.max_retries, ?backoff, "重试 stream 连接");
-                tokio::time::sleep(backoff).await;
-            }
-            self.pre_call().await;
-            match self.inner.chat_stream(request.clone()).await {
-                Ok(stream) => return Ok(stream),
-                Err(err) => {
-                    let class_opt = Self::classify_error(&err);
-                    let retryable = class_opt
-                        .map(|e| e.is_retryable())
-                        .unwrap_or(false);
-                    let is_auth = class_opt
-                        .map(|e| e.is_auth_error())
-                        .unwrap_or(false);
-                    if is_auth && !self.keys.is_empty() {
-                        keys_tried += 1;
-                        if keys_tried >= self.keys.len() {
-                            warn!(attempt, error = %err, "stream 所有 key 均 auth 失败");
-                            return Err(err);
-                        }
-                        self.advance_key();
-                        warn!(attempt, error = %err, "stream auth 错误, 切换 key 重试");
-                        last_err = Some(err);
-                        continue;
-                    }
-                    if !retryable {
-                        return Err(err);
-                    }
-                    warn!(attempt, error = %err, "stream 可重试错误, 退避后重试");
-                    last_err = Some(err);
-                }
-            }
-        }
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("重试耗尽但无错误")))
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<String> {
+        // 构建临时 ChatRequest 用于 chat_with_retry
+        let messages = vec![
+            shadow_core::ChatMessage {
+                role: "system".to_string(),
+                content: system_prompt.unwrap_or("").to_string(),
+            },
+            shadow_core::ChatMessage {
+                role: "user".to_string(),
+                content: message.to_string(),
+            },
+        ];
+        let request = ChatRequest {
+            messages: &messages,
+            model: model.to_string(),
+            temperature,
+            max_tokens: None,
+            tools: None,
+        };
+        let resp = self.chat_with_retry(request).await?;
+        Ok(resp.text.unwrap_or_default())
     }
 
     async fn list_models(&self) -> Result<Vec<String>> {
@@ -372,11 +345,7 @@ mod tests {
 
     #[async_trait]
     impl ModelProvider for MockProvider {
-        fn provider_type(&self) -> &str {
-            "mock"
-        }
-
-        async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse> {
+            async fn chat_with_system(&self, _system: Option<&str>, _message: &str, _model: &str, _temperature: Option<f64>) -> Result<String> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
             let mut guard = self.responses.lock().unwrap();
             if guard.is_empty() {
@@ -384,7 +353,7 @@ mod tests {
             }
             let result = guard.remove(0);
             drop(guard);
-            result
+            result.map(|r| r.text.unwrap_or_default())
         }
 
         async fn list_models(&self) -> Result<Vec<String>> {
@@ -431,11 +400,7 @@ mod tests {
 
     #[async_trait]
     impl ModelProvider for KeyAwareMock {
-        fn provider_type(&self) -> &str {
-            "mock-keyed"
-        }
-
-        async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse> {
+            async fn chat_with_system(&self, _system: Option<&str>, _message: &str, _model: &str, _temperature: Option<f64>) -> Result<String> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
             let key = self.current_key.lock().unwrap().clone();
             let mut guard = self.responses_by_key.lock().unwrap();
@@ -444,7 +409,7 @@ mod tests {
                 let pos = guard.iter().position(|(entry_key, _)| entry_key == k);
                 if let Some(idx) = pos {
                     let (_, result) = guard.remove(idx);
-                    return result;
+                    return result.map(|r| r.text.unwrap_or_default());
                 }
             }
             Err(anyhow::anyhow!("mock-keyed: key 不匹配或耗尽 (key={:?})", key))
@@ -464,9 +429,9 @@ mod tests {
 
     fn ok_response(content: &str) -> Result<ChatResponse> {
         Ok(ChatResponse {
-            content: content.to_string(),
+            text: Some(content.to_string()),
             tool_calls: vec![],
-            usage: shadow_core::TokenUsage::default(),
+            usage: Some(shadow_core::TokenUsage::default()),
             reasoning_content: None,
         })
     }
@@ -492,18 +457,11 @@ mod tests {
         )))
     }
 
-    fn make_request() -> ChatRequest {
-        ChatRequest {
-            messages: vec![ChatMessage {
-                role: "user".to_string(),
-                content: "hi".to_string(),
-                ..Default::default()
-            }],
-            model: "test-model".to_string(),
-            temperature: None,
-            max_tokens: None,
-            tools: vec![],
-        }
+    fn make_messages() -> Vec<ChatMessage> {
+        vec![ChatMessage {
+            role: "user".to_string(),
+            content: "hi".to_string(),
+        }]
     }
 
     fn fast_policy() -> RetryPolicy {
@@ -523,8 +481,8 @@ mod tests {
         let calls = mock.call_count.clone();
         let reliable = ReliableModelProvider::new("test", mock, fast_policy());
 
-        let resp = reliable.chat(make_request()).await.unwrap();
-        assert_eq!(resp.content, "done");
+        let resp = reliable.chat_with_system(None, "hi", "test-model", None).await.unwrap();
+        assert_eq!(resp, "done");
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
@@ -537,7 +495,7 @@ mod tests {
         let calls = mock.call_count.clone();
         let reliable = ReliableModelProvider::new("test", mock, RetryPolicy::default());
 
-        let err = reliable.chat(make_request()).await.unwrap_err();
+        let err = reliable.chat_with_system(None, "hi", "test-model", None).await.unwrap_err();
         let chat_err = err.downcast_ref::<ChatError>().unwrap();
         assert!(!chat_err.is_retryable());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -557,7 +515,7 @@ mod tests {
         let calls = mock.call_count.clone();
         let reliable = ReliableModelProvider::new("test", mock, fast_policy());
 
-        let err = reliable.chat(make_request()).await.unwrap_err();
+        let err = reliable.chat_with_system(None, "hi", "test-model", None).await.unwrap_err();
         let chat_err = err.downcast_ref::<ChatError>().unwrap();
         assert!(chat_err.is_retryable());
         assert_eq!(calls.load(Ordering::SeqCst), 4);
@@ -578,7 +536,7 @@ mod tests {
             },
         );
 
-        let _err = reliable.chat(make_request()).await.unwrap_err();
+        let _err = reliable.chat_with_system(None, "hi", "test-model", None).await.unwrap_err();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -625,7 +583,7 @@ mod tests {
         assert_eq!(chunks.len(), 1);
         let chunk = chunks[0].as_ref().unwrap();
         match chunk {
-            ChatChunk::Done { content, .. } => assert_eq!(content, "done"),
+            StreamChunk::Done { content, .. } => assert_eq!(content, "done"),
             _ => panic!("应该是 Done chunk"),
         }
         assert_eq!(calls.load(Ordering::SeqCst), 2);
@@ -646,7 +604,7 @@ mod tests {
         let reliable = ReliableModelProvider::new("reliable-test", mock, RetryPolicy::default());
         assert_eq!(reliable.role(), Role::Provider);
         assert_eq!(reliable.alias(), "reliable-test");
-        assert_eq!(reliable.provider_type(), "mock");
+        assert_eq!(reliable.alias(), "mock");
     }
 
     #[tokio::test]
@@ -656,7 +614,7 @@ mod tests {
         let calls = mock.call_count.clone();
         let reliable = ReliableModelProvider::new("test", mock, RetryPolicy::default());
 
-        let err = reliable.chat(make_request()).await.unwrap_err();
+        let err = reliable.chat_with_system(None, "hi", "test-model", None).await.unwrap_err();
         assert!(err.downcast_ref::<ChatError>().is_none());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
@@ -680,8 +638,8 @@ mod tests {
                 mock.clone(),
             );
 
-        let resp = reliable.chat(make_request()).await.unwrap();
-        assert_eq!(resp.content, "via good key");
+        let resp = reliable.chat_with_system(None, "hi", "test-model", None).await.unwrap();
+        assert_eq!(resp, "via good key");
         // 至少 2 次调用 (key1 fail + key2 ok)
         assert!(calls.load(Ordering::SeqCst) >= 2);
         // 应该轮换过 key
@@ -705,7 +663,7 @@ mod tests {
                 mock.clone(),
             );
 
-        let err = reliable.chat(make_request()).await.unwrap_err();
+        let err = reliable.chat_with_system(None, "hi", "test-model", None).await.unwrap_err();
         let chat_err = err.downcast_ref::<ChatError>().unwrap();
         assert!(chat_err.is_auth_error());
     }
@@ -727,8 +685,8 @@ mod tests {
         let reliable = ReliableModelProvider::new("test", mock, fast_policy())
             .with_fallback_models(vec!["fallback-model".to_string()]);
 
-        let resp = reliable.chat(make_request()).await.unwrap();
-        assert_eq!(resp.content, "via fallback");
+        let resp = reliable.chat_with_system(None, "hi", "test-model", None).await.unwrap();
+        assert_eq!(resp, "via fallback");
         // 2 次调用 (主模型 + fallback)
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
@@ -747,7 +705,7 @@ mod tests {
         let reliable = ReliableModelProvider::new("test", mock, fast_policy())
             .with_fallback_models(vec!["fb1".to_string(), "fb2".to_string()]);
 
-        let err = reliable.chat(make_request()).await.unwrap_err();
+        let err = reliable.chat_with_system(None, "hi", "test-model", None).await.unwrap_err();
         let chat_err = err.downcast_ref::<ChatError>().unwrap();
         assert!(!chat_err.is_retryable()); // permanent
     }
@@ -758,7 +716,7 @@ mod tests {
         let calls = mock.call_count.clone();
         let reliable = ReliableModelProvider::new("test", mock, RetryPolicy::default());
 
-        let _err = reliable.chat(make_request()).await.unwrap_err();
+        let _err = reliable.chat_with_system(None, "hi", "test-model", None).await.unwrap_err();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -780,10 +738,10 @@ mod tests {
 
         // 前两个立即, 第三个等约 30 秒 (1 token/min / capacity=2 means refill 很慢)
         // 这里只验证最终成功 (限流不引发错误)
-        let r1 = reliable.chat(make_request()).await.unwrap();
-        assert_eq!(r1.content, "a");
-        let r2 = reliable.chat(make_request()).await.unwrap();
-        assert_eq!(r2.content, "b");
+        let r1 = reliable.chat_with_system(None, "hi", "test-model", None).await.unwrap();
+        assert_eq!(r1, "a");
+        let r2 = reliable.chat_with_system(None, "hi", "test-model", None).await.unwrap();
+        assert_eq!(r2, "b");
         // 第三个本应等待, 但测试不阻塞太久 -- 跳过验证第三个, 只验证限流器存在
     }
 }

@@ -14,12 +14,7 @@ pub fn estimate_tokens(messages: &[ChatMessage]) -> usize {
         .iter()
         .map(|m| {
             let content_len = m.content.chars().count();
-            let tool_calls_len: usize = m
-                .tool_calls
-                .iter()
-                .map(|tc| tc.name.len() + tc.arguments.to_string().len())
-                .sum();
-            (content_len + tool_calls_len) / CHARS_PER_TOKEN
+            content_len / CHARS_PER_TOKEN
         })
         .sum()
 }
@@ -87,13 +82,11 @@ pub fn prune_to_fit(messages: &mut Vec<ChatMessage>, max_tokens: usize) -> usize
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shadow_core::ToolCall;
 
     fn make_msg(role: &str, content: &str) -> ChatMessage {
         ChatMessage {
             role: role.to_string(),
             content: content.to_string(),
-            ..Default::default()
         }
     }
 

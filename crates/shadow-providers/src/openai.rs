@@ -6,7 +6,7 @@
 use crate::error::ChatError;
 use crate::reliable::KeyRotator;
 use shadow_core::{
-    Attributable, AuthStyle, ChatChunk, ChatRequest, ChatResponse, ModelProvider,
+    Attributable, AuthStyle, StreamChunk, ChatRequest, ChatResponse, ModelProvider,
     ModelProviderRuntimeOptions, Role, TokenUsage, ToolCall,
 };
 use anyhow::{Context, Result};
@@ -149,27 +149,46 @@ impl KeyRotator for OpenAiProvider {
 
 #[async_trait]
 impl ModelProvider for OpenAiProvider {
-    fn provider_type(&self) -> &str {
-        &self.provider_type
-    }
-
     fn supports_native_tools(&self) -> bool {
         true
     }
 
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+    /// chat_with_system -- OpenAI Chat Completions API 单轮调用
+    ///
+    /// 发送 system + user 消息到 /chat/completions, 返回文本响应.
+    /// content 为空时退化到 reasoning_content (思考模型).
+    async fn chat_with_system(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<String> {
         let client = self.client();
         let url = self.build_url();
 
-        // 转换消息和工具
-        let messages = convert_messages(&request.messages);
-        let tools = convert_tools(&request.tools);
+        // 构建消息列表
+        let mut messages = Vec::new();
+        if let Some(sys) = system_prompt {
+            messages.push(ApiMessage {
+                role: "system".to_string(),
+                content: Some(sys.to_string()),
+                tool_calls: None,
+                reasoning_content: None,
+            });
+        }
+        messages.push(ApiMessage {
+            role: "user".to_string(),
+            content: Some(message.to_string()),
+            tool_calls: None,
+            reasoning_content: None,
+        });
 
         let body = ApiRequest {
-            model: request.model,
+            model: model.to_string(),
             messages,
-            temperature: request.temperature,
-            tools: if tools.is_empty() { None } else { Some(tools) },
+            temperature,
+            tools: None,
             stream: false,
         };
 
@@ -197,180 +216,10 @@ impl ModelProvider for OpenAiProvider {
         // content 为空时退化到 reasoning_content (有些思考模型只填 reasoning_content)
         let content = match &choice.message.content {
             Some(c) if !c.is_empty() => c.clone(),
-            _ => reasoning_content.clone().unwrap_or_default(),
+            _ => reasoning_content.unwrap_or_default(),
         };
 
-        // 解析 tool_calls
-        let tool_calls: Vec<ToolCall> = choice
-            .message
-            .tool_calls
-            .as_ref()
-            .map(|tcs| {
-                tcs.iter()
-                    .map(|tc| {
-                        let args: Value = serde_json::from_str(&tc.function.arguments)
-                            .unwrap_or(Value::Null);
-                        ToolCall {
-                            id: tc.id.clone(),
-                            name: tc.function.name.clone(),
-                            arguments: args,
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let usage = TokenUsage {
-            prompt_tokens: api_resp.usage.prompt_tokens,
-            completion_tokens: api_resp.usage.completion_tokens,
-            total_tokens: api_resp.usage.total_tokens,
-        };
-
-        Ok(ChatResponse {
-            content,
-            tool_calls,
-            usage,
-            reasoning_content,
-        })
-    }
-
-    /// 流式聊天 -- SSE 解析
-    ///
-    /// 发送 `stream: true` 请求, 解析 text/event-stream 响应.
-    /// 每个 `data: {json}` 行解析为 ChatChunk, `data: [DONE]` 结束流.
-    async fn chat_stream(
-        &self,
-        request: ChatRequest,
-    ) -> Result<BoxStream<'static, Result<ChatChunk>>> {
-        let client = self.client();
-        let url = self.build_url();
-
-        // 转换消息和工具
-        let messages = convert_messages(&request.messages);
-        let tools = convert_tools(&request.tools);
-
-        let body = ApiRequest {
-            model: request.model,
-            messages,
-            temperature: request.temperature,
-            tools: if tools.is_empty() { None } else { Some(tools) },
-            stream: true,
-        };
-
-        let resp = self
-            .apply_auth(client.post(&url))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| anyhow::Error::new(ChatError::network(format!("LLM 流式请求失败: {e}"))))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(anyhow::Error::new(ChatError::from_status(status, text)));
-        }
-
-        // 创建 channel 传递解析后的 ChatChunk
-        let (chunk_tx, chunk_rx) = tokio::sync::mpsc::channel::<Result<ChatChunk>>(64);
-
-        // 后台 task: 解析 SSE 字节流, 逐行解析 JSON, 发送 ChatChunk
-        tokio::spawn(async move {
-            let mut byte_stream = resp.bytes_stream();
-            let mut buffer = String::new();
-            // 累积器: 按 index 分组累积 tool_calls 的 arguments fragments
-            let mut tool_calls_map: std::collections::BTreeMap<usize, ToolCallAccum> =
-                std::collections::BTreeMap::new();
-            let mut content = String::new();
-            let mut reasoning_content = String::new();
-            let mut usage = TokenUsage::default();
-            let mut in_think_block = false;
-
-            while let Some(result) = byte_stream.next().await {
-                match result {
-                    Ok(bytes) => {
-                        // 将字节追加到缓冲区, 按 \n 分割行
-                        buffer.push_str(&String::from_utf8_lossy(&bytes));
-
-                        while let Some(pos) = buffer.find('\n') {
-                            let line = buffer[..pos].trim().to_string();
-                            buffer = buffer[pos + 1..].to_string();
-
-                            if line.is_empty() {
-                                continue;
-                            }
-
-                            // 只处理 `data: ` 前缀的行
-                            let Some(data) = line.strip_prefix("data: ") else {
-                                continue;
-                            };
-
-                            // 使用提取的解析函数处理 SSE data
-                            match process_sse_data(
-                                data,
-                                &mut content,
-                                &mut tool_calls_map,
-                                &mut reasoning_content,
-                                &mut usage,
-                                &mut in_think_block,
-                            ) {
-                                None => {
-                                    // 收到 [DONE] -- 发送最终 Done chunk
-                                    let final_tool_calls = build_tool_calls(&tool_calls_map);
-                                    let _ = chunk_tx
-                                        .send(Ok(ChatChunk::Done {
-                                            content: std::mem::take(&mut content),
-                                            tool_calls: final_tool_calls,
-                                            usage: std::mem::take(&mut usage),
-                                            reasoning_content: if reasoning_content.is_empty() {
-                                                None
-                                            } else {
-                                                Some(std::mem::take(&mut reasoning_content))
-                                            },
-                                        }))
-                                        .await;
-                                    return;
-                                }
-                                Some(chunks) => {
-                                    // 发送解析产生的 chunks
-                                    for chunk in chunks {
-                                        let _ = chunk_tx.send(Ok(chunk)).await;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let _ = chunk_tx
-                            .send(Err(anyhow::anyhow!("SSE 流读取失败: {e}")))
-                            .await;
-                        return;
-                    }
-                }
-            }
-
-            // 流自然结束但未收到 [DONE] -- 发送最终 Done chunk
-            let final_tool_calls = build_tool_calls(&tool_calls_map);
-            let _ = chunk_tx
-                .send(Ok(ChatChunk::Done {
-                    content: std::mem::take(&mut content),
-                    tool_calls: final_tool_calls,
-                    usage: std::mem::take(&mut usage),
-                    reasoning_content: if reasoning_content.is_empty() {
-                        None
-                    } else {
-                        Some(std::mem::take(&mut reasoning_content))
-                    },
-                }))
-                .await;
-        });
-
-        // 将 mpsc::Receiver 转为 BoxStream
-        let stream = futures::stream::unfold(chunk_rx, |mut rx| async move {
-            rx.recv().await.map(|item| (item, rx))
-        })
-        .boxed();
-
-        Ok(stream)
+        Ok(content)
     }
 
     async fn list_models(&self) -> Result<Vec<String>> {
@@ -398,8 +247,6 @@ struct ApiMessage {
     role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<ApiToolCall>>,
     /// 思考模型要求 assistant tool-call 历史消息回传 reasoning_content
@@ -519,26 +366,8 @@ fn convert_messages(messages: &[shadow_core::ChatMessage]) -> Vec<ApiMessage> {
     messages
         .iter()
         .map(|m| {
-            let tool_calls: Option<Vec<ApiToolCall>> = if m.tool_calls.is_empty() {
-                None
-            } else {
-                Some(
-                    m.tool_calls
-                        .iter()
-                        .map(|tc| ApiToolCall {
-                            id: tc.id.clone(),
-                            call_type: "function".to_string(),
-                            function: ApiFunction {
-                                name: tc.name.clone(),
-                                arguments: serde_json::to_string(&tc.arguments).unwrap_or_default(),
-                            },
-                        })
-                        .collect(),
-                )
-            };
-
-            // content 为空且有 tool_calls 时, API 期望 content 为 null
-            let content = if m.content.is_empty() && tool_calls.is_some() {
+            // content 为空时, API 期望 content 为 null
+            let content = if m.content.is_empty() {
                 None
             } else {
                 Some(m.content.clone())
@@ -547,9 +376,8 @@ fn convert_messages(messages: &[shadow_core::ChatMessage]) -> Vec<ApiMessage> {
             ApiMessage {
                 role: m.role.clone(),
                 content,
-                tool_call_id: m.tool_call_id.clone(),
-                tool_calls,
-                reasoning_content: m.reasoning_content.clone(),
+                tool_calls: None,
+                reasoning_content: None,
             }
         })
         .collect()
@@ -580,7 +408,7 @@ const THINK_SNOWFLAKE: &str = "\u{2744}";
 /// 2. 雪花字符 U+2744 (部分模型使用, 开闭标签相同)
 ///
 /// 使用 `in_think_block` 跟踪当前是否在思考块内, 支持跨 chunk 的状态维护.
-fn split_think_content(text: &str, in_think_block: &mut bool) -> Vec<ChatChunk> {
+fn split_think_content(text: &str, in_think_block: &mut bool) -> Vec<StreamChunk> {
     let mut chunks = Vec::new();
     let mut remaining = text;
 
@@ -599,7 +427,7 @@ fn split_think_content(text: &str, in_think_block: &mut bool) -> Vec<ChatChunk> 
             if let Some((pos, tag_len, is_snowflake)) = end_pos {
                 // 结束标签之前的内容是 ReasoningDelta
                 if pos > 0 {
-                    chunks.push(ChatChunk::ReasoningDelta(remaining[..pos].to_string()));
+                    chunks.push(StreamChunk::reasoning(remaining[..pos].to_string()));
                 }
                 // 跳过结束标签
                 remaining = &remaining[pos + tag_len..];
@@ -610,7 +438,7 @@ fn split_think_content(text: &str, in_think_block: &mut bool) -> Vec<ChatChunk> 
                 *in_think_block = false;
             } else {
                 // 没有结束标签, 全部是 ReasoningDelta
-                chunks.push(ChatChunk::ReasoningDelta(remaining.to_string()));
+                chunks.push(StreamChunk::reasoning(remaining.to_string()));
                 remaining = "";
             }
         } else {
@@ -627,7 +455,7 @@ fn split_think_content(text: &str, in_think_block: &mut bool) -> Vec<ChatChunk> 
             if let Some((pos, tag_len, is_snowflake)) = start_pos {
                 // 开始标签之前的内容是 ContentDelta
                 if pos > 0 {
-                    chunks.push(ChatChunk::ContentDelta(remaining[..pos].to_string()));
+                    chunks.push(StreamChunk::delta(remaining[..pos].to_string()));
                 }
                 // 跳过开始标签
                 remaining = &remaining[pos + tag_len..];
@@ -638,7 +466,7 @@ fn split_think_content(text: &str, in_think_block: &mut bool) -> Vec<ChatChunk> 
                 *in_think_block = true;
             } else {
                 // 没有开始标签, 全部是 ContentDelta
-                chunks.push(ChatChunk::ContentDelta(remaining.to_string()));
+                chunks.push(StreamChunk::delta(remaining.to_string()));
                 remaining = "";
             }
         }
@@ -650,7 +478,7 @@ fn split_think_content(text: &str, in_think_block: &mut bool) -> Vec<ChatChunk> 
 /// 处理单行 SSE data payload -- 解析 JSON, 更新累积器, 返回需要发送的 chunks
 ///
 /// 返回值:
-/// - `Some(Vec<ChatChunk>)`: 解析产生的 chunks (可能为空)
+/// - `Some(Vec<StreamChunk>)`: 解析产生的 chunks (可能为空)
 /// - `None`: 收到 `[DONE]` 标记, 流结束
 fn process_sse_data(
     data: &str,
@@ -659,7 +487,7 @@ fn process_sse_data(
     reasoning_content: &mut String,
     usage: &mut TokenUsage,
     in_think_block: &mut bool,
-) -> Option<Vec<ChatChunk>> {
+) -> Option<Vec<StreamChunk>> {
     // [DONE] 标记 -- 返回 None 表示流结束
     if data == "[DONE]" {
         return None;
@@ -696,10 +524,11 @@ fn process_sse_data(
     if let Some(text) = delta.get("content").and_then(|v| v.as_str())
         && !text.is_empty() {
             for chunk in split_think_content(text, in_think_block) {
-                match &chunk {
-                    ChatChunk::ContentDelta(c) => content.push_str(c),
-                    ChatChunk::ReasoningDelta(r) => reasoning_content.push_str(r),
-                    _ => {}
+                if !chunk.delta.is_empty() {
+                    content.push_str(&chunk.delta);
+                }
+                if let Some(r) = &chunk.reasoning {
+                    reasoning_content.push_str(r);
                 }
                 chunks.push(chunk);
             }
@@ -709,7 +538,7 @@ fn process_sse_data(
     if let Some(rc) = delta.get("reasoning_content").and_then(|v| v.as_str())
         && !rc.is_empty() {
             reasoning_content.push_str(rc);
-            chunks.push(ChatChunk::ReasoningDelta(rc.to_string()));
+            chunks.push(StreamChunk::reasoning(rc.to_string()));
         }
 
     // 工具调用增量
@@ -727,12 +556,7 @@ fn process_sse_data(
                 }
                 if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
                     entry.arguments.push_str(args);
-                    chunks.push(ChatChunk::ToolCallDelta {
-                        index,
-                        id: entry.id.clone(),
-                        name: entry.name.clone(),
-                        arguments_fragment: args.to_string(),
-                    });
+                    // 工具调用增量在 provider 内部累积, 不再推送 StreamChunk
                 }
             }
         }
@@ -785,10 +609,8 @@ mod tests {
         assert!(result.is_some());
         let chunks = result.unwrap();
         assert_eq!(chunks.len(), 1);
-        match &chunks[0] {
-            ChatChunk::ContentDelta(text) => assert_eq!(text, "你好"),
-            _ => panic!("应该是 ContentDelta"),
-        }
+        // 新的 StreamChunk 是 struct, 检查 delta 字段
+        assert_eq!(chunks[0].delta, "你好");
         assert_eq!(content, "你好");
     }
 
@@ -858,32 +680,10 @@ mod tests {
     }
 
     #[test]
-    fn convert_messages_handles_tool_calls() {
-        let messages = vec![ChatMessage {
-            role: "assistant".to_string(),
-            content: String::new(),
-            tool_call_id: None,
-            tool_calls: vec![ToolCall {
-                id: "call_1".to_string(),
-                name: "search".to_string(),
-                arguments: serde_json::json!({"q": "rust"}),
-            }],
-            reasoning_content: None,
-        }];
-        let result = convert_messages(&messages);
-        assert_eq!(result.len(), 1);
-        assert!(result[0].content.is_none()); // 空 content + 有 tool_calls → null
-        assert!(result[0].tool_calls.is_some());
-    }
-
-    #[test]
     fn convert_messages_plain_text() {
         let messages = vec![ChatMessage {
             role: "user".to_string(),
             content: "hello".to_string(),
-            tool_call_id: None,
-            tool_calls: vec![],
-            reasoning_content: None,
         }];
         let result = convert_messages(&messages);
         assert_eq!(result[0].content.as_deref(), Some("hello"));

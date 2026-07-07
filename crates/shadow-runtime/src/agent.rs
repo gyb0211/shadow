@@ -15,7 +15,7 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use parking_lot::Mutex;
 use shadow_core::{
-    Attributable, AutonomyLevel, ChatChunk, ChatMessage, ChatRequest, ChatResponse, Memory,
+    Attributable, AutonomyLevel, StreamChunk, ChatMessage, ChatRequest, ChatResponse, Memory,
     MemoryStrategy, ModelProvider, Observer, ObserverEvent, Role, SessionStore, TokenUsage, ToolCall,
     ToolResult,
 };
@@ -239,8 +239,6 @@ impl Agent {
         let mut messages = vec![ChatMessage {
             role: "system".to_string(),
             content: system_content,
-            tool_call_id: None,
-            ..Default::default()
         }];
 
         // 加载历史 (锁在 block 内释放, 避免 future !Send)
@@ -253,8 +251,6 @@ impl Agent {
         messages.push(ChatMessage {
             role: "user".to_string(),
             content: user_message.to_string(),
-            tool_call_id: None,
-            ..Default::default()
         });
 
         // 工具调用循环
@@ -291,16 +287,16 @@ impl Agent {
 
             // 构建请求
             let request = ChatRequest {
-                messages: messages.clone(),
+                messages: &messages,
                 model: self.config.model.clone(),
                 temperature: self.config.temperature,
                 max_tokens: None,
-                tools: self.tools.specs(),
+                tools: None,
             };
 
             // 调用 provider (流式) -- P0: 上下文溢出恢复
             let start = std::time::Instant::now();
-            let stream = match self.provider.chat_stream(request).await {
+            let response = match self.provider.chat(request, &self.config.model.clone(), self.config.temperature).await {
                 Ok(s) => s,
                 Err(e) => {
                     // 尝试从上下文溢出中恢复
@@ -311,28 +307,26 @@ impl Agent {
                     return Err(e);
                 }
             };
-            let response = consume_stream(stream, on_delta.as_ref()).await?;
+
             let duration_ms = start.elapsed().as_millis() as u64;
 
             // 记录 LLM 响应
             self.observer.record_event(&ObserverEvent::LlmResponse {
                 model: self.config.model.clone(),
                 duration_ms,
-                tokens: response.usage.total_tokens,
+                tokens: response.usage.as_ref().map(|u| u.total_tokens).unwrap_or(0),
             });
 
             // 判断是否有工具调用
             if response.tool_calls.is_empty() {
                 // 无工具调用, 对话结束
-                final_content = response.content.clone();
+                final_content = response.text.clone().unwrap_or_default();
                 final_reasoning = response.reasoning_content.clone();
 
                 // 添加 assistant 消息到历史
                 messages.push(ChatMessage {
                     role: "assistant".to_string(),
-                    content: response.content.clone(),
-                    tool_call_id: None,
-                    ..Default::default()
+                    content: response.text.clone().unwrap_or_default(),
                 });
                 break;
             }
@@ -341,10 +335,7 @@ impl Agent {
             // 注: reasoning_content 必须回传, 部分 provider 拒绝缺少此字段的 tool-call 历史
             messages.push(ChatMessage {
                 role: "assistant".to_string(),
-                content: response.content.clone(),
-                tool_call_id: None,
-                tool_calls: response.tool_calls.clone(),
-                reasoning_content: response.reasoning_content.clone(),
+                content: response.text.clone().unwrap_or_default(),
             });
 
             // 执行工具调用 -- 检查是否有工具需要审批
@@ -409,8 +400,6 @@ impl Agent {
                         messages.push(ChatMessage {
                             role: "tool".to_string(),
                             content: tool_content,
-                            tool_call_id: Some(tool_call.id.clone()),
-                            ..Default::default()
                         });
                         break;
                     }
@@ -429,8 +418,6 @@ impl Agent {
                     messages.push(ChatMessage {
                         role: "tool".to_string(),
                         content: actual_content,
-                        tool_call_id: Some(tool_call.id.clone()),
-                        ..Default::default()
                     });
 
                     // Warning(1) 时注入提示消息
@@ -440,8 +427,6 @@ impl Agent {
                         messages.push(ChatMessage {
                             role: "system".to_string(),
                             content: format!("你似乎在重复调用工具, 请尝试不同方法. ({msg})"),
-                            tool_call_id: None,
-                            ..Default::default()
                         });
                     }
                 }
@@ -509,8 +494,6 @@ impl Agent {
                         messages.push(ChatMessage {
                             role: "tool".to_string(),
                             content: tool_content,
-                            tool_call_id: Some(tool_call.id.clone()),
-                            ..Default::default()
                         });
                         break;
                     }
@@ -529,8 +512,6 @@ impl Agent {
                     messages.push(ChatMessage {
                         role: "tool".to_string(),
                         content: actual_content,
-                        tool_call_id: Some(tool_call.id.clone()),
-                        ..Default::default()
                     });
 
                     // Warning(1) 时注入提示消息
@@ -540,8 +521,6 @@ impl Agent {
                         messages.push(ChatMessage {
                             role: "system".to_string(),
                             content: format!("你似乎在重复调用工具, 请尝试不同方法. ({msg})"),
-                            tool_call_id: None,
-                            ..Default::default()
                         });
                     }
                 }
@@ -564,15 +543,10 @@ impl Agent {
             history.push(ChatMessage {
                 role: "user".to_string(),
                 content: user_message.to_string(),
-                tool_call_id: None,
-                ..Default::default()
             });
             history.push(ChatMessage {
                 role: "assistant".to_string(),
                 content: final_content.clone(),
-                tool_call_id: None,
-                reasoning_content: final_reasoning.clone(),
-                ..Default::default()
             });
         }
 
@@ -591,16 +565,11 @@ impl Agent {
                 let user_msg = ChatMessage {
                     role: "user".to_string(),
                     content: user_message.to_string(),
-                    tool_call_id: None,
-                    ..Default::default()
                 };
                 let assistant_msg = ChatMessage {
                     role: "assistant".to_string(),
                     content: final_content.clone(),
-                    tool_call_id: None,
-                    reasoning_content: final_reasoning.clone(),
-                    ..Default::default()
-                };
+                    };
                 if let Err(e) = store.append_message(&id, &user_msg).await {
                     shadow_log::record!(WARN, Action::Fail, format!("追加用户消息失败: {e}"));
                 }
@@ -1003,7 +972,6 @@ fn try_recover_context_overflow(messages: &mut Vec<ChatMessage>, error: &anyhow:
         ChatMessage {
             role: "system".to_string(),
             content: "[部分早期对话历史已裁剪以适应上下文窗口]".to_string(),
-            ..Default::default()
         },
     );
 
@@ -1095,7 +1063,6 @@ mod context_tests {
         ChatMessage {
             role: role.to_string(),
             content: content.to_string(),
-            ..Default::default()
         }
     }
 
@@ -1205,60 +1172,3 @@ mod context_tests {
     }
 }
 
-/// 消费流式 ChatChunk 流, 聚合为完整 ChatResponse
-///
-/// 对每个 ContentDelta 调用 on_delta 回调 (如果提供),
-/// 从 Done chunk 获取完整累积结果.
-async fn consume_stream(
-    mut stream: BoxStream<'static, Result<ChatChunk>>,
-    on_delta: Option<&Arc<dyn StreamDeltaCallback>>,
-) -> Result<ChatResponse> {
-    let mut content = String::new();
-    let mut tool_calls = Vec::new();
-    let mut usage = TokenUsage::default();
-    let mut reasoning_content: Option<String> = None;
-
-    while let Some(chunk_result) = stream.next().await {
-        match chunk_result? {
-            ChatChunk::ContentDelta(delta) => {
-                if let Some(cb) = on_delta {
-                    cb(StreamDelta::Content(delta.clone()));
-                }
-                content.push_str(&delta);
-            }
-            ChatChunk::ReasoningDelta(delta) => {
-                if let Some(cb) = on_delta {
-                    cb(StreamDelta::Reasoning(delta.clone()));
-                }
-                reasoning_content = Some(match reasoning_content.take() {
-                    Some(mut rc) => {
-                        rc.push_str(&delta);
-                        rc
-                    }
-                    None => delta,
-                });
-            }
-            ChatChunk::ToolCallDelta { .. } => {
-                // 工具调用增量已在 provider 内部累积, Done chunk 中包含完整结果
-            }
-            ChatChunk::Done {
-                content: done_content,
-                tool_calls: done_tool_calls,
-                usage: done_usage,
-                reasoning_content: done_reasoning,
-            } => {
-                content = done_content;
-                tool_calls = done_tool_calls;
-                usage = done_usage;
-                reasoning_content = done_reasoning;
-            }
-        }
-    }
-
-    Ok(ChatResponse {
-        content,
-        tool_calls,
-        usage,
-        reasoning_content,
-    })
-}

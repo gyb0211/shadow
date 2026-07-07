@@ -293,7 +293,6 @@ mod tests {
         let mut s = AppState::new();
         s.chat.messages.push(ChatMessage {
             role: "user".into(), content: "hi".into(),
-            tool_call_id: None, tool_calls: vec![], reasoning_content: None,
         });
         s.chat.input = "/clear history".to_string();
         assert!(s.try_slash_input());

@@ -29,10 +29,6 @@ impl Attributable for CapturingProvider {
 
 #[async_trait]
 impl ModelProvider for CapturingProvider {
-    fn provider_type(&self) -> &str {
-        "mock"
-    }
-
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         // 捕获 system 消息内容
         if let Some(sys) = request.messages.first() {
@@ -42,9 +38,7 @@ impl ModelProvider for CapturingProvider {
         }
         Ok(ChatResponse {
             content: self.reply.clone(),
-            tool_calls: vec![],
-            usage: TokenUsage::default(),
-            reasoning_content: None,
+            usage: Some(TokenUsage::default()),
         })
     }
 
