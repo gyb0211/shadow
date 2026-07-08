@@ -4,6 +4,113 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+
+#[macro_export]
+macro_rules! define_provider_ref {
+    ($name:ident, $category_doc: literal) => {
+        #[doc = concat!("Reference to a configured `[",$category_doc,".<type>.<alias>] entry.`")]
+        #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord,Hash, Serialize, Deserialize,)]
+        #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+        #[serde(transparent)]
+        pub struct $name(pub String);
+
+        impl $name {
+            pub fn new(value: impl Into<String>) -> Self{
+                Self(value.into())
+            }
+        }
+
+        pub fn as_str(&self) -> &str {
+            &self.0
+        }
+
+        pub fn is_empty(&self) -> bool{
+            self.0.is_empty()
+        }
+
+        pub fn into_inner(self) -> String {
+            self.0
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                std::fmt::Display::fmt(&self.0, f)
+            }
+        }
+
+        impl std::ops::Deref for $name {
+            type Target = str;
+            fn deref(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl From<String> for $name {
+            fn from(v: String) -> Self {
+                Self(v)
+            }
+        }
+
+        impl From<&str> for $name {
+            fn from(v: &str) -> Self {
+                Self(v.to_string())
+            }
+        }
+
+        impl From<$name> for String {
+            fn from(v: $name) -> Self {
+                v.0
+            }
+        }
+
+        impl PartialEq<str> for $name {
+            fn eq(&self, other: &str) -> bool {
+                self.0 == other
+            }
+        }
+
+        impl PartialEq<&str> for $name {
+            fn eq(&self, other: &&str) -> bool {
+                self.0 == *other
+            }
+        }
+
+        impl PartialEq<String> for $name {
+            fn eq(&self, other: &String) -> bool {
+                &self.0 == other
+            }
+        }
+
+    };
+}
+
+define_provider_ref!(ModelProviderRef, "providers.models");
+define_provider_ref!(RiskProfileRef, "risk_profiles");
+define_provider_ref!(RuntimeProfileRef, "runtime_profiles");
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 /// 单个 provider 配置条目
 ///
 /// 每个 `[providers.<family>.<alias>]` 块反序列化为此结构。

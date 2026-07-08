@@ -38,6 +38,8 @@ pub mod migration;
 pub mod provider;
 pub mod schema;
 pub mod secrets;
+pub mod multi;
+pub mod autonomy;
 
 pub use migration::{migrate_str, CURRENT_SCHEMA_VERSION};
 pub use provider::{default_base_url, list_providers, resolve_provider, ProviderEntry, ProviderRef, ResolvedProvider};

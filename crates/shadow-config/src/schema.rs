@@ -5,13 +5,31 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use crate::multi::alias_agent::AliasedAgentConfig;
 
 /// 顶层配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 pub struct Config {
     /// schema 版本号 -- 用于未来迁移。新配置默认 = CURRENT_SCHEMA_VERSION。
     #[serde(default)]
     pub schema_version: u32,
+
+    /// Aliased agents  [agents.<alias>]
+    /// 代理映射关系
+    pub agents: HashMap<String, AliasedAgentConfig>,
+
+    pub risk_profiles: HashMap<String, RiskProfileConfig>,
+
+    pub runtime_profiles: HashMap<String, RuntimeProfileConfig>,
+
+    pub skill_bundles: HashMap<String, SkillBundleConfig>,
+
+    pub transcription: TranscriptionConfig,
+
+    pub jira: JiraConfig,
+
+
 
     #[serde(default)]
     pub agent: AgentSection,
@@ -50,6 +68,16 @@ impl Default for Config {
             personas: HashMap::new(),
         }
     }
+}
+
+
+
+impl Config{
+    pub fn agent(self, agent_alias: &str) -> Option<&AliasedAgentConfig> {
+        None
+    }
+
+    pub fn model_provider_for_agent(self, agent_alias: &str) ->
 }
 
 /// [agent] 配置段
