@@ -309,7 +309,7 @@ fn api_keys_serializes_as_array() {
 
 #[test]
 fn reliable_config_defaults() {
-    use shadow_config::provider::ReliableConfig;
+    use shadow_config::providers::ReliableConfig;
     let rc = ReliableConfig::default();
     assert_eq!(rc.max_retries, 3);
     assert_eq!(rc.initial_backoff_ms, 1000);
@@ -406,7 +406,7 @@ alias = "default"
 
 #[test]
 fn router_section_round_trip() {
-    use shadow_config::provider::{RouterConfig, RouteEntry};
+    use shadow_config::providers::{RouterConfig, RouteEntry};
     let mut config = Config::default();
     config.router = Some(RouterConfig {
         default: "openai.default".to_string(),

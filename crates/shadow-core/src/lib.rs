@@ -20,7 +20,7 @@ pub mod session_store;
 pub mod workspace;
 
 pub use channel::{Channel, ChannelMessage, SendMessage};
-pub use kennel::attribution::{Attributable, Role};
+pub use kennel::attribution::*;
 pub use kennel::memory::{Memory, MemoryCategory, MemoryEntry, MemoryStrategy};
 pub use kennel::observer::{Observer, ObserverEvent};
 pub use kennel::provider::{

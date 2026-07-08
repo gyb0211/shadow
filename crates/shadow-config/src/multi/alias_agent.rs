@@ -11,14 +11,18 @@ pub struct AliasedAgentConfig{
 
  
     #[serde(default)]
-    pub model_provider: crate::provider::ModelProviderRef,
+    pub model_provider: crate::providers::ModelProviderRef,
 
 
     #[serde(default)]
-    pub risk_profile:  crate::provider::RiskProfileRef,
+    pub risk_profile:  crate::providers::RiskProfileRef,
 
  
     #[serde(default)]
-    pub runtime_profile:  crate::provider::RuntimeProfileRef,
+    pub runtime_profile:  crate::providers::RuntimeProfileRef,
+
+}
+
+impl AliasedAgentConfig {
 
 }

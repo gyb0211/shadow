@@ -13,6 +13,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use shadow_config::Config;
 use shadow_log::Action;
 
 /// 影子 -- trait 驱动的 AI agent 运行时
@@ -140,7 +141,7 @@ async fn main() -> Result<()> {
     shadow_log::install_subscriber(cli.verbose);
 
     // 加载配置
-    let mut config = shadow_config::load_or_init()?;
+    let mut config: Config = shadow_config::load_or_init()?;
 
     match cli.command {
         Commands::Agent {
@@ -173,7 +174,7 @@ async fn main() -> Result<()> {
 
             match message {
                 Some(msg) => {
-                    let response = shadow_providers::ProviderDispatch::from_ref(model_provider)
+                    let response = shadow_providers::ProviderDispatch::from_ref(&*model_provider)
                         .simple_chat(&msg, model_name, Some(final_temperature)).await?;
                     println!("{response}");
                 }

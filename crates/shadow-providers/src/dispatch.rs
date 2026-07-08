@@ -24,6 +24,8 @@ pub struct ProviderDispatchRef<'a> {
     inner: &'a dyn ModelProvider,
 }
 
+
+
 impl ProviderDispatch {
     #[must_use]
     pub fn new(inner: Arc<dyn ModelProvider>) -> Self {
@@ -48,6 +50,10 @@ impl ProviderDispatch {
     pub async fn chat(&self, request: ChatRequest<'_>) -> Result<ChatResponse> {
         self.as_ref().chat(request).await
     }
+    /// 同步聊天 -- 返回完整 ChatResponse (含 tool_calls/usage)
+    pub async fn simple_chat(&self, message: &str, model: &str, temperature: Option<f64>) -> Result<String> {
+        self.as_ref().simple_chat(message, model, temperature).await
+    }
 
     /// 列出可用模型
     pub async fn list_models(&self) -> Result<Vec<String>> {
@@ -62,6 +68,10 @@ impl ProviderDispatchRef<'_> {
         let model = request.model.clone();
         let temperature = request.temperature;
         self.inner.chat(request, &model, temperature).instrument(span).await
+    }
+
+    pub async fn simple_chat(&self, message: &str, model: &str, temperature: Option<f64>) -> Result<String> {
+        self.inner.simple_chat(message, model, temperature).await
     }
 
     /// 列出可用模型 -- 自动包裹归因 span

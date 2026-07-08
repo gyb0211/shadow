@@ -26,10 +26,6 @@ regex.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "multipart"] }
 url.workspace = true
 urlencoding.workspace = true
-shadow-proxy = { workspace = true, optional = true }
-
-[features]
-proxy = ["dep:shadow-proxy"]
 
 [dev-dependencies]
 tempfile.workspace = true

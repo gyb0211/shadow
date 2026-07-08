@@ -35,15 +35,19 @@
 //! ```
 
 pub mod migration;
-pub mod provider;
+pub mod providers;
 pub mod schema;
 pub mod secrets;
 pub mod multi;
 pub mod autonomy;
+pub mod model_provider;
+pub mod proxy_client;
+
+pub use model_provider::*;
+pub use proxy_client::*;
 
 pub use migration::{migrate_str, CURRENT_SCHEMA_VERSION};
-pub use provider::{default_base_url, list_providers, resolve_provider, ProviderEntry, ProviderRef, ResolvedProvider};
-pub use provider::{ReliableConfig, RouteEntry, RouterConfig};
-pub use schema::{AgentSection, Config, MemorySection, ProvidersConfig};
-pub use schema::{config_dir, config_path, load_from, load_or_init, save, save_to};
+pub use providers::{default_base_url, list_providers, resolve_provider, ProviderEntry, ProviderRef, ResolvedProvider};
+pub use providers::{ReliableConfig, RouteEntry, RouterConfig};
+pub use schema::{ Config};
 pub use secrets::{is_encrypted, SecretStore};

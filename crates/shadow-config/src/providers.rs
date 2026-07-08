@@ -1,35 +1,38 @@
 //! Provider 配置条目与解析
 
+use crate::model_provider::{
+    ModelProviderConfig, CustomModelProviderConfig
+};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
 
 #[macro_export]
 macro_rules! define_provider_ref {
     ($name:ident, $category_doc: literal) => {
         #[doc = concat!("Reference to a configured `[",$category_doc,".<type>.<alias>] entry.`")]
-        #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord,Hash, Serialize, Deserialize,)]
+        #[derive(
+            Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+        )]
         #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
         #[serde(transparent)]
         pub struct $name(pub String);
 
         impl $name {
-            pub fn new(value: impl Into<String>) -> Self{
+            pub fn new(value: impl Into<String>) -> Self {
                 Self(value.into())
             }
-        }
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
 
-        pub fn as_str(&self) -> &str {
-            &self.0
-        }
+            pub fn is_empty(&self) -> bool {
+                self.0.is_empty()
+            }
 
-        pub fn is_empty(&self) -> bool{
-            self.0.is_empty()
-        }
-
-        pub fn into_inner(self) -> String {
-            self.0
+            pub fn into_inner(self) -> String {
+                self.0
+            }
         }
 
         impl std::fmt::Display for $name {
@@ -86,7 +89,6 @@ macro_rules! define_provider_ref {
                 &self.0 == other
             }
         }
-
     };
 }
 
@@ -94,22 +96,65 @@ define_provider_ref!(ModelProviderRef, "providers.models");
 define_provider_ref!(RiskProfileRef, "risk_profiles");
 define_provider_ref!(RuntimeProfileRef, "runtime_profiles");
 
+#[macro_export]
+macro_rules! for_each_model_provider_slot {
+    ($mac: ident) => {
+        $mac! {
+            (custom, "custom", CustomModelProviderConfig),
+        }
+    };
+}
+macro_rules! emit_model_provider_struct {
+    // field + field_str + config
+    ($(($field: ident,$type_str: literal, $cfg_ty: ty)) + $(,)?) => {
+        #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+        pub struct ModelProviders {
+            #[serde(default, skip_serializing_if="HashMap::is_empty")]
+            $(pub $field: HashMap<String, $cfg_ty>,)+
+        }
+    };
+}
 
+for_each_model_provider_slot!(emit_model_provider_struct);
 
+impl ModelProviders {
+    pub fn find(&self, family: &str, alias: &str) -> Option<&ModelProviderConfig> {
+        macro_rules! emit_get {
+            // field + field_str + config
+            ($(($field: ident,$type_str: literal, $cfg_ty: ty)) + $(,)?) => {
+                match family {
+                    $($type_str => self.$field.get(alias).map(|cfg|&cfg.base), )+
+                    _ => None,
+                }
+            };
+        }
+        for_each_model_provider_slot!(emit_get)
+    }
 
+    pub fn iter_entries(&self) ->impl Iterator<Item = (&str, &str, &ModelProviderConfig)>{
+        let mut out:Vec<(&str, &str, &ModelProviderConfig)> = Vec::new();
+        macro_rules! emit_iter {
+            // field + field_str + config
+            ($(($field: ident,$type_str: literal, $cfg_ty: ty)) + $(,)?) => {
+                $(
+                for (alias, cfg) in &self.$field {
+                    out.push(($type_str, alias.as_str() , &cfg.base))
+                }
+                )+
+            };
+        }
+        for_each_model_provider_slot!(emit_iter);
+        out.into_iter()
+    }
+}
 
-
-
-
-
-
-
-
-
-
-
-
-
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Providers {
+    pub models: ModelProviders,
+    // pub tts: TtsProviders,
+    // pub transcription: TranscriptionProviders,
+}
 
 /// 单个 provider 配置条目
 ///
@@ -443,11 +488,7 @@ pub fn resolve_provider(
                 "provider '{}' 在 family '{}' 中不存在 (可用别名: {})",
                 pref.alias,
                 pref.family,
-                family_map
-                    .keys()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                family_map.keys().cloned().collect::<Vec<_>>().join(", ")
             )
         })?
         .clone();
@@ -472,4 +513,3 @@ pub fn list_providers(
     out.sort();
     out
 }
-

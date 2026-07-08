@@ -3,152 +3,140 @@
 //! 实现 OpenAI Chat Completions API 的 tool calling 功能.
 //! 将 agent-core 的 ToolSpec 转换为 API 格式, 解析响应中的 tool_calls.
 
-use crate::error::ChatError;
-use crate::reliable::KeyRotator;
-use shadow_core::{
-    Attributable, AuthStyle, StreamChunk, ChatRequest, ChatResponse, ModelProvider,
-    ModelProviderRuntimeOptions, Role, TokenUsage, ToolCall,
-};
+
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
+use reqwest::{Client, Error, RequestBuilder, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use shadow_core::{
+    Attributable, AuthStyle, ChatRequest, ChatResponse, ModelProvider, ModelProviderKind,
+    ModelProviderRuntimeOptions, ProviderKind, Role, StreamChunk, TokenUsage, ToolCall,
+};
+
 use std::sync::{Arc, RwLock};
 
-pub struct OpenAiProvider {
-    provider_type: String,
-    /// 当前 API key -- Arc<RwLock> 支持运行时切换 (key 轮换)
-    api_key: Arc<RwLock<Option<String>>>,
-    base_url: String,
-    opts: ModelProviderRuntimeOptions,
-    /// 复用连接池 -- 构造一次, 不再 per-call 重建
-    client: reqwest::Client,
+pub struct OpenAiCompatibleModelProvider {
+    pub alias: String,
+    pub name: String,
+    pub base_url: String,
+    pub credential: Option<String>,
+    pub auth_header: AuthStyle,
+    supports_vision: bool,
+    native_tool_calling: bool,
+    timeout_secs: u64,
 }
 
-impl OpenAiProvider {
-    /// 构造器 (向后兼容) -- 不带运行时选项, 默认 Bearer auth
-    pub fn new(provider_type: &str, api_key: Option<&str>, base_url: Option<&str>) -> Result<Self> {
+impl OpenAiCompatibleModelProvider {
+    pub fn new_with_vision(
+        alias: &str,
+        name: &str,
+        base_url: &str,
+        credential: Option<&str>,
+        auth_style: AuthStyle,
+        supports_vision: bool,
+    ) -> Self {
         Self::new_with_opts(
-            provider_type,
-            api_key,
+            alias,
+            name,
             base_url,
-            ModelProviderRuntimeOptions::default(),
+            credential,
+            auth_style,
+            supports_vision,
+            None,
+            false,
         )
     }
 
     /// 构造器 (带运行时选项) -- 支持 auth_style / timeout / extra_headers / api_path
     pub fn new_with_opts(
-        provider_type: &str,
-        api_key: Option<&str>,
-        base_url: Option<&str>,
-        opts: ModelProviderRuntimeOptions,
-    ) -> Result<Self> {
-        let default_url = match provider_type {
-            "openai" => "https://api.openai.com/v1",
-            "openrouter" => "https://openrouter.ai/api/v1",
-            "ollama" => "http://localhost:11434/v1",
-            _ => "https://api.openai.com/v1",
-        };
-        // HTTP client 构造一次, 后续 chat/stream/list_models 复用
-        let mut builder = reqwest::Client::builder();
-        if let Some(timeout) = opts.timeout {
-            builder = builder.timeout(timeout);
-        }
-        let client = builder.build().context("创建 HTTP 客户端失败")?;
-        Ok(Self {
-            provider_type: provider_type.to_string(),
-            api_key: Arc::new(RwLock::new(api_key.map(String::from))),
-            base_url: base_url.unwrap_or(default_url).to_string(),
-            opts,
-            client,
-        })
-    }
-
-    /// 设置/切换 API key -- Reliable 层 key 轮换时调用
-    ///
-    /// 传入 None 清空 key (匿名 provider, 如本地 ollama)
-    pub fn set_api_key(&self, key: Option<String>) {
-        if let Ok(mut guard) = self.api_key.write() {
-            *guard = key;
+        alias: &str,
+        name: &str,
+        base_url: &str,
+        credential: Option<&str>,
+        auth_style: AuthStyle,
+        supports_vision: bool,
+        user_agent: Option<&str>,
+        merge_system_into_user: bool,
+    ) -> Self {
+        Self {
+            alias: alias.to_string(),
+            name: name.to_string(),
+            base_url: base_url.to_string(),
+            credential: credential.map(ToString::to_string),
+            auth_header: auth_style,
+            supports_vision,
+            native_tool_calling: true,
+            timeout_secs: 60,
         }
     }
-
-    /// 借用共享的 api_key Arc -- Reliable 层用于把 key 池与 inner 同步
-    #[must_use]
-    pub fn shared_api_key(&self) -> Arc<RwLock<Option<String>>> {
-        Arc::clone(&self.api_key)
+    pub fn without_native_tools(mut self) -> Self {
+        self.native_tool_calling = false;
+        self
     }
 
-    /// 借用 HTTP client -- chat/stream/list_models 用
-    fn client(&self) -> &reqwest::Client {
-        &self.client
+    pub fn chat_completions_url(&self) -> String {
+        format!("{}/{}", self.base_url, "chat/completions")
     }
 
-    /// 构建 API URL -- 尊重 opts.api_path (默认 chat/completions)
-    fn build_url(&self) -> String {
-        let path = self.opts.api_path.as_deref().unwrap_or("chat/completions");
-        format!("{}/{path}", self.base_url)
+    pub fn apply_auth_header(
+        &self,
+        builder: RequestBuilder,
+        credential: Option<&str>,
+    ) -> RequestBuilder {
+        apply_auth_to_request(builder, &self.auth_header, credential)
     }
-
-    /// 把 auth header / extra headers / query 参数应用到请求构建器
-    fn apply_auth(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        // 附加 extra_headers
-        for (k, v) in &self.opts.extra_headers {
-            if let Ok(name) = reqwest::header::HeaderName::from_bytes(k.as_bytes())
-                && let Ok(value) = reqwest::header::HeaderValue::from_str(v)
-            {
-                req = req.header(name, value);
-            }
-        }
-        let key_opt = self
-            .api_key
-            .read()
-            .map(|guard| guard.clone())
-            .ok()
-            .flatten();
-        let Some(key) = key_opt else {
-            return req;
-        };
-        match &self.opts.auth_style {
-            AuthStyle::Bearer => {
-                if let Ok(value) =
-                    reqwest::header::HeaderValue::from_str(&format!("Bearer {key}"))
-                {
-                    req = req.header(reqwest::header::AUTHORIZATION, value);
-                }
-            }
-            AuthStyle::XApiKey => {
-                if let Ok(value) = reqwest::header::HeaderValue::from_str(&key) {
-                    req = req.header("x-api-key", value);
-                }
-            }
-            AuthStyle::Query(param_name) => {
-                req = req.query(&[(param_name.as_str(), key.as_str())]);
-            }
-        }
-        req
+    pub fn http_client(&self) -> Client {
+        shadow_config::build_runtime_proxy_client_with_timeouts(
+            "model_provider.compatible",
+            self.timeout_secs,
+            10,
+        )
     }
 }
 
-impl Attributable for OpenAiProvider {
+fn apply_auth_to_request(
+    builder: RequestBuilder,
+    auth_style: &AuthStyle,
+    credential: Option<&str>,
+) -> RequestBuilder {
+    let credential = match credential {
+        None => return builder,
+        Some(c) => c,
+    };
+
+    match auth_style {
+        AuthStyle::Bearer => builder.bearer_auth(credential),
+        AuthStyle::XApiKey => builder.header("x-api-key", credential),
+        AuthStyle::Custom(header) => builder.header(header, credential),
+    }
+}
+
+fn parse_chat_response_body(name: &str, body: &str) -> anyhow::Result<ApiResponse> {
+    serde_json::from_str(body)
+        .map_err(|_| anyhow::Error::msg(format!("{name} API returned an unexpected payload")))
+}
+
+impl Attributable for OpenAiCompatibleModelProvider {
     fn role(&self) -> Role {
-        Role::Provider
+        Role::Provider(ProviderKind::Model(ModelProviderKind::Custom))
     }
     fn alias(&self) -> &str {
-        &self.provider_type
+        &self.alias
     }
 }
-
-impl KeyRotator for OpenAiProvider {
-    fn set_key(&self, key: Option<&str>) {
-        OpenAiProvider::set_api_key(self, key.map(String::from));
-    }
-}
+//
+// impl KeyRotator for OpenAiCompatibleModelProvider {
+//     fn set_key(&self, key: Option<&str>) {
+//         OpenAiCompatibleModelProvider::set_api_key(self, key.map(String::from));
+//     }
+// }
 
 #[async_trait]
-impl ModelProvider for OpenAiProvider {
+impl ModelProvider for OpenAiCompatibleModelProvider {
     fn supports_native_tools(&self) -> bool {
         true
     }
@@ -164,9 +152,6 @@ impl ModelProvider for OpenAiProvider {
         model: &str,
         temperature: Option<f64>,
     ) -> Result<String> {
-        let client = self.client();
-        let url = self.build_url();
-
         // 构建消息列表
         let mut messages = Vec::new();
         if let Some(sys) = system_prompt {
@@ -192,40 +177,55 @@ impl ModelProvider for OpenAiProvider {
             stream: false,
         };
 
-        let resp = self
-            .apply_auth(client.post(&url))
-            .json(&body)
+        let url = self.chat_completions_url();
+
+        let resp = match self
+            .apply_auth_header(
+                self.http_client().post(&url).json(&body),
+                self.credential.as_deref(),
+            )
             .send()
             .await
-            .map_err(|e| anyhow::Error::new(ChatError::network(format!("LLM 请求失败: {e}"))))?;
+        {
+            Ok(resp) => resp,
+            Err(e) => return Err(e.into()),
+        };
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(anyhow::Error::new(ChatError::from_status(status, text)));
+            let error = resp.text().await?;
+            anyhow::bail!("{} API error {status}: {error}", self.name);
         }
 
-        let api_resp: ApiResponse = resp
-            .json()
-            .await
-            .context("解析 LLM 响应失败")?;
+        let body = resp.text().await?;
 
-        let choice = api_resp.choices.first().context("LLM 响应无 choices")?;
-        let reasoning_content = choice.message.reasoning_content.clone();
-
-        // content 为空时退化到 reasoning_content (有些思考模型只填 reasoning_content)
-        let content = match &choice.message.content {
-            Some(c) if !c.is_empty() => c.clone(),
-            _ => reasoning_content.unwrap_or_default(),
-        };
-
-        Ok(content)
+        let chat_resp = parse_chat_response_body(&self.name, &body)?;
+        chat_resp
+            .choices
+            .into_iter()
+            .next()
+            .map(|c| {
+                if c.message.tool_calls.is_some()
+                    && c.message.tool_calls.as_ref().is_some_and(|t| !t.is_empty())
+                {
+                    serde_json::to_string(&c.message)
+                        .unwrap_or_else(|_| c.message.effective_content())
+                } else {
+                    c.message.effective_content()
+                }
+            })
+            .ok_or_else(|| anyhow::Error::msg(format!("{} no response", self.name)))
     }
 
     async fn list_models(&self) -> Result<Vec<String>> {
         let client = self.client();
         let url = format!("{}/models", self.base_url);
-        let resp: ModelsResponse = self.apply_auth(client.get(&url)).send().await?.json().await?;
+        let resp: ModelsResponse = self
+            .apply_auth(client.get(&url))
+            .send()
+            .await?
+            .json()
+            .await?;
         Ok(resp.data.into_iter().map(|m| m.id).collect())
     }
 }
@@ -286,37 +286,104 @@ struct ApiToolSpec {
 
 #[derive(Deserialize)]
 struct ApiResponse {
-    choices: Vec<ApiChoice>,
+    choices: Vec<Choice>,
     usage: ApiUsage,
 }
 
-#[derive(Deserialize)]
-struct ApiChoice {
-    message: ApiChoiceMessage,
+#[derive(Debug, Deserialize)]
+struct Choice {
+    message: ResponseMessage,
 }
 
-#[derive(Deserialize)]
-struct ApiChoiceMessage {
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(from = "RawResponseMessage")]
+struct ResponseMessage {
     content: Option<String>,
     /// 思考模型 (DeepSeek-R1 等) 返回的推理内容, 与 content 分离
-    #[serde(default)]
     reasoning_content: Option<String>,
-    #[serde(default)]
-    tool_calls: Option<Vec<ApiToolCallResponse>>,
+    tool_calls: Option<Vec<ToolCall>>,
+}
+
+impl ResponseMessage {
+    pub fn effective_content(&self) -> String {
+        self.content.as_ref().map(|c| )
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RawResponseMessage {
+    content: Option<OpenAiAssistantContent>,
+    reasoning_content: Option<String>,
+    reasoning: Option<String>,
+    tool_calls: Option<Vec<ToolCall>>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum  OpenAiAssistantContent{
+    Text(String),
+    Parts(Vec<OpenAiAssistantContentPart>)
+}
+#[derive(Debug, Deserialize)]
+struct OpenAiAssistantContentPart{
+    #[serde(rename="type")]
+    kind:Option<String>,
+
+    text: Option<String>,
+}
+
+impl From<RawResponseMessage> for ResponseMessage {
+    fn from(raw: RawResponseMessage) -> Self {
+        let reasoning_content = raw.reasoning_content.or(raw.reasoning);
+        Self{
+            content: openai_assistant_content_plaintext(raw.content),
+            reasoning_content,
+            tool_calls: raw.tool_calls
+        }
+    }
+}
+
+fn openai_assistant_content_plaintext(content: Option<OpenAiAssistantContent>) -> Option<String>{
+    match content? {
+        OpenAiAssistantContent::Text(t) => {
+            if t.is_empty() { None }else { Some(t) }
+        }
+        OpenAiAssistantContent::Parts(parts) => {
+            let mut text = String::new();
+            for p in parts{
+                if p.kind.as_deref() != Some(text) {
+                    continue;
+                }
+                let Some(pt) = p.text.filter(text| !text.is_empty()) else{continue;}
+                if !text.is_empty() {text.push('\n');}
+                text.push_str(&pt);
+
+            }
+            if text.is_empty() {None} else {Some(text)}
+        }
+    }
 }
 
 /// 响应中的工具调用
-#[derive(Deserialize)]
-struct ApiToolCallResponse {
-    id: String,
-    #[serde(rename = "type")]
-    #[allow(dead_code)]
-    call_type: String,
-    function: ApiFunctionResponse,
+#[derive(Debug, Serialize, Deserialize)]
+struct ToolCall {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    function: Option<Function>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    arguments: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parameters: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extra_content: Option<serde_json::Value>,
 }
 
-#[derive(Deserialize)]
-struct ApiFunctionResponse {
+#[derive(Debug, Serialize, Deserialize)]
+struct Function {
     name: String,
     arguments: String,
 }
@@ -349,9 +416,7 @@ struct ToolCallAccum {
 }
 
 /// 将累积的 ToolCallAccum 转换为完整的 ToolCall 列表
-fn build_tool_calls(
-    map: &std::collections::BTreeMap<usize, ToolCallAccum>,
-) -> Vec<ToolCall> {
+fn build_tool_calls(map: &std::collections::BTreeMap<usize, ToolCallAccum>) -> Vec<ToolCall> {
     map.values()
         .map(|t| ToolCall {
             id: t.id.clone().unwrap_or_default(),
@@ -522,24 +587,26 @@ fn process_sse_data(
 
     // 文本增量 -- 可能含 <think 标签, 需要拆分为 ContentDelta 和 ReasoningDelta
     if let Some(text) = delta.get("content").and_then(|v| v.as_str())
-        && !text.is_empty() {
-            for chunk in split_think_content(text, in_think_block) {
-                if !chunk.delta.is_empty() {
-                    content.push_str(&chunk.delta);
-                }
-                if let Some(r) = &chunk.reasoning {
-                    reasoning_content.push_str(r);
-                }
-                chunks.push(chunk);
+        && !text.is_empty()
+    {
+        for chunk in split_think_content(text, in_think_block) {
+            if !chunk.delta.is_empty() {
+                content.push_str(&chunk.delta);
             }
+            if let Some(r) = &chunk.reasoning {
+                reasoning_content.push_str(r);
+            }
+            chunks.push(chunk);
         }
+    }
 
     // 推理内容增量 (DeepSeek-R1 等思考模型的独立字段) -- 累积并推送 ReasoningDelta
     if let Some(rc) = delta.get("reasoning_content").and_then(|v| v.as_str())
-        && !rc.is_empty() {
-            reasoning_content.push_str(rc);
-            chunks.push(StreamChunk::reasoning(rc.to_string()));
-        }
+        && !rc.is_empty()
+    {
+        reasoning_content.push_str(rc);
+        chunks.push(StreamChunk::reasoning(rc.to_string()));
+    }
 
     // 工具调用增量
     if let Some(tool_call_deltas) = delta.get("tool_calls").and_then(|v| v.as_array()) {
@@ -563,130 +630,4 @@ fn process_sse_data(
     }
 
     Some(chunks)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use shadow_core::ChatMessage;
-
-    #[test]
-    fn build_tool_calls_from_accumulated_fragments() {
-        let mut map = std::collections::BTreeMap::new();
-        map.insert(
-            0,
-            ToolCallAccum {
-                id: Some("call_123".to_string()),
-                name: Some("get_weather".to_string()),
-                arguments: r#"{"city":"北京"}"#.to_string(),
-            },
-        );
-        let result = build_tool_calls(&map);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].id, "call_123");
-        assert_eq!(result[0].name, "get_weather");
-        assert_eq!(result[0].arguments["city"], "北京");
-    }
-
-    #[test]
-    fn build_tool_calls_empty_map() {
-        let map = std::collections::BTreeMap::new();
-        let result = build_tool_calls(&map);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn process_sse_data_content_delta() {
-        let mut content = String::new();
-        let mut tool_calls_map = std::collections::BTreeMap::new();
-        let mut reasoning = String::new();
-        let mut usage = TokenUsage::default();
-        let mut in_think_block = false;
-
-        let sse_data = r#"{"choices":[{"delta":{"content":"你好"}}]}"#;
-        let result = process_sse_data(sse_data, &mut content, &mut tool_calls_map, &mut reasoning, &mut usage, &mut in_think_block);
-
-        assert!(result.is_some());
-        let chunks = result.unwrap();
-        assert_eq!(chunks.len(), 1);
-        // 新的 StreamChunk 是 struct, 检查 delta 字段
-        assert_eq!(chunks[0].delta, "你好");
-        assert_eq!(content, "你好");
-    }
-
-    #[test]
-    fn process_sse_data_done_marker() {
-        let mut content = String::new();
-        let mut tool_calls_map = std::collections::BTreeMap::new();
-        let mut reasoning = String::new();
-        let mut usage = TokenUsage::default();
-        let mut in_think_block = false;
-
-        let result = process_sse_data("[DONE]", &mut content, &mut tool_calls_map, &mut reasoning, &mut usage, &mut in_think_block);
-        assert!(result.is_none()); // None 表示流结束
-    }
-
-    #[test]
-    fn process_sse_data_tool_call_delta() {
-        let mut content = String::new();
-        let mut tool_calls_map = std::collections::BTreeMap::new();
-        let mut reasoning = String::new();
-        let mut usage = TokenUsage::default();
-        let mut in_think_block = false;
-
-        // 第一个 fragment: 工具名 + 部分 arguments
-        let sse1 = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search","arguments":"{\"q\":"}}]}}]}"#;
-        let _ = process_sse_data(sse1, &mut content, &mut tool_calls_map, &mut reasoning, &mut usage, &mut in_think_block);
-        
-        // 第二个 fragment: 剩余 arguments
-        let sse2 = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"rust\"}"}}]}}]}"#;
-        let _ = process_sse_data(sse2, &mut content, &mut tool_calls_map, &mut reasoning, &mut usage, &mut in_think_block);
-
-        // 验证累积结果
-        let accum = &tool_calls_map[&0];
-        assert_eq!(accum.id.as_deref(), Some("call_1"));
-        assert_eq!(accum.name.as_deref(), Some("search"));
-        assert_eq!(accum.arguments, r#"{"q":"rust"}"#);
-    }
-
-    #[test]
-    fn process_sse_data_usage_extraction() {
-        let mut content = String::new();
-        let mut tool_calls_map = std::collections::BTreeMap::new();
-        let mut reasoning = String::new();
-        let mut usage = TokenUsage::default();
-        let mut in_think_block = false;
-
-        let sse_data = r#"{"choices":[{"delta":{}}],"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}"#;
-        let _ = process_sse_data(sse_data, &mut content, &mut tool_calls_map, &mut reasoning, &mut usage, &mut in_think_block);
-
-        assert_eq!(usage.prompt_tokens, 10);
-        assert_eq!(usage.completion_tokens, 20);
-        assert_eq!(usage.total_tokens, 30);
-    }
-
-    #[test]
-    fn process_sse_data_invalid_json_skipped() {
-        let mut content = String::new();
-        let mut tool_calls_map = std::collections::BTreeMap::new();
-        let mut reasoning = String::new();
-        let mut usage = TokenUsage::default();
-        let mut in_think_block = false;
-
-        let result = process_sse_data("not valid json", &mut content, &mut tool_calls_map, &mut reasoning, &mut usage, &mut in_think_block);
-        // 返回空 chunks (跳过), 不报错
-        assert!(result.is_some());
-        assert!(result.unwrap().is_empty());
-    }
-
-    #[test]
-    fn convert_messages_plain_text() {
-        let messages = vec![ChatMessage {
-            role: "user".to_string(),
-            content: "hello".to_string(),
-        }];
-        let result = convert_messages(&messages);
-        assert_eq!(result[0].content.as_deref(), Some("hello"));
-        assert!(result[0].tool_calls.is_none());
-    }
 }

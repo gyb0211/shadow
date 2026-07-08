@@ -86,6 +86,7 @@ impl MarkdownMemory {
             } else {
                 id
             },
+            agent_id: None,
             key: key.to_string(),
             content: body,
             category,
@@ -93,6 +94,12 @@ impl MarkdownMemory {
             session_id,
             score: None,
             agent_alias: None,
+            namespace: "".to_string(),
+            importance: None,
+            superseded_by: None,
+            kind: None,
+            pinned: false,
+            tenant_id: None,
         }
     }
 }

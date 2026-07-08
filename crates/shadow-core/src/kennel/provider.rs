@@ -133,7 +133,7 @@ pub enum AuthStyle {
     Bearer,
     XApiKey,
     /// key 作为 URL query 参数, 字段值是参数名 (如 "key" / "apikey")
-    Query(String),
+    Custom(String),
 }
 
 /// Provider 运行时选项 -- 注入 HTTP 层细节
@@ -146,6 +146,14 @@ pub enum AuthStyle {
 /// 在调用 reqwest 时做一次转换.
 #[derive(Debug, Clone, Default)]
 pub struct ModelProviderRuntimeOptions {
+    
+    
+    pub provider_kind:Option<String>,
+    
+    pub provider_api_url: Option<String>,
+    
+    pub native_tools: Option<bool>,
+    
     /// HTTP 请求超时 (None = reqwest 默认)
     pub timeout: Option<std::time::Duration>,
     /// 推理强度 (如 "low" / "medium" / "high"), OpenAI o-series / Anthropic 用
