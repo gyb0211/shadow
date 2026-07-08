@@ -53,7 +53,7 @@ macro_rules! attribution_span {
             target: "shadow_log_attribution",
             "shadow_attribution",
             role = %role.family_str(),
-            field = %role.attribution_field(),
+            field = %role.attribution_field().unwrap_or(""),
             alias = %alias,
         )
     }};

@@ -65,55 +65,6 @@ impl DefaultMemoryStrategy {
     }
 }
 
-#[async_trait]
-impl MemoryStrategy for DefaultMemoryStrategy {
-    async fn before_chat(&self, user_message: &str, session_id: Option<&str>) -> Vec<MemoryEntry> {
-        let queries = extract_queries(user_message);
-        // 没有可提取的关键词时, 用原消息兜底检索一次
-        let queries: Vec<String> = if queries.is_empty() {
-            vec![user_message.to_string()]
-        } else {
-            queries
-        };
-
-        let mut seen_ids: HashSet<String> = HashSet::new();
-        let mut entries: Vec<MemoryEntry> = Vec::new();
-        for q in &queries {
-            if let Ok(found) = self.memory.recall(q, 5, session_id).await {
-                for e in found {
-                    if seen_ids.insert(e.id.clone()) {
-                        entries.push(e);
-                    }
-                }
-            }
-        }
-        // 按 score 降序 (None 排后)
-        entries.sort_by(|a, b| {
-            b.score.unwrap_or(0.0)
-                .partial_cmp(&a.score.unwrap_or(0.0))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        entries.truncate(5);
-        entries
-    }
-
-    async fn after_chat(
-        &self,
-        user_message: &str,
-        assistant_response: &str,
-        session_id: Option<&str>,
-    ) -> Result<()> {
-        if !is_important_turn(user_message, assistant_response) {
-            return Ok(());
-        }
-        let key = format!("turn_{}", chrono::Utc::now().timestamp_millis());
-        let content = format!("[用户] {user_message}\n[助手] {assistant_response}");
-
-        self.memory
-            .store(&key, &content, MemoryCategory::Conversation, session_id)
-            .await
-    }
-}
 
 /// 简单的重要性过滤器 -- 决定本轮对话是否值得存储.
 ///

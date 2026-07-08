@@ -64,7 +64,7 @@ impl ProviderDispatch {
 impl ProviderDispatchRef<'_> {
     /// 同步聊天 -- 自动包裹归因 span
     pub async fn chat(&self, request: ChatRequest<'_>) -> Result<ChatResponse> {
-        let span = shadow_log::attribution_span!(&self.inner);
+        let span = shadow_log::attribution_span!(&*self.inner);
         let model = request.model.clone();
         let temperature = request.temperature;
         self.inner.chat(request, &model, temperature).instrument(span).await
@@ -76,7 +76,7 @@ impl ProviderDispatchRef<'_> {
 
     /// 列出可用模型 -- 自动包裹归因 span
     pub async fn list_models(&self) -> Result<Vec<String>> {
-        let span = shadow_log::attribution_span!(&self.inner);
+        let span = shadow_log::attribution_span!(&*self.inner);
         self.inner.list_models().instrument(span).await
     }
 }

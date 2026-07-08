@@ -3,18 +3,16 @@
 //! 实现 OpenAI Chat Completions API 的 tool calling 功能.
 //! 将 agent-core 的 ToolSpec 转换为 API 格式, 解析响应中的 tool_calls.
 
-
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
-use futures::stream::BoxStream;
 use reqwest::{Client, Error, RequestBuilder, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use shadow_core::{
-    Attributable, AuthStyle, ChatRequest, ChatResponse, ModelProvider, ModelProviderKind,
-    ModelProviderRuntimeOptions, ProviderKind, Role, StreamChunk, TokenUsage, ToolCall,
+    Attributable, AuthStyle, ChatResponse, ModelProvider, ModelProviderKind,
+    ModelProviderRuntimeOptions, ProviderKind, Role, StreamChunk, TokenUsage,
 };
 
 use std::sync::{Arc, RwLock};
@@ -169,7 +167,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             reasoning_content: None,
         });
 
-        let body = ApiRequest {
+        let body = ChatRequest {
             model: model.to_string(),
             messages,
             temperature,
@@ -216,24 +214,12 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             })
             .ok_or_else(|| anyhow::Error::msg(format!("{} no response", self.name)))
     }
-
-    async fn list_models(&self) -> Result<Vec<String>> {
-        let client = self.client();
-        let url = format!("{}/models", self.base_url);
-        let resp: ModelsResponse = self
-            .apply_auth(client.get(&url))
-            .send()
-            .await?
-            .json()
-            .await?;
-        Ok(resp.data.into_iter().map(|m| m.id).collect())
-    }
 }
 
 // ── API 类型 (OpenAI Chat Completions 格式) ──
 
 #[derive(Serialize)]
-struct ApiRequest {
+struct ChatRequest {
     model: String,
     messages: Vec<ApiMessage>,
     temperature: Option<f64>,
@@ -305,10 +291,37 @@ struct ResponseMessage {
 }
 
 impl ResponseMessage {
-    pub fn effective_content(&self) -> String {
-        self.content.as_ref().map(|c| )
+    fn effective_content(&self) -> String {
+        self.content.as_ref().map(|c| strip_thing_tags(c))
+            .filter(|c| !c.is_empty()).unwrap_or_default()
+    }
+
+    fn effective_content_options(&self) -> Option<String> {
+        self.content.as_ref().map(|c| strip_thing_tags(c))
+            .filter(|c| !c.is_empty())
     }
 }
+
+fn strip_thing_tags(content: &str) -> String {
+    let mut result = String::with_capacity(content.len());
+
+    let mut rest = content;
+    loop {
+        if let Some(start) = rest.find("<think>") {
+            result.push_str(&rest[..start]);
+            if let Some(end) = rest[start..].find("</think>"){
+                rest = &rest[start + end + "</think>".len()..];
+            }else{
+                break;
+            }
+        }else{
+            result.push_str(rest);
+            break;
+        }
+    }
+    result.trim().to_string()
+}
+
 
 #[derive(Debug, Deserialize)]
 struct RawResponseMessage {
@@ -319,14 +332,14 @@ struct RawResponseMessage {
 }
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-enum  OpenAiAssistantContent{
+enum OpenAiAssistantContent {
     Text(String),
-    Parts(Vec<OpenAiAssistantContentPart>)
+    Parts(Vec<OpenAiAssistantContentPart>),
 }
 #[derive(Debug, Deserialize)]
-struct OpenAiAssistantContentPart{
-    #[serde(rename="type")]
-    kind:Option<String>,
+struct OpenAiAssistantContentPart {
+    #[serde(rename = "type")]
+    kind: Option<String>,
 
     text: Option<String>,
 }
@@ -334,31 +347,30 @@ struct OpenAiAssistantContentPart{
 impl From<RawResponseMessage> for ResponseMessage {
     fn from(raw: RawResponseMessage) -> Self {
         let reasoning_content = raw.reasoning_content.or(raw.reasoning);
-        Self{
+        Self {
             content: openai_assistant_content_plaintext(raw.content),
             reasoning_content,
-            tool_calls: raw.tool_calls
+            tool_calls: raw.tool_calls,
         }
     }
 }
 
-fn openai_assistant_content_plaintext(content: Option<OpenAiAssistantContent>) -> Option<String>{
+fn openai_assistant_content_plaintext(content: Option<OpenAiAssistantContent>) -> Option<String> {
     match content? {
         OpenAiAssistantContent::Text(t) => {
-            if t.is_empty() { None }else { Some(t) }
+            if t.is_empty() { None } else { Some(t) }
         }
         OpenAiAssistantContent::Parts(parts) => {
             let mut text = String::new();
-            for p in parts{
-                if p.kind.as_deref() != Some(text) {
+            for p in parts {
+                if p.kind.as_deref() != Some("text") {
                     continue;
                 }
-                let Some(pt) = p.text.filter(text| !text.is_empty()) else{continue;}
-                if !text.is_empty() {text.push('\n');}
+                let Some(pt) = p.text.filter(|text | !text.is_empty()) else { continue; };
+                if !text.is_empty() { text.push('\n'); }
                 text.push_str(&pt);
-
             }
-            if text.is_empty() {None} else {Some(text)}
+            if text.is_empty() { None } else { Some(text) }
         }
     }
 }
@@ -409,225 +421,28 @@ struct ApiModel {
 
 /// 工具调用累积器 -- 流式响应中按 index 分组累积 tool_call 的 fragments
 #[derive(Default)]
-struct ToolCallAccum {
+struct StreamToolCallAccumulator {
     id: Option<String>,
     name: Option<String>,
     arguments: String,
+    extra_content: Option<serde_json::Value>,
 }
 
-/// 将累积的 ToolCallAccum 转换为完整的 ToolCall 列表
-fn build_tool_calls(map: &std::collections::BTreeMap<usize, ToolCallAccum>) -> Vec<ToolCall> {
-    map.values()
-        .map(|t| ToolCall {
-            id: t.id.clone().unwrap_or_default(),
-            name: t.name.clone().unwrap_or_default(),
-            arguments: serde_json::from_str(&t.arguments).unwrap_or(Value::Null),
-        })
-        .collect()
+#[derive(Debug, Deserialize)]
+struct StreamToolCallDelta{
+    index: Option<usize>,
+    id: Option<String>,
+    function: Option<StreamFunctionDelta>,
+    name: Option<String>,
+    arguments: Option<String>,
+    extra_content: Option<serde_json::Value>,
+}
+#[derive(Debug, Deserialize)]
+struct StreamFunctionDelta{
+    name: Option<String>,
+    arguments: Option<String>,
 }
 
-/// 转换消息: ChatMessage -> ApiMessage
-fn convert_messages(messages: &[shadow_core::ChatMessage]) -> Vec<ApiMessage> {
-    messages
-        .iter()
-        .map(|m| {
-            // content 为空时, API 期望 content 为 null
-            let content = if m.content.is_empty() {
-                None
-            } else {
-                Some(m.content.clone())
-            };
-
-            ApiMessage {
-                role: m.role.clone(),
-                content,
-                tool_calls: None,
-                reasoning_content: None,
-            }
-        })
-        .collect()
-}
-
-/// 转换工具规格: ToolSpec -> ApiTool
-fn convert_tools(tools: &[shadow_core::ToolSpec]) -> Vec<ApiTool> {
-    tools
-        .iter()
-        .map(|t| ApiTool {
-            tool_type: "function".to_string(),
-            function: ApiToolSpec {
-                name: t.name.clone(),
-                description: t.description.clone(),
-                parameters: t.parameters.clone(),
-            },
-        })
-        .collect()
-}
-
-/// 雪花字符 (U+2744), 部分 provider 用此标记思考内容
-const THINK_SNOWFLAKE: &str = "\u{2744}";
-
-/// 将 content 增量拆分为 ContentDelta 和 ReasoningDelta
-///
-/// 处理两种思考标签格式:
-/// 1. `<think`/`</think` (标准格式, 如 MiniMax)
-/// 2. 雪花字符 U+2744 (部分模型使用, 开闭标签相同)
-///
-/// 使用 `in_think_block` 跟踪当前是否在思考块内, 支持跨 chunk 的状态维护.
-fn split_think_content(text: &str, in_think_block: &mut bool) -> Vec<StreamChunk> {
-    let mut chunks = Vec::new();
-    let mut remaining = text;
-
-    while !remaining.is_empty() {
-        if *in_think_block {
-            // 在思考块内: 查找结束标签 </think 或 雪花字符
-            let end_pos = remaining
-                .find("</think")
-                .map(|pos| (pos, "</think".len(), false))
-                .or_else(|| {
-                    remaining
-                        .find(THINK_SNOWFLAKE)
-                        .map(|pos| (pos, THINK_SNOWFLAKE.len(), true))
-                });
-
-            if let Some((pos, tag_len, is_snowflake)) = end_pos {
-                // 结束标签之前的内容是 ReasoningDelta
-                if pos > 0 {
-                    chunks.push(StreamChunk::reasoning(remaining[..pos].to_string()));
-                }
-                // 跳过结束标签
-                remaining = &remaining[pos + tag_len..];
-                // 跳过可选的 > (仅对 </think 标签)
-                if !is_snowflake && remaining.starts_with('>') {
-                    remaining = &remaining[1..];
-                }
-                *in_think_block = false;
-            } else {
-                // 没有结束标签, 全部是 ReasoningDelta
-                chunks.push(StreamChunk::reasoning(remaining.to_string()));
-                remaining = "";
-            }
-        } else {
-            // 不在思考块内: 查找开始标签 <think 或 雪花字符
-            let start_pos = remaining
-                .find("<think")
-                .map(|pos| (pos, "<think".len(), false))
-                .or_else(|| {
-                    remaining
-                        .find(THINK_SNOWFLAKE)
-                        .map(|pos| (pos, THINK_SNOWFLAKE.len(), true))
-                });
-
-            if let Some((pos, tag_len, is_snowflake)) = start_pos {
-                // 开始标签之前的内容是 ContentDelta
-                if pos > 0 {
-                    chunks.push(StreamChunk::delta(remaining[..pos].to_string()));
-                }
-                // 跳过开始标签
-                remaining = &remaining[pos + tag_len..];
-                // 跳过可选的 > (仅对 <think 标签)
-                if !is_snowflake && remaining.starts_with('>') {
-                    remaining = &remaining[1..];
-                }
-                *in_think_block = true;
-            } else {
-                // 没有开始标签, 全部是 ContentDelta
-                chunks.push(StreamChunk::delta(remaining.to_string()));
-                remaining = "";
-            }
-        }
-    }
-
-    chunks
-}
-
-/// 处理单行 SSE data payload -- 解析 JSON, 更新累积器, 返回需要发送的 chunks
-///
-/// 返回值:
-/// - `Some(Vec<StreamChunk>)`: 解析产生的 chunks (可能为空)
-/// - `None`: 收到 `[DONE]` 标记, 流结束
-fn process_sse_data(
-    data: &str,
-    content: &mut String,
-    tool_calls_map: &mut std::collections::BTreeMap<usize, ToolCallAccum>,
-    reasoning_content: &mut String,
-    usage: &mut TokenUsage,
-    in_think_block: &mut bool,
-) -> Option<Vec<StreamChunk>> {
-    // [DONE] 标记 -- 返回 None 表示流结束
-    if data == "[DONE]" {
-        return None;
-    }
-
-    // 解析 JSON, 失败则返回空 chunks (跳过此行)
-    let Ok(chunk_json) = serde_json::from_str::<Value>(data) else {
-        return Some(Vec::new());
-    };
-
-    let mut chunks = Vec::new();
-
-    // 提取 usage (通常在最后一个 chunk)
-    if let Some(u) = chunk_json.get("usage") {
-        usage.prompt_tokens = u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        usage.completion_tokens = u
-            .get("completion_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        usage.total_tokens = u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-    }
-
-    // 提取 choices[0].delta
-    let Some(delta) = chunk_json
-        .get("choices")
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|c| c.get("delta"))
-    else {
-        return Some(chunks);
-    };
-
-    // 文本增量 -- 可能含 <think 标签, 需要拆分为 ContentDelta 和 ReasoningDelta
-    if let Some(text) = delta.get("content").and_then(|v| v.as_str())
-        && !text.is_empty()
-    {
-        for chunk in split_think_content(text, in_think_block) {
-            if !chunk.delta.is_empty() {
-                content.push_str(&chunk.delta);
-            }
-            if let Some(r) = &chunk.reasoning {
-                reasoning_content.push_str(r);
-            }
-            chunks.push(chunk);
-        }
-    }
-
-    // 推理内容增量 (DeepSeek-R1 等思考模型的独立字段) -- 累积并推送 ReasoningDelta
-    if let Some(rc) = delta.get("reasoning_content").and_then(|v| v.as_str())
-        && !rc.is_empty()
-    {
-        reasoning_content.push_str(rc);
-        chunks.push(StreamChunk::reasoning(rc.to_string()));
-    }
-
-    // 工具调用增量
-    if let Some(tool_call_deltas) = delta.get("tool_calls").and_then(|v| v.as_array()) {
-        for tc in tool_call_deltas {
-            let index = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            let entry = tool_calls_map.entry(index).or_default();
-
-            if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
-                entry.id = Some(id.to_string());
-            }
-            if let Some(func) = tc.get("function") {
-                if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
-                    entry.name = Some(name.to_string());
-                }
-                if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
-                    entry.arguments.push_str(args);
-                    // 工具调用增量在 provider 内部累积, 不再推送 StreamChunk
-                }
-            }
-        }
-    }
-
-    Some(chunks)
+impl StreamToolCallAccumulator {
+    
 }

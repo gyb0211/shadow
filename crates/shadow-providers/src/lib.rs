@@ -5,7 +5,6 @@
 //! - **Reliable** (中层): 重试/退避/key 轮换/限流
 //! - **Compat** (底层): 把家族差异 (auth, API path, payload) 适配为统一 OpenAI 形态
 
-pub mod anthropic;
 pub mod dispatch;
 pub mod error;
 pub mod openai;
@@ -14,12 +13,9 @@ pub mod reliable;
 pub mod router;
 pub mod factory;
 
-pub use anthropic::AnthropicProvider;
 pub use error::{ChatError, RetryClass};
 pub use openai::OpenAiCompatibleModelProvider;
 pub use rate_limit::TokenBucket;
-pub use reliable::{KeyRotator, ReliableModelProvider, RetryPolicy};
-pub use router::RouterModelProvider;
 pub use dispatch::*;
 
 use anyhow::Result;
