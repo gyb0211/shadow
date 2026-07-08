@@ -1,0 +1,1 @@
+pub use shadow_config::schema::*;
