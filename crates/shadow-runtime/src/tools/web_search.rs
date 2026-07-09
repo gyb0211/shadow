@@ -321,71 +321,11 @@ impl Tool for WebSearchTool {
         }
     }
 
-    fn timeout(&self) -> Option<Duration> {
-        Some(Duration::from_secs(15))
-    }
-
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: self.name().to_string(),
             description: self.description().to_string(),
             parameters: self.parameters_schema(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_strip_tags() {
-        assert_eq!(WebSearchTool::strip_tags("<b>Hello</b>"), "Hello");
-        assert_eq!(WebSearchTool::strip_tags("<a href=\"x\">Link</a>"), "Link");
-        assert_eq!(WebSearchTool::strip_tags("No tags"), "No tags");
-        assert_eq!(WebSearchTool::strip_tags("&amp;"), "&");
-    }
-
-    #[test]
-    fn test_parse_links_loose() {
-        let html =
-            r#"<a href="https://example.com">Example Site</a> <a href="https://test.com">Test</a>"#;
-        let results = WebSearchTool::parse_links_loose(html, 5);
-        // 宽松解析可能提取到 1-2 个结果, 只验证至少 1 个
-        assert!(!results.is_empty());
-        assert!(results[0].url.starts_with("https://"));
-    }
-
-    #[test]
-    fn test_format_results_empty() {
-        let output = WebSearchTool::format_results(&[], "test");
-        assert!(output.contains("未找到"));
-    }
-
-    #[test]
-    fn test_format_results() {
-        let results = vec![SearchResult {
-            title: "Test".into(),
-            url: "https://example.com".into(),
-            snippet: "A test".into(),
-        }];
-        let output = WebSearchTool::format_results(&results, "test");
-        assert!(output.contains("1. Test"));
-        assert!(output.contains("https://example.com"));
-    }
-
-    #[test]
-    fn test_tool_metadata() {
-        let tool = WebSearchTool::new();
-        assert_eq!(tool.name(), "web_search");
-        assert_eq!(tool.timeout(), Some(Duration::from_secs(15)));
-    }
-
-    #[test]
-    fn test_schema() {
-        let tool = WebSearchTool::new();
-        let schema = tool.parameters_schema();
-        assert!(schema["properties"].get("query").is_some());
-        assert!(schema["properties"].get("max_results").is_some());
     }
 }

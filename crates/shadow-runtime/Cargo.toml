@@ -19,13 +19,15 @@ tracing.workspace = true
 parking_lot.workspace = true
 rusqlite = { version = "0.37", features = ["bundled"] }
 cron = "0.15"
-chrono.workspace = true
 uuid.workspace = true
 futures.workspace = true
 regex.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "multipart"] }
 url.workspace = true
 urlencoding.workspace = true
+
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+chrono-tz = "0.10"
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -14,7 +14,7 @@
 //!   - [`Attributable`]   归因系统
 
 pub mod channel;
-mod kennel;
+pub mod kennel;
 pub mod runtime;
 pub mod session_store;
 pub mod workspace;

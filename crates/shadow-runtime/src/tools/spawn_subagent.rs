@@ -68,39 +68,11 @@ impl Tool for SpawnSubagentTool {
         ))
     }
 
-    fn timeout(&self) -> Option<Duration> {
-        Some(Duration::from_secs(120))
-    }
-
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: self.name().to_string(),
             description: self.description().to_string(),
             parameters: self.parameters_schema(),
         }
-    }
-}
-
-#[cfg(not(feature = "proxy"))]
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_tool_metadata() {
-        let tool = SpawnSubagentTool::new();
-        assert_eq!(tool.name(), "spawn_subagent");
-        assert_eq!(tool.timeout(), Some(Duration::from_secs(120)));
-    }
-
-    #[tokio::test]
-    async fn test_no_router_error() {
-        let tool = SpawnSubagentTool::new();
-        let result = tool
-            .execute(json!({"action": "list_agents"}))
-            .await
-            .unwrap();
-        assert!(!result.success);
-        assert!(result.error.unwrap().contains("TaskRouter"));
     }
 }

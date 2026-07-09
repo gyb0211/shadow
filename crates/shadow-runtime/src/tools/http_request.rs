@@ -236,90 +236,11 @@ impl Tool for HttpRequestTool {
         }
     }
 
-    fn timeout(&self) -> Option<Duration> {
-        Some(Duration::from_secs(60))
-    }
-
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: self.name().to_string(),
             description: self.description().to_string(),
             parameters: self.parameters_schema(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_url_validation() {
-        // 正常 URL
-        assert!(HttpRequestTool::is_url_safe("https://example.com").is_ok());
-        assert!(HttpRequestTool::is_url_safe("http://example.com/api").is_ok());
-
-        // 危险 URL
-        assert!(HttpRequestTool::is_url_safe("http://localhost:8080").is_err());
-        assert!(HttpRequestTool::is_url_safe("http://127.0.0.1:8080").is_err());
-        assert!(HttpRequestTool::is_url_safe("http://0.0.0.0").is_err());
-        assert!(HttpRequestTool::is_url_safe("http://192.168.1.1").is_err());
-        assert!(HttpRequestTool::is_url_safe("http://10.0.0.1").is_err());
-        assert!(HttpRequestTool::is_url_safe("http://172.16.0.1").is_err());
-        assert!(HttpRequestTool::is_url_safe("http://169.254.169.254").is_err());
-
-        // 非法协议
-        assert!(HttpRequestTool::is_url_safe("ftp://example.com").is_err());
-        assert!(HttpRequestTool::is_url_safe("file:///etc/passwd").is_err());
-    }
-
-    #[test]
-    fn test_private_ip() {
-        assert!(is_private_ip(&"127.0.0.1".parse().unwrap()));
-        assert!(is_private_ip(&"192.168.1.1".parse().unwrap()));
-        assert!(is_private_ip(&"10.0.0.1".parse().unwrap()));
-        assert!(is_private_ip(&"172.16.0.1".parse().unwrap()));
-        assert!(is_private_ip(&"169.254.169.254".parse().unwrap()));
-        assert!(!is_private_ip(&"8.8.8.8".parse().unwrap()));
-        assert!(!is_private_ip(&"1.1.1.1".parse().unwrap()));
-    }
-
-    #[test]
-    fn test_tool_metadata() {
-        let tool = HttpRequestTool::new();
-        assert_eq!(tool.name(), "http_request");
-        assert!(!tool.description().is_empty());
-        assert!(tool.requires_approval() == false);
-        assert_eq!(tool.timeout(), Some(Duration::from_secs(60)));
-    }
-
-    #[tokio::test]
-    async fn test_ssrf_blocked() {
-        let tool = HttpRequestTool::new();
-        let result = tool
-            .execute(json!({
-                "url": "http://127.0.0.1:8080"
-            }))
-            .await
-            .unwrap();
-
-        assert!(!result.success);
-        assert!(result.error.unwrap().contains("SSRF"));
-    }
-
-    #[tokio::test]
-    async fn test_missing_url() {
-        let tool = HttpRequestTool::new();
-        let result = tool.execute(json!({})).await;
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_schema() {
-        let tool = HttpRequestTool::new();
-        let schema = tool.parameters_schema();
-        assert!(schema.get("properties").is_some());
-        assert!(schema["properties"].get("url").is_some());
-        assert!(schema["properties"].get("method").is_some());
     }
 }

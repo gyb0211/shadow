@@ -36,6 +36,9 @@ pub struct Config {
 
     #[serde(default)]
     pub providers: crate::providers::Providers,
+    
+    #[serde(default)]
+    pub scheduler: SchedulerConfig,
 }
 
 impl Config {
@@ -58,3 +61,38 @@ impl Config {
         self.providers.models.iter_entries().find(|(ty, alias, _)| *ty == type_key && *alias == alias_key)
     }
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+pub struct SchedulerConfig{
+    #[serde(default="default_scheduler_enabled")]
+    pub enabled: bool,
+    #[serde(default="default_max_tasks")]
+    pub max_tasks:usize,
+    #[serde(default="default_max_concurrent")]
+    pub max_concurrent:usize,
+    #[serde(default="default_true")]
+    pub catch_up_on_startup:bool,
+    #[serde(default="default_max_run_history")]
+    pub max_run_history:u32,
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self{
+            enabled: default_scheduler_enabled(),
+            max_tasks: default_max_tasks(),
+            max_concurrent: default_max_concurrent(),
+            catch_up_on_startup: false,
+            max_run_history: default_max_run_history(),
+        }
+    }
+}
+
+
+
+
+fn default_true()->bool {true}
+fn default_scheduler_enabled()->bool {true}
+fn default_max_tasks()->usize {64}
+fn default_max_concurrent()->usize {4}
+fn default_max_run_history()->u32 {50}

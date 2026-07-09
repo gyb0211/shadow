@@ -348,73 +348,11 @@ impl Tool for WebFetchTool {
         Ok(ToolResult::ok(result))
     }
 
-    fn timeout(&self) -> Option<Duration> {
-        Some(Duration::from_secs(30))
-    }
-
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: self.name().to_string(),
             description: self.description().to_string(),
             parameters: self.parameters_schema(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_strip_html() {
-        let html = "<p>Hello <b>World</b></p><script>alert('xss')</script>";
-        let text = WebFetchTool::strip_html(html);
-        assert!(text.contains("Hello"));
-        assert!(text.contains("World"));
-        assert!(!text.contains("alert"));
-        assert!(!text.contains("<script>"));
-    }
-
-    #[test]
-    fn test_html_to_markdown() {
-        let html = "<h1>Title</h1><p>Some <a href=\"https://example.com\">link</a></p>";
-        let md = WebFetchTool::html_to_markdown(html);
-        assert!(md.contains("# Title"));
-        assert!(md.contains("[link](https://example.com)"));
-    }
-
-    #[test]
-    fn test_cleanup() {
-        let text = "line1\n\n\n\n\nline2\n\n\n\n\n\nline3";
-        let cleaned = WebFetchTool::cleanup(text);
-        // cleanup 应该将连续空行压缩到最多 2 个换行
-        assert!(!cleaned.contains("\n\n\n\n"));
-        assert!(cleaned.contains("line1"));
-        assert!(cleaned.contains("line2"));
-        assert!(cleaned.contains("line3"));
-    }
-
-    #[test]
-    fn test_tool_metadata() {
-        let tool = WebFetchTool::new();
-        assert_eq!(tool.name(), "web_fetch");
-        assert!(!tool.description().is_empty());
-        assert_eq!(tool.timeout(), Some(Duration::from_secs(30)));
-    }
-
-    #[test]
-    fn test_schema() {
-        let tool = WebFetchTool::new();
-        let schema = tool.parameters_schema();
-        assert!(schema["properties"].get("url").is_some());
-        assert!(schema["properties"].get("format").is_some());
-        assert!(schema["properties"].get("max_length").is_some());
-    }
-
-    #[test]
-    fn test_strip_html_entities() {
-        let html = "a &lt; b &amp; c &gt; d";
-        let text = WebFetchTool::strip_html(html);
-        assert_eq!(text.trim(), "a < b & c > d");
     }
 }

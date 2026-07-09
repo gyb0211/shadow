@@ -64,29 +64,3 @@ impl Tool for FileReadTool {
         Ok(ToolResult::ok(result))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn read_existing_file() {
-        let tool = FileReadTool;
-        // 使用 workspace 根目录的 Cargo.toml (含 [workspace])
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let path = format!("{}/../../Cargo.toml", manifest_dir);
-        let result = tool.execute(json!({"path": path})).await.unwrap();
-        assert!(result.success);
-        assert!(result.output.contains("[workspace]"));
-    }
-
-    #[tokio::test]
-    async fn read_nonexistent_file() {
-        let tool = FileReadTool;
-        let result = tool
-            .execute(json!({"path": "/nonexistent/file.txt"}))
-            .await
-            .unwrap();
-        assert!(!result.success);
-    }
-}

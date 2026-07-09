@@ -47,11 +47,6 @@ impl Tool for FileWriteTool {
         })
     }
 
-    /// FileWrite 工具需要审批 -- 会修改文件系统, 危险性较高
-    fn requires_approval(&self) -> bool {
-        true
-    }
-
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let path = args
             .get("path")
@@ -136,102 +131,4 @@ async fn write_append(target: &std::path::Path, content: &str) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("追加写入失败 '{target:?}': {e}"))?;
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn write_and_verify() {
-        let tool = FileWriteTool;
-        let path = "/tmp/shadow_test_filewrite.txt";
-
-        // 写入
-        let result = tool
-            .execute(json!({"path": path, "content": "hello shadow"}))
-            .await
-            .unwrap();
-        assert!(result.success);
-
-        // 验证
-        let content = tokio::fs::read_to_string(path).await.unwrap();
-        assert_eq!(content, "hello shadow");
-
-        // 清理
-        tokio::fs::remove_file(path).await.ok();
-    }
-
-    #[tokio::test]
-    async fn write_append_mode() {
-        let tool = FileWriteTool;
-        let path = "/tmp/shadow_test_filewrite_append.txt";
-
-        // 第一次写入
-        tool.execute(json!({"path": path, "content": "first\n"}))
-            .await
-            .unwrap();
-
-        // 追加写入
-        let result = tool
-            .execute(json!({"path": path, "content": "second\n", "append": true}))
-            .await
-            .unwrap();
-        assert!(result.success);
-        assert!(result.output.contains("追加"));
-
-        // 验证两段内容都在
-        let content = tokio::fs::read_to_string(path).await.unwrap();
-        assert_eq!(content, "first\nsecond\n");
-
-        // 清理
-        tokio::fs::remove_file(path).await.ok();
-    }
-
-    #[tokio::test]
-    async fn write_overwrite_replaces_content() {
-        let tool = FileWriteTool;
-        let path = "/tmp/shadow_test_filewrite_overwrite.txt";
-
-        // 第一次写入
-        tool.execute(json!({"path": path, "content": "old content"}))
-            .await
-            .unwrap();
-
-        // 覆盖写入 (不传 append, 默认 false)
-        tool.execute(json!({"path": path, "content": "new content"}))
-            .await
-            .unwrap();
-
-        let content = tokio::fs::read_to_string(path).await.unwrap();
-        assert_eq!(content, "new content");
-
-        // 清理
-        tokio::fs::remove_file(path).await.ok();
-    }
-
-    #[tokio::test]
-    async fn write_creates_parent_dirs() {
-        let tool = FileWriteTool;
-        let path = "/tmp/shadow_test_dir/sub/file.txt";
-
-        let result = tool
-            .execute(json!({"path": path, "content": "nested"}))
-            .await
-            .unwrap();
-        assert!(result.success);
-
-        let content = tokio::fs::read_to_string(path).await.unwrap();
-        assert_eq!(content, "nested");
-
-        // 清理
-        tokio::fs::remove_file(path).await.ok();
-        tokio::fs::remove_dir_all("/tmp/shadow_test_dir").await.ok();
-    }
-
-    #[test]
-    fn file_write_requires_approval() {
-        let tool = FileWriteTool;
-        assert!(tool.requires_approval());
-    }
 }

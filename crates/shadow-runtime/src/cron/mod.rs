@@ -23,67 +23,53 @@
 //! - `"0 0 * * * *"` -- 每天午夜执行
 //! - `"0 0 9 * * 1-5"` -- 工作日每天上午 9 点执行
 
+mod schedule;
+
+use crate::tools::cron::add::{JobType, Schedule};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use cron::Schedule;
 use parking_lot::Mutex;
 use rusqlite::{Connection, params};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_json::{Error, Value};
+use shadow_log::Action;
 use std::path::Path;
 
-use shadow_log::Action;
+
+/// 如果收到是 Value 可以直接转成 T 就直接转
+/// 如果不能转 就变成字符串 再尝试转
+pub fn deserialize_maybe_stringified<T: DeserializeOwned>(
+    v: &Value,
+) -> Result<T, serde_json::Error> {
+    match serde_json::from_value::<T>(v.clone()) {
+        Ok(v) => Ok(v),
+        Err(err) => {
+            if let Some(s) = v.as_str() {
+                let s = s.trim();
+                if (s.starts_with("{") || s.starts_with("["))
+                    && let Ok(inner) = serde_json::from_str::<Value>(s)
+                {
+                    return serde_json::from_value::<T>(inner);
+                }
+            }
+            Err(err)
+        }
+    }
+}
 
 // ───────────────────────── 数据结构 ─────────────────────────
 
 /// Cron 作业 -- 一个定时任务的定义
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronJob {
-    /// 作业 ID (SQLite 自增主键, 新建时设为 0, 由数据库分配)
-    pub id: i64,
-    /// 作业名称 (人类可读)
+    pub id: String,
     pub name: String,
-    /// cron 表达式 (6-7 字段: 秒 分 时 日 月 周 [年])
-    pub schedule: String,
-    /// 要执行的 shell 命令
-    pub command: String,
-    /// 是否启用 (false 时不会被调度)
+    pub expression: String,
+    pub schedule: Schedule,
+    pub job_type: JobType,
     pub enabled: bool,
-    /// 关联的 agent 别名 (用于多 agent 场景区分执行者)
-    pub agent_alias: String,
-    /// 下次运行时间 (Unix 时间戳, None 表示未计算)
-    pub next_run: Option<i64>,
-}
-
-impl CronJob {
-    /// 创建新的 cron 作业 (id 设为 0, 由数据库分配)
-    ///
-    /// 默认启用, agent_alias 为 "default".
-    pub fn new(
-        name: impl Into<String>,
-        schedule: impl Into<String>,
-        command: impl Into<String>,
-    ) -> Self {
-        Self {
-            id: 0,
-            name: name.into(),
-            schedule: schedule.into(),
-            command: command.into(),
-            enabled: true,
-            agent_alias: "default".to_string(),
-            next_run: None,
-        }
-    }
-
-    /// 设置关联的 agent 别名
-    pub fn with_agent_alias(mut self, alias: impl Into<String>) -> Self {
-        self.agent_alias = alias.into();
-        self
-    }
-
-    /// 设置启用状态
-    pub fn with_enabled(mut self, enabled: bool) -> Self {
-        self.enabled = enabled;
-        self
-    }
+    pub next_run: DateTime<Utc>,
 }
 
 /// Cron 运行记录 -- 一次作业执行的历史记录

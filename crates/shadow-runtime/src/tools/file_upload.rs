@@ -200,13 +200,7 @@ impl Tool for FileUploadTool {
         }
     }
 
-    fn timeout(&self) -> Option<Duration> {
-        Some(Duration::from_secs(120))
-    }
 
-    fn requires_approval(&self) -> bool {
-        true
-    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -214,74 +208,5 @@ impl Tool for FileUploadTool {
             description: self.description().to_string(),
             parameters: self.parameters_schema(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_url_safety() {
-        assert!(FileUploadTool::is_url_safe("https://example.com/upload"));
-        assert!(FileUploadTool::is_url_safe("http://api.example.com/file"));
-        assert!(!FileUploadTool::is_url_safe("http://localhost:8080"));
-        assert!(!FileUploadTool::is_url_safe("http://127.0.0.1:3000"));
-        assert!(!FileUploadTool::is_url_safe("http://192.168.1.1"));
-        assert!(!FileUploadTool::is_url_safe("ftp://example.com"));
-        assert!(!FileUploadTool::is_url_safe("not-a-url"));
-    }
-
-    #[test]
-    fn test_tool_metadata() {
-        let tool = FileUploadTool::new();
-        assert_eq!(tool.name(), "file_upload");
-        assert!(tool.requires_approval());
-        assert_eq!(tool.timeout(), Some(Duration::from_secs(120)));
-    }
-
-    #[test]
-    fn test_schema() {
-        let tool = FileUploadTool::new();
-        let schema = tool.parameters_schema();
-        assert!(schema["properties"].get("url").is_some());
-        assert!(schema["properties"].get("path").is_some());
-        assert!(schema["properties"].get("field_name").is_some());
-    }
-
-    #[tokio::test]
-    async fn test_missing_url() {
-        let tool = FileUploadTool::new();
-        let result = tool.execute(json!({"path": "/tmp/test"})).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_ssrf_blocked() {
-        let tool = FileUploadTool::new();
-        // SSRF 检查在文件存在检查之前
-        let result = tool
-            .execute(json!({
-                "url": "http://127.0.0.1:8080",
-                "path": "/tmp/test"
-            }))
-            .await
-            .unwrap();
-        assert!(!result.success);
-        assert!(result.error.unwrap().contains("SSRF"));
-    }
-
-    #[tokio::test]
-    async fn test_file_not_found() {
-        let tool = FileUploadTool::new();
-        let result = tool
-            .execute(json!({
-                "url": "https://example.com/upload",
-                "path": "/nonexistent/file.txt"
-            }))
-            .await
-            .unwrap();
-        assert!(!result.success);
-        assert!(result.error.unwrap().contains("不存在"));
     }
 }

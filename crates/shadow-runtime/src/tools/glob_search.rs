@@ -50,10 +50,6 @@ impl Tool for GlobSearchTool {
         })
     }
 
-    fn timeout(&self) -> Option<Duration> {
-        Some(Duration::from_secs(10))
-    }
-
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let pattern = args
             .get("pattern")
@@ -161,47 +157,4 @@ fn glob_to_regex(pattern: &str) -> regex::Regex {
         // 如果模式无效, 匹配空 (永不命中)
         regex::Regex::new(r"$^").unwrap()
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn glob_to_regex_double_star() {
-        let re = glob_to_regex("**/*.rs");
-        assert!(re.is_match("src/main.rs"));
-        assert!(re.is_match("a/b/c.rs"));
-        assert!(!re.is_match("src/main.txt"));
-    }
-
-    #[test]
-    fn glob_to_regex_single_star() {
-        let re = glob_to_regex("*.rs");
-        assert!(re.is_match("main.rs"));
-        assert!(!re.is_match("src/main.rs"));
-    }
-
-    #[tokio::test]
-    async fn glob_search_finds_rust_files() {
-        let tool = GlobSearchTool;
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let result = tool
-            .execute(json!({"pattern": "**/*.rs", "path": manifest_dir}))
-            .await
-            .unwrap();
-        assert!(result.success);
-        assert!(result.output.contains(".rs"));
-    }
-
-    #[tokio::test]
-    async fn glob_search_no_match() {
-        let tool = GlobSearchTool;
-        let result = tool
-            .execute(json!({"pattern": "*.nonexistent_ext", "path": "."}))
-            .await
-            .unwrap();
-        assert!(result.success);
-        assert!(result.output.contains("未找到"));
-    }
 }

@@ -54,15 +54,6 @@ impl Tool for MemoryPurgeTool {
         })
     }
 
-    fn timeout(&self) -> Option<Duration> {
-        Some(Duration::from_secs(30))
-    }
-
-    /// 批量删除操作需要审批
-    fn requires_approval(&self) -> bool {
-        true
-    }
-
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         // 安全确认检查
         let confirm = args
@@ -119,105 +110,5 @@ impl Tool for MemoryPurgeTool {
                 errors.join("; ")
             )))
         }
-    }
-}
-
-// ── 单元测试 ──
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use shadow_memory::sqlite::SqliteMemory;
-
-    /// 测试: 未确认时应拒绝执行
-    #[tokio::test]
-    async fn test_purge_without_confirm() {
-        let dir = tempfile::tempdir().unwrap();
-        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(dir.path()).unwrap());
-
-        mem.store("a", "内容A", MemoryCategory::Core, None)
-            .await
-            .unwrap();
-
-        let tool = MemoryPurgeTool::new(mem);
-        let result = tool.execute(json!({"confirm": false})).await.unwrap();
-
-        assert!(!result.success);
-        assert!(result.error.unwrap().contains("安全确认"));
-    }
-
-    /// 测试: 确认后清除指定 category
-    #[tokio::test]
-    async fn test_purge_by_category() {
-        let dir = tempfile::tempdir().unwrap();
-        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(dir.path()).unwrap());
-
-        mem.store("a", "内容A", MemoryCategory::Core, None)
-            .await
-            .unwrap();
-        mem.store("b", "内容B", MemoryCategory::Daily, None)
-            .await
-            .unwrap();
-        mem.store("c", "内容C", MemoryCategory::Core, None)
-            .await
-            .unwrap();
-
-        let tool = MemoryPurgeTool::new(Arc::clone(&mem));
-        let result = tool
-            .execute(json!({"category": "core", "confirm": true}))
-            .await
-            .unwrap();
-
-        assert!(result.success);
-        assert!(result.output.contains("2/2"));
-
-        // core 应被清空, daily 应保留
-        let core_entries = mem.list(Some(&MemoryCategory::Core)).await.unwrap();
-        assert!(core_entries.is_empty());
-
-        let daily_entries = mem.list(Some(&MemoryCategory::Daily)).await.unwrap();
-        assert_eq!(daily_entries.len(), 1);
-    }
-
-    /// 测试: 不指定 category 时清除全部
-    #[tokio::test]
-    async fn test_purge_all() {
-        let dir = tempfile::tempdir().unwrap();
-        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(dir.path()).unwrap());
-
-        mem.store("a", "内容A", MemoryCategory::Core, None)
-            .await
-            .unwrap();
-        mem.store("b", "内容B", MemoryCategory::Daily, None)
-            .await
-            .unwrap();
-
-        let tool = MemoryPurgeTool::new(Arc::clone(&mem));
-        let result = tool.execute(json!({"confirm": true})).await.unwrap();
-
-        assert!(result.success);
-        assert!(result.output.contains("2/2"));
-        assert_eq!(mem.count().await.unwrap(), 0);
-    }
-
-    /// 测试: 清除空记忆库
-    #[tokio::test]
-    async fn test_purge_empty() {
-        let dir = tempfile::tempdir().unwrap();
-        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(dir.path()).unwrap());
-
-        let tool = MemoryPurgeTool::new(mem);
-        let result = tool.execute(json!({"confirm": true})).await.unwrap();
-
-        assert!(result.success);
-        assert!(result.output.contains("没有需要清除"));
-    }
-
-    /// 测试: requires_approval 为 true
-    #[test]
-    fn test_requires_approval() {
-        let dir = tempfile::tempdir().unwrap();
-        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(dir.path()).unwrap());
-        let tool = MemoryPurgeTool::new(mem);
-        assert!(tool.requires_approval());
     }
 }

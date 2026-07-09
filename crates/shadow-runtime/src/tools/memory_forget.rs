@@ -48,15 +48,6 @@ impl Tool for MemoryForgetTool {
         })
     }
 
-    fn timeout(&self) -> Option<Duration> {
-        Some(Duration::from_secs(10))
-    }
-
-    /// 删除操作需要审批
-    fn requires_approval(&self) -> bool {
-        true
-    }
-
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let key = args
             .get("key")

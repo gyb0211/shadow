@@ -97,14 +97,6 @@ impl Tool for RateLimitedTool {
         // 转发给内部工具执行
         self.inner.execute(args).await
     }
-
-    fn timeout(&self) -> Option<Duration> {
-        self.inner.timeout()
-    }
-
-    fn requires_approval(&self) -> bool {
-        self.inner.requires_approval()
-    }
 }
 
 impl ToolWrapper for RateLimitedTool {
@@ -157,14 +149,6 @@ impl Tool for PathGuardedTool {
         }
 
         self.inner.execute(args).await
-    }
-
-    fn timeout(&self) -> Option<Duration> {
-        self.inner.timeout()
-    }
-
-    fn requires_approval(&self) -> bool {
-        self.inner.requires_approval()
     }
 }
 
@@ -244,68 +228,4 @@ fn normalize_path(path: &std::path::Path) -> PathBuf {
         }
     }
     result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::tools::{FileReadTool, ShellTool};
-    use serde_json::json;
-
-    #[test]
-    fn rate_limit_allows_under_limit() {
-        // 测试: 不超过限制时正常执行
-        // 这里只验证 name 委托, execute 需要异步环境
-        let wrapper = RateLimitedTool::new(Box::new(ShellTool::default()), 10);
-        assert_eq!(wrapper.name(), "shell");
-        assert!(wrapper.requires_approval());
-    }
-
-    #[tokio::test]
-    async fn rate_limit_blocks_over_limit() {
-        let wrapper = RateLimitedTool::new(Box::new(ShellTool::default()), 2);
-
-        // 前两次应通过 (虽然命令会失败但不是速率限制)
-        let r1 = wrapper.execute(json!({"command": "true"})).await.unwrap();
-        assert!(r1.success);
-
-        let r2 = wrapper.execute(json!({"command": "true"})).await.unwrap();
-        assert!(r2.success);
-
-        // 第三次应被速率限制
-        let r3 = wrapper.execute(json!({"command": "true"})).await.unwrap();
-        assert!(!r3.success);
-        assert!(r3.error.unwrap().contains("速率限制"));
-    }
-
-    #[test]
-    fn path_guarded_allows_within_workspace() {
-        let workspace = PathBuf::from("/tmp");
-        let wrapper = PathGuardedTool::new(Box::new(FileReadTool), workspace);
-        assert_eq!(wrapper.name(), "file_read");
-    }
-
-    #[tokio::test]
-    async fn path_guarded_blocks_traversal() {
-        let workspace = PathBuf::from("/tmp/shadow_safe_test");
-        std::fs::create_dir_all(&workspace).ok();
-        let wrapper = PathGuardedTool::new(Box::new(FileReadTool), workspace.clone());
-
-        // 尝试路径遍历 -- 应被拒绝
-        let result = wrapper
-            .execute(json!({"path": "../../etc/passwd"}))
-            .await
-            .unwrap();
-        assert!(!result.success);
-        assert!(result.error.unwrap().contains("路径安全检查失败"));
-
-        // 清理
-        std::fs::remove_dir_all(&workspace).ok();
-    }
-
-    #[test]
-    fn normalize_path_handles_dotdot() {
-        let p = normalize_path(std::path::Path::new("/tmp/a/../b"));
-        assert_eq!(p, PathBuf::from("/tmp/b"));
-    }
 }

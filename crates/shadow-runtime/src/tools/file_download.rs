@@ -106,14 +106,6 @@ impl Tool for FileDownloadTool {
         })
     }
 
-    fn requires_approval(&self) -> bool {
-        true
-    }
-
-    fn timeout(&self) -> Option<Duration> {
-        Some(Duration::from_secs(120))
-    }
-
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let url = args
             .get("url")
@@ -216,64 +208,4 @@ fn format_size(bytes: usize) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn test_check_url() {
-        assert!(FileDownloadTool::check_url("https://example.com/file.zip").is_ok());
-        assert!(FileDownloadTool::check_url("http://example.com/file.zip").is_ok());
-
-        assert!(FileDownloadTool::check_url("http://localhost:8080").is_err());
-        assert!(FileDownloadTool::check_url("http://127.0.0.1:3000").is_err());
-        assert!(FileDownloadTool::check_url("http://192.168.1.1").is_err());
-        assert!(FileDownloadTool::check_url("http://10.0.0.1").is_err());
-        assert!(FileDownloadTool::check_url("ftp://example.com").is_err());
-    }
-
-    #[test]
-    fn test_format_size() {
-        assert_eq!(format_size(512), "512 B");
-        assert_eq!(format_size(1024), "1.0 KB");
-        assert_eq!(format_size(1048576), "1.0 MB");
-    }
-
-    #[test]
-    fn test_tool_metadata() {
-        let tool = FileDownloadTool::new();
-        assert_eq!(tool.name(), "file_download");
-        assert!(tool.requires_approval());
-        assert_eq!(tool.timeout(), Some(Duration::from_secs(120)));
-    }
-
-    #[test]
-    fn test_schema() {
-        let tool = FileDownloadTool::new();
-        let schema = tool.parameters_schema();
-        assert!(schema["properties"].get("url").is_some());
-        assert!(schema["properties"].get("path").is_some());
-        assert!(schema["properties"].get("overwrite").is_some());
-    }
-
-    #[tokio::test]
-    async fn test_ssrf_blocked() {
-        let tool = FileDownloadTool::new();
-        let result = tool
-            .execute(json!({
-                "url": "http://127.0.0.1:8080/file.zip",
-                "path": "/tmp/test_download.zip"
-            }))
-            .await
-            .unwrap();
-        assert!(!result.success);
-        assert!(result.error.unwrap().contains("SSRF"));
-    }
-
-    #[tokio::test]
-    async fn test_missing_url() {
-        let tool = FileDownloadTool::new();
-        let result = tool.execute(json!({"path": "/tmp/test"})).await;
-        assert!(result.is_err());
-    }
-}

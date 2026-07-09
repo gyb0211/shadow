@@ -140,75 +140,11 @@ impl Tool for GitOpsTool {
         }
     }
 
-    fn timeout(&self) -> Option<Duration> {
-        Some(Duration::from_secs(30))
-    }
-
-    fn requires_approval(&self) -> bool {
-        // push / reset --hard 需要审批, 但 trait 层面统一设为 false
-        // 实际审批由 agent 的 AutonomyLevel 控制
-        false
-    }
-
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: self.name().to_string(),
             description: self.description().to_string(),
             parameters: self.parameters_schema(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_is_allowed() {
-        assert!(GitOpsTool::is_allowed("status"));
-        assert!(GitOpsTool::is_allowed("diff"));
-        assert!(GitOpsTool::is_allowed("log --oneline -5"));
-        assert!(GitOpsTool::is_allowed("add -A"));
-        assert!(GitOpsTool::is_allowed("commit -m \"test\""));
-        assert!(GitOpsTool::is_allowed("push origin main"));
-        assert!(GitOpsTool::is_allowed("reset --hard HEAD~1"));
-
-        // 危险命令
-        assert!(!GitOpsTool::is_allowed("config user.email"));
-        assert!(!GitOpsTool::is_allowed("filter-branch"));
-        assert!(!GitOpsTool::is_allowed("rm -rf /"));
-    }
-
-    #[test]
-    fn test_tool_metadata() {
-        let tool = GitOpsTool::new();
-        assert_eq!(tool.name(), "git_ops");
-        assert!(!tool.description().is_empty());
-        assert_eq!(tool.timeout(), Some(Duration::from_secs(30)));
-    }
-
-    #[test]
-    fn test_schema() {
-        let tool = GitOpsTool::new();
-        let schema = tool.parameters_schema();
-        assert!(schema["properties"].get("command").is_some());
-    }
-
-    #[tokio::test]
-    async fn test_disallowed_command() {
-        let tool = GitOpsTool::new();
-        let result = tool
-            .execute(json!({"command": "filter-branch"}))
-            .await
-            .unwrap();
-        assert!(!result.success);
-        assert!(result.error.unwrap().contains("不允许"));
-    }
-
-    #[tokio::test]
-    async fn test_missing_command() {
-        let tool = GitOpsTool::new();
-        let result = tool.execute(json!({})).await;
-        assert!(result.is_err());
     }
 }

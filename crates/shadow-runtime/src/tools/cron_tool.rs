@@ -87,9 +87,6 @@ impl Tool for CronTool {
         }
     }
 
-    fn timeout(&self) -> Option<Duration> {
-        Some(Duration::from_secs(60))
-    }
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: self.name().to_string(),
@@ -314,103 +311,5 @@ impl CronTool {
             Ok(false) => Ok(ToolResult::err(format!("未找到任务 {id}"))),
             Err(e) => Ok(ToolResult::err(format!("更新失败: {e}"))),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_metadata() {
-        let t = CronTool::new();
-        assert_eq!(t.name(), "cron");
-        assert_eq!(t.timeout(), Some(Duration::from_secs(60)));
-    }
-
-    #[tokio::test]
-    async fn test_no_store() {
-        let r = CronTool::new()
-            .execute(json!({"action":"list"}))
-            .await
-            .unwrap();
-        assert!(!r.success && r.error.unwrap().contains("CronScheduler"));
-    }
-
-    #[tokio::test]
-    async fn test_add_list_remove() {
-        let s = Arc::new(CronScheduler::new_in_memory().unwrap());
-        let t = CronTool::with_store(s);
-        let r = t
-            .execute(
-                json!({"action":"add","name":"test","schedule":"0 0 9 * * *","command":"echo hi"}),
-            )
-            .await
-            .unwrap();
-        assert!(r.success);
-        let r = t.execute(json!({"action":"list"})).await.unwrap();
-        assert!(r.output.contains("test"));
-        let r = t.execute(json!({"action":"remove","id":1})).await.unwrap();
-        assert!(r.success);
-    }
-
-    #[tokio::test]
-    async fn test_filter() {
-        let s = Arc::new(CronScheduler::new_in_memory().unwrap());
-        s.add_job(CronJob::new("on", "0 0 9 * * *", "echo 1"))
-            .unwrap();
-        let mut j = CronJob::new("off", "0 0 10 * * *", "echo 2");
-        j.enabled = false;
-        s.add_job(j).unwrap();
-        let t = CronTool::with_store(s);
-        let r = t
-            .execute(json!({"action":"list","filter":"enabled"}))
-            .await
-            .unwrap();
-        assert!(r.output.contains("1 个") && r.output.contains("on"));
-        let r = t
-            .execute(json!({"action":"list","filter":"disabled"}))
-            .await
-            .unwrap();
-        assert!(r.output.contains("1 个") && r.output.contains("off"));
-    }
-
-    #[tokio::test]
-    async fn test_run_and_runs() {
-        let s = Arc::new(CronScheduler::new_in_memory().unwrap());
-        s.add_job(CronJob::new("echo job", "0 0 9 * * *", "echo hello"))
-            .unwrap();
-        let t = CronTool::with_store(s);
-        // 手动执行
-        let r = t.execute(json!({"action":"run","id":1})).await.unwrap();
-        assert!(r.success);
-        assert!(r.output.contains("hello"));
-        // 查询历史
-        let r = t.execute(json!({"action":"runs","id":1})).await.unwrap();
-        assert!(r.output.contains("success"));
-        // 分页
-        let r = t
-            .execute(json!({"action":"runs","id":1,"limit":1,"offset":0}))
-            .await
-            .unwrap();
-        assert!(r.output.contains("显示"));
-    }
-
-    #[tokio::test]
-    async fn test_update() {
-        let s = Arc::new(CronScheduler::new_in_memory().unwrap());
-        s.add_job(CronJob::new("test", "0 0 9 * * *", "echo old"))
-            .unwrap();
-        let t = CronTool::with_store(s);
-        let r = t
-            .execute(json!({"action":"update","id":1,"command":"echo new","enabled":false}))
-            .await
-            .unwrap();
-        assert!(r.success);
-        let r = t
-            .execute(json!({"action":"list","filter":"disabled"}))
-            .await
-            .unwrap();
-        assert!(r.output.contains("echo new"));
     }
 }

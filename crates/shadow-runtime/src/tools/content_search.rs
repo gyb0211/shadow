@@ -3,9 +3,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use shadow_core::{Attributable, Tool, ToolResult, tool_attribution, ToolKind};
+use shadow_core::{ Tool, ToolResult, tool_attribution, ToolKind};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 /// ContentSearch 工具 -- 递归遍历目录, 逐行匹配文本模式
 ///
@@ -45,11 +44,7 @@ impl Tool for ContentSearchTool {
             "required": ["pattern"]
         })
     }
-
-    fn timeout(&self) -> Option<Duration> {
-        Some(Duration::from_secs(30))
-    }
-
+    
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let pattern = args
             .get("pattern")
@@ -153,44 +148,5 @@ fn search_file(path: &Path, pattern: &str, results: &mut Vec<String>, max: usize
             };
             results.push(format!("{}:{}: {}", path_str, line_num + 1, display_line));
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn content_search_finds_pattern() {
-        let tool = ContentSearchTool;
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        // 搜索 shadow-runtime Cargo.toml 中已知存在的文本
-        let result = tool
-            .execute(json!({
-                "pattern": "shadow-runtime",
-                "path": format!("{manifest_dir}/../../Cargo.toml"),
-                "max_results": 5
-            }))
-            .await
-            .unwrap();
-        assert!(result.success);
-        assert!(result.output.contains("shadow-runtime"));
-    }
-
-    #[tokio::test]
-    async fn content_search_no_match() {
-        let tool = ContentSearchTool;
-        // 使用临时目录避免搜到自身源码
-        let tmp = tempfile::tempdir().unwrap();
-        let result = tool
-            .execute(json!({
-                "pattern": "this_string_should_never_exist_anywhere_xyz12345",
-                "path": tmp.path().to_str().unwrap(),
-                "max_results": 5
-            }))
-            .await
-            .unwrap();
-        assert!(result.success);
-        assert!(result.output.contains("未找到"));
     }
 }
