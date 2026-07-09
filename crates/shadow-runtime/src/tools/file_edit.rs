@@ -20,9 +20,7 @@ use std::time::Duration;
 /// 这是一个敏感操作 (修改文件), 需要 approval.
 pub struct FileEditTool;
 
-impl Attributable for FileEditTool {
-    tool_attribution!("file_edit");
-}
+
 
 #[async_trait]
 impl Tool for FileEditTool {

@@ -31,15 +31,7 @@ impl Default for SpawnSubagentTool {
     }
 }
 
-#[cfg(not(feature = "proxy"))]
-impl Attributable for SpawnSubagentTool {
-    fn role(&self) -> Role {
-        Role::Tool
-    }
-    fn alias(&self) -> &str {
-        "spawn_subagent"
-    }
-}
+
 
 #[cfg(not(feature = "proxy"))]
 #[async_trait]

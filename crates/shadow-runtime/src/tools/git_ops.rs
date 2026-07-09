@@ -59,14 +59,7 @@ impl Default for GitOpsTool {
     }
 }
 
-impl Attributable for GitOpsTool {
-    fn role(&self) -> Role {
-        Role::Tool
-    }
-    fn alias(&self) -> &str {
-        "git_ops"
-    }
-}
+
 
 #[async_trait]
 impl Tool for GitOpsTool {

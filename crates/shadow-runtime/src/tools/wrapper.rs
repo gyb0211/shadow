@@ -55,9 +55,7 @@ impl RateLimitedTool {
     }
 }
 
-impl Attributable for RateLimitedTool {
-    tool_attribution!("rate_limited");
-}
+
 
 #[async_trait]
 impl Tool for RateLimitedTool {
@@ -134,9 +132,7 @@ impl PathGuardedTool {
     }
 }
 
-impl Attributable for PathGuardedTool {
-    tool_attribution!("path_guarded");
-}
+
 
 #[async_trait]
 impl Tool for PathGuardedTool {

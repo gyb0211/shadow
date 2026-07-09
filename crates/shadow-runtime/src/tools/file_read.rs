@@ -10,9 +10,7 @@ use shadow_core::{Attributable, Tool, ToolResult, tool_attribution};
 /// 支持文本文件读取, 自动截断超大文件 (前 100KB).
 pub struct FileReadTool;
 
-impl Attributable for FileReadTool {
-    tool_attribution!("file_read");
-}
+
 
 #[async_trait]
 impl Tool for FileReadTool {

@@ -72,14 +72,7 @@ impl Default for FileDownloadTool {
     }
 }
 
-impl Attributable for FileDownloadTool {
-    fn role(&self) -> Role {
-        Role::Tool
-    }
-    fn alias(&self) -> &str {
-        "file_download"
-    }
-}
+
 
 #[async_trait]
 impl Tool for FileDownloadTool {

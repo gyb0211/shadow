@@ -50,9 +50,7 @@ impl Default for ShellTool {
     }
 }
 
-impl Attributable for ShellTool {
-    tool_attribution!("shell");
-}
+
 
 #[async_trait]
 impl Tool for ShellTool {

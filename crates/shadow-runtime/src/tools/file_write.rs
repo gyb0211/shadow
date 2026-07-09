@@ -12,9 +12,7 @@ use shadow_core::{Attributable, Tool, ToolResult, tool_attribution};
 /// 避免写入过程中被中断导致文件损坏.
 pub struct FileWriteTool;
 
-impl Attributable for FileWriteTool {
-    tool_attribution!("file_write");
-}
+
 
 #[async_trait]
 impl Tool for FileWriteTool {

@@ -20,9 +20,7 @@ const MAX_RESULTS: usize = 100;
 /// 例如: `**/*.rs` 匹配所有 Rust 文件, `src/*.ts` 匹配 src 下的 ts 文件
 pub struct GlobSearchTool;
 
-impl Attributable for GlobSearchTool {
-    tool_attribution!("glob_search");
-}
+
 
 #[async_trait]
 impl Tool for GlobSearchTool {

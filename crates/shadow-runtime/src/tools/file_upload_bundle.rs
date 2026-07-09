@@ -62,14 +62,7 @@ impl Default for FileUploadBundleTool {
     }
 }
 
-impl Attributable for FileUploadBundleTool {
-    fn role(&self) -> Role {
-        Role::Tool
-    }
-    fn alias(&self) -> &str {
-        "file_upload_bundle"
-    }
-}
+
 
 #[async_trait]
 impl Tool for FileUploadBundleTool {

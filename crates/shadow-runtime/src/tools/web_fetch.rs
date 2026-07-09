@@ -238,14 +238,7 @@ impl Default for WebFetchTool {
     }
 }
 
-impl Attributable for WebFetchTool {
-    fn role(&self) -> Role {
-        Role::Tool
-    }
-    fn alias(&self) -> &str {
-        "web_fetch"
-    }
-}
+
 
 #[async_trait]
 impl Tool for WebFetchTool {

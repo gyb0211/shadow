@@ -9,12 +9,12 @@ use std::time::Duration;
 
 #[macro_export]
 macro_rules! tool_attribution {
-    ($ty: ty, &kind:expr) => {
+    ($ty: ty, $kind: expr) => {
         impl $crate::kennel::attribution::Attributable for $ty {
             fn role(&self) -> $crate::kennel::attribution::Role {
                 $crate::kennel::attribution::Role::Tool($kind)
             }
-            fn alias(&self) -> &self {
+            fn alias(&self) -> &str {
                 <Self as $crate::kennel::tool::Tool>::name(self)
             }
         }
@@ -24,7 +24,7 @@ macro_rules! tool_attribution {
 macro_rules! mock_tool_attribution {
     ($($ty:ty), +$(,)?) => {
         $(
-        $crate::tool_attribution!($ty, $crate::attribution::ToolKind::Plugin);
+        $crate::tool_attribution!($ty, $crate::kennel::attribution::ToolKind::Plugin);
         )
         +
     };

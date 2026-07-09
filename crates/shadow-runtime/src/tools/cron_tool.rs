@@ -31,14 +31,7 @@ impl Default for CronTool {
     }
 }
 
-impl Attributable for CronTool {
-    fn role(&self) -> Role {
-        Role::Tool
-    }
-    fn alias(&self) -> &str {
-        "cron"
-    }
-}
+
 
 #[async_trait]
 impl Tool for CronTool {

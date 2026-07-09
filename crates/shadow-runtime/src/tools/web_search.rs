@@ -256,14 +256,7 @@ impl Default for WebSearchTool {
     }
 }
 
-impl Attributable for WebSearchTool {
-    fn role(&self) -> Role {
-        Role::Tool
-    }
-    fn alias(&self) -> &str {
-        "web_search"
-    }
-}
+
 
 #[async_trait]
 impl Tool for WebSearchTool {

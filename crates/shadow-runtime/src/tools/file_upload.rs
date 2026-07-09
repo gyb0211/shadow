@@ -54,14 +54,7 @@ impl Default for FileUploadTool {
     }
 }
 
-impl Attributable for FileUploadTool {
-    fn role(&self) -> Role {
-        Role::Tool
-    }
-    fn alias(&self) -> &str {
-        "file_upload"
-    }
-}
+
 
 #[async_trait]
 impl Tool for FileUploadTool {

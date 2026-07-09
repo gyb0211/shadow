@@ -23,6 +23,7 @@
 //! - MemoryExport: 导出记忆
 //! - SkillManage: 技能管理
 
+pub mod attribution;
 pub mod backup_tool;
 pub mod content_search;
 pub mod cron_tool;
@@ -149,8 +150,8 @@ pub fn default_tools_with_workspace(
 
     // 记忆工具
     if let Some(mem) = memory {
-        registry.register(Box::new(MemoryRecallTool::new(Arc::clone(&mem))));
-        registry.register(Box::new(MemoryStoreTool::new(Arc::clone(&mem))));
+        // registry.register(Box::new(MemoryRecallTool::new(Arc::clone(&mem))));
+        // registry.register(Box::new(MemoryStoreTool::new(Arc::clone(&mem))));
         registry.register(Box::new(MemoryForgetTool::new(Arc::clone(&mem))));
         registry.register(Box::new(MemoryPurgeTool::new(Arc::clone(&mem))));
         registry.register(Box::new(MemoryExportTool::new(mem)));

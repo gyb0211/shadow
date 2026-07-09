@@ -170,6 +170,7 @@ mod tests {
             text: Some(content.to_string()),
             tool_calls,
             usage: Some(TokenUsage::default()),
+            reasoning_content: None,
         }
     }
 

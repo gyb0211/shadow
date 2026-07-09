@@ -3,7 +3,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use shadow_core::{Attributable, Tool, ToolResult, tool_attribution};
+use shadow_core::{Attributable, Tool, ToolResult, tool_attribution, ToolKind};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -12,10 +12,6 @@ use std::time::Duration;
 /// 返回格式: `file:line: content` (类似 grep -rn)
 /// 仅搜索文本文件, 跳过二进制文件和超大文件.
 pub struct ContentSearchTool;
-
-impl Attributable for ContentSearchTool {
-    tool_attribution!("content_search");
-}
 
 #[async_trait]
 impl Tool for ContentSearchTool {

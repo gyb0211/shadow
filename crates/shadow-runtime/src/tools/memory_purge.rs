@@ -24,9 +24,7 @@ impl MemoryPurgeTool {
     }
 }
 
-impl Attributable for MemoryPurgeTool {
-    tool_attribution!("memory_purge");
-}
+
 
 #[async_trait]
 impl Tool for MemoryPurgeTool {

@@ -61,14 +61,7 @@ impl Default for BackupTool {
     }
 }
 
-impl Attributable for BackupTool {
-    fn role(&self) -> Role {
-        Role::Tool
-    }
-    fn alias(&self) -> &str {
-        "backup"
-    }
-}
+
 
 #[async_trait]
 impl Tool for BackupTool {

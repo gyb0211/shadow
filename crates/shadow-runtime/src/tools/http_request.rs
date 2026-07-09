@@ -85,14 +85,7 @@ impl Default for HttpRequestTool {
     }
 }
 
-impl Attributable for HttpRequestTool {
-    fn role(&self) -> Role {
-        Role::Tool
-    }
-    fn alias(&self) -> &str {
-        "http_request"
-    }
-}
+
 
 #[async_trait]
 impl Tool for HttpRequestTool {

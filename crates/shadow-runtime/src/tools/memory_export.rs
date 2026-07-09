@@ -60,9 +60,7 @@ impl MemoryExportTool {
     }
 }
 
-impl Attributable for MemoryExportTool {
-    tool_attribution!("memory_export");
-}
+
 
 #[async_trait]
 impl Tool for MemoryExportTool {

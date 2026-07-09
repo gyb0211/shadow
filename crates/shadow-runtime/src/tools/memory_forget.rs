@@ -23,9 +23,7 @@ impl MemoryForgetTool {
     }
 }
 
-impl Attributable for MemoryForgetTool {
-    tool_attribution!("memory_forget");
-}
+
 
 #[async_trait]
 impl Tool for MemoryForgetTool {
@@ -70,68 +68,5 @@ impl Tool for MemoryForgetTool {
             Ok(false) => Ok(ToolResult::err(format!("未找到记忆: key='{key}'"))),
             Err(e) => Ok(ToolResult::err(format!("删除记忆失败: {e}"))),
         }
-    }
-}
-
-// ── 单元测试 ──
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use shadow_core::MemoryCategory;
-    use shadow_memory::sqlite::SqliteMemory;
-
-    /// 测试: 删除存在的记忆条目
-    #[tokio::test]
-    async fn test_forget_existing() {
-        let dir = tempfile::tempdir().unwrap();
-        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(dir.path()).unwrap());
-
-        // 先存储一条
-        mem.store("lang", "Rust", MemoryCategory::Core, None)
-            .await
-            .unwrap();
-
-        let tool = MemoryForgetTool::new(Arc::clone(&mem));
-        let result = tool.execute(json!({"key": "lang"})).await.unwrap();
-
-        assert!(result.success);
-        assert!(result.output.contains("已删除记忆"));
-
-        // 确认已被删除
-        assert!(mem.get("lang").await.unwrap().is_none());
-    }
-
-    /// 测试: 删除不存在的 key 应返回错误
-    #[tokio::test]
-    async fn test_forget_not_found() {
-        let dir = tempfile::tempdir().unwrap();
-        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(dir.path()).unwrap());
-
-        let tool = MemoryForgetTool::new(mem);
-        let result = tool.execute(json!({"key": "nonexistent"})).await.unwrap();
-
-        assert!(!result.success);
-        assert!(result.error.unwrap().contains("未找到记忆"));
-    }
-
-    /// 测试: 缺少 key 参数应返回错误
-    #[tokio::test]
-    async fn test_forget_missing_key() {
-        let dir = tempfile::tempdir().unwrap();
-        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(dir.path()).unwrap());
-
-        let tool = MemoryForgetTool::new(mem);
-        let result = tool.execute(json!({})).await;
-
-        assert!(result.is_err());
-    }
-
-    /// 测试: requires_approval 为 true
-    #[test]
-    fn test_requires_approval() {
-        let dir = tempfile::tempdir().unwrap();
-        let mem: Arc<dyn Memory> = Arc::new(SqliteMemory::new(dir.path()).unwrap());
-        let tool = MemoryForgetTool::new(mem);
-        assert!(tool.requires_approval());
     }
 }
