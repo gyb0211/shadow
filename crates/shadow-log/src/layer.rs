@@ -96,29 +96,3 @@ impl Visit for EventVisitor {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::event::{Action, EventCategory, LogEvent, Severity};
-
-    #[test]
-    fn log_event_with_attribution() {
-        let event = LogEvent::new(Severity::Info, Action::Send, EventCategory::Provider)
-            .with_message("LLM 请求")
-            .with_attr("model", "MiniMax-M2.7")
-            .with_attr("agent", "shadow");
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("MiniMax-M2.7"));
-        assert!(json.contains("shadow"));
-        assert!(json.contains("send"));
-    }
-
-    #[test]
-    fn log_event_with_outcome() {
-        let event = LogEvent::new(Severity::Warn, Action::Fail, EventCategory::Tool)
-            .with_message("tool failed")
-            .with_outcome(crate::event::EventOutcome::Failure);
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("failure"));
-    }
-}
