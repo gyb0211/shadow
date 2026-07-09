@@ -8,11 +8,13 @@
 //! 注意: `cron` crate 的类型也叫 `Schedule`, 本文中以 `cron::Schedule` 全限定书写,
 //! 避免与 [`crate::tools::cron::add::Schedule`] 混淆.
 
+use std::str::FromStr;
 use crate::tools::cron::add::Schedule;
-use crate::cron::Schedule as CronExprSchedule;
-use anyhow::Context;
+use cron::Schedule as CronExprSchedule;
+use anyhow::{bail, Context};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use chrono_tz::Tz as ChronoTz;
+use crate::cron::types::DeliveryConfig;
 
 /// 校验调度配置是否合法.
 ///
@@ -138,5 +140,49 @@ pub fn next_run_for_schedule(
             now.checked_add_signed(duration)
                 .ok_or_else(|| anyhow::anyhow!("计算下次运行时间溢出 (every_ms={every_ms})"))
         }
+    }
+}
+
+
+
+pub fn validate_delivery_config(delivery: Option<&DeliveryConfig>) -> anyhow::Result<()> {
+    let Some(delivery) = delivery else {
+        return Ok(());
+    };
+
+    if delivery.mode.eq_ignore_ascii_case("none") {
+        return Ok(());
+    }
+    if !delivery.mode.eq_ignore_ascii_case("announce") {
+        bail!("unsupported delivery mode: {}", delivery.mode);
+    }
+
+    // Shape-only validation. Whether the named channel resolves to a
+    // configured `[channels.<type>.<alias>]` entry at the moment of add
+    // is checked separately and surfaced as a non-fatal warning, not a
+    // hard error — a cron job may be authored before its channel is
+    // provisioned, and the scheduler logs loudly on fire if the channel
+    // never materialises (see `process_due_jobs`).
+    let channel = delivery.channel.as_deref().map(str::trim);
+    if channel.filter(|value| !value.is_empty()).is_none() {
+        bail!("delivery.channel is required for announce mode");
+    }
+
+    let has_target = delivery
+        .to
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    if !has_target {
+        bail!("delivery.to is required for announce mode");
+    }
+
+    Ok(())
+}
+
+pub fn schedule_cron_expression(schedule: &Schedule) -> Option<String> {
+    match schedule {
+        Schedule::Cron { expr, .. } => Some(expr.clone()),
+        _ => None,
     }
 }

@@ -5,6 +5,12 @@ use crate::cron::{deserialize_maybe_stringified, CronJob};
 use crate::tools::cron::add::Schedule;
 use serde_json::{Value, json};
 
+
+pub(crate) const CRON_TZ_DESCRIPTION: &str = "Optional explicit IANA timezone name, e.g. 'America/New_York'. If omitted, the schedule uses the runtime local timezone. For user-facing schedules, pass an explicit IANA timezone.";
+
+pub(crate) const AT_DESCRIPTION: &str = "RFC3339 timestamp with explicit Z or offset, e.g. '2025-12-31T23:59:00Z' or '2025-12-31T18:59:00-05:00'.";
+
+
 pub fn deserialize_schedule_arg(value: &Value) -> Result<Schedule, String> {
     reject_at_without_explicit_offset(value)?;
     deserialize_maybe_stringified(value).map_err(|err| format!("Invalid schedule: {err}"))

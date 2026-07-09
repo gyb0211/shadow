@@ -34,22 +34,13 @@
 //! 这是技能的说明文档, 会作为附加提示使用...
 //! ```
 
-pub mod improver;
-pub mod review;
-pub mod skill_http;
-pub mod skill_tool;
-
-pub use improver::SkillImprover;
-pub use review::maybe_run_skill_review;
-pub use skill_http::SkillHttpTool;
-pub use skill_tool::SkillShellTool;
-
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
-use shadow_core::Tool;
-use std::path::Path;
 
 // ── 数据结构 ──────────────────────────────────────────────────────────
+
+use std::path::Path;
+use serde::{Deserialize, Serialize};
+use anyhow::{Context, Result};
+use shadow_core::Tool;
 
 /// 技能工具定义 -- 从 SKILL.md frontmatter 解析
 ///
@@ -124,18 +115,18 @@ impl SkillsService {
         for skill in &self.skills {
             for tool_def in &skill.tools {
                 match tool_def.kind.as_str() {
-                    "shell" => {
-                        tools.push(Box::new(SkillShellTool::new(&skill.name, tool_def.clone()))
-                            as Box<dyn Tool>);
-                    }
-                    "http" => {
-                        tools.push(Box::new(SkillHttpTool::new(&skill.name, tool_def.clone()))
-                            as Box<dyn Tool>);
-                    }
-                    "builtin" => {
-                        // TODO: 后续实现内置类型工具
-                        tracing::debug!("跳过未实现的技能工具类型: builtin ({})", tool_def.name);
-                    }
+                    // "shell" => {
+                    //     tools.push(Box::new(SkillShellTool::new(&skill.name, tool_def.clone()))
+                    //         as Box<dyn Tool>);
+                    // }
+                    // "http" => {
+                    //     tools.push(Box::new(SkillHttpTool::new(&skill.name, tool_def.clone()))
+                    //         as Box<dyn Tool>);
+                    // }
+                    // "builtin" => {
+                    //     // TODO: 后续实现内置类型工具
+                    //     tracing::debug!("跳过未实现的技能工具类型: builtin ({})", tool_def.name);
+                    // }
                     _ => {
                         tracing::warn!("未知技能工具类型: {}", tool_def.kind);
                     }
@@ -552,17 +543,17 @@ pub fn load_skills_from_dir(skills_dir: &Path) -> Result<Vec<Skill>> {
 pub fn load_skills(workspace_dir: &Path) -> Result<Vec<Skill>> {
     let mut skills = Vec::new();
 
-    // 1. 扫描 ~/.shadow/skills/ (经 shadow_config::config_dir() 解析, 支持 SHADOW_CONFIG_DIR override)
-    let home_dir = shadow_config::config_dir().join("skills");
-    if home_dir.exists() {
-        skills.extend(load_skills_from_dir(&home_dir)?);
-    }
-
-    // 2. 扫描 {workspace_dir}/.shadow/skills/
-    let ws_dir = workspace_dir.join(".shadow").join("skills");
-    if ws_dir.exists() {
-        skills.extend(load_skills_from_dir(&ws_dir)?);
-    }
+    // // 1. 扫描 ~/.shadow/skills/ (经 shadow_config::config_dir() 解析, 支持 SHADOW_CONFIG_DIR override)
+    // let home_dir = shadow_config::config_dir().join("skills");
+    // if home_dir.exists() {
+    //     skills.extend(load_skills_from_dir(&home_dir)?);
+    // }
+    //
+    // // 2. 扫描 {workspace_dir}/.shadow/skills/
+    // let ws_dir = workspace_dir.join(".shadow").join("skills");
+    // if ws_dir.exists() {
+    //     skills.extend(load_skills_from_dir(&ws_dir)?);
+    // }
 
     Ok(skills)
 }

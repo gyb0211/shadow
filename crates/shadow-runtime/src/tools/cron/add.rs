@@ -7,9 +7,10 @@ use shadow_config::Config;
 use std::sync::Arc;
 use async_trait::async_trait;
 use shadow_core::{Tool, ToolResult};
-use crate::tools::cron::{add_agent_job, add_shell_job_with_approval};
-use crate::tools::cron::common::{cron_add_output, deserialize_schedule_arg};
-use crate::tools::cron::types::{DeliveryConfig, SessionTarget};
+use crate::cron::{add_agent_job, add_shell_job_with_approval, CRON_DELIVERY_SCHEMA_CHANNELS};
+use crate::cron::types::DeliveryConfig;
+use crate::tools::cron::common::{cron_add_output, deserialize_schedule_arg, AT_DESCRIPTION, CRON_TZ_DESCRIPTION};
+use crate::tools::cron::types::{ SessionTarget};
 
 enum Arg {
     Schedule(Schedule),
@@ -31,11 +32,6 @@ pub enum Schedule {
         every_ms: u64,
     },
 }
-
-impl FromStr for Schedule {
-
-}
-
 
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -294,7 +290,7 @@ impl Tool for CronAddTool{
                         },
                         "channel": {
                             "type": "string",
-                            "enum": cron::CRON_DELIVERY_SCHEMA_CHANNELS,
+                            "enum": CRON_DELIVERY_SCHEMA_CHANNELS,
                             "description": "Channel type to deliver output to"
                         },
                         "to": {
@@ -428,7 +424,7 @@ impl Tool for CronAddTool{
                         Ok(als) => {
                             if als.is_empty() {None} else{Some(als)}
                         }
-                        Err(err) => return Ok(ToolResult::err(format!("Invalid allowed_tools: {e}"))),
+                        Err(err) => return Ok(ToolResult::err(format!("Invalid allowed_tools: {err}"))),
                     }
                     None => None
                 };

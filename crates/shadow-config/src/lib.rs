@@ -43,6 +43,7 @@ pub mod autonomy;
 pub mod model_provider;
 pub mod proxy_client;
 
+use std::path::Path;
 pub use model_provider::*;
 pub use proxy_client::*;
 

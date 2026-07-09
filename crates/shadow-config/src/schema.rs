@@ -41,6 +41,8 @@ pub struct Config {
     pub scheduler: SchedulerConfig,
 }
 
+
+
 impl Config {
     pub fn agent(&self, agent_alias: &str) -> Option<&AliasedAgentConfig> {
         self.agents.get(agent_alias)
@@ -59,6 +61,18 @@ impl Config {
         let agent = self.agents.get(agent_alias)?;
         let (type_key, alias_key) = agent.model_provider.split_once(".")?;
         self.providers.models.iter_entries().find(|(ty, alias, _)| *ty == type_key && *alias == alias_key)
+    }
+
+    pub async fn load_or_init() ->anyhow::Result<Self>{
+        Ok(Self{
+            schema_version: 0,
+            agents: Default::default(),
+            risk_profiles: Default::default(),
+            runtime_profiles: Default::default(),
+            skill_bundles: Default::default(),
+            providers: Default::default(),
+            scheduler: Default::default(),
+        })
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
