@@ -53,11 +53,6 @@ description = "影子 -- ZeroClaw 架构精简复刻: trait 驱动 + 微内核 +
 name = "shadow"
 path = "src/main.rs"
 
-[[bin]]
-name = "shadow-proxy"
-path = "src/proxy_main.rs"
-required-features = ["proxy"]
-
 [lib]
 path = "src/lib.rs"
 

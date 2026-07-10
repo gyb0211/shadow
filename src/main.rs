@@ -156,7 +156,7 @@ async fn main() -> Result<()> {
 
             }else if config.model_provider_for_agent(&agent_alias).is_none(){
                 anyhow::bail!(
-                    "No model model_provider configured for agent {agent_alias}.\
+                    "No model model_provider configured for agent {agent_alias}.\n
                     Pass --model-provider <type> or run `shadow quickstart` to configured one."
                 );
             }
@@ -164,7 +164,7 @@ async fn main() -> Result<()> {
             let (provider_name, resolved_entry) = config.resolved_model_provider_for_agent(&agent_alias)
                 .map(|(ty, _alias, entry)|(ty, Some(entry))).unwrap_or(("openai", None));
 
-            let model_provider = shadow_providers::create_model_provider(provider_name, resolved_entry.and_then(|e| e.api_key.as_deref()))?;
+            let model_provider = shadow_providers::create_model_provider(provider_name, resolved_entry.and_then(|e| e.api_key.as_deref()), resolved_entry.and_then(|e| e.url.as_deref()))?;
 
             let model_name = resolved_entry.and_then(|e| e.model.as_deref()).unwrap_or("default");
 

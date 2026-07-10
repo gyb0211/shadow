@@ -126,9 +126,14 @@ use std::sync::Arc;
 //     Ok(Arc::new(reliable) as Arc<dyn ModelProvider>)
 // }
 
-pub fn create_model_provider(name: &str, api_key: Option<&str>) -> Result<Box<dyn ModelProvider>> {
+// pub fn create_model_provider(name: &str, api_key: Option<&str>) -> Result<Box<dyn ModelProvider>> {
+//     create_model_provider_inner(
+//         None,name, "default", api_key, None, &ModelProviderRuntimeOptions::default()
+//     )
+// }
+pub fn create_model_provider(name: &str,  api_key: Option<&str>,api_url: Option<&str>,) -> Result<Box<dyn ModelProvider>> {
     create_model_provider_inner(
-        None,name, "default", api_key, None, &ModelProviderRuntimeOptions::default()
+        None,name, "default", api_key, api_url, &ModelProviderRuntimeOptions::default()
     )
 }
 
