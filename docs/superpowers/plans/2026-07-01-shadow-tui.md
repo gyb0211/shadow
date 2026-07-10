@@ -143,7 +143,7 @@ Expected: PASS — all existing tests + new test.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/shadow-core/src/observer.rs crates/shadow-runtime/src/agent.rs src/main.rs
+git add crates/shadow-core/src/observer.rs crates/shadow-runtime/src/agent_bak src/main.rs
 git commit -m "feat: ObserverEvent::ToolCall 加 output_preview 字段"
 ```
 

@@ -15,6 +15,8 @@ use std::path::PathBuf;
 use anyhow::Context;
 use directories::UserDirs;
 use tokio::fs;
+use crate::multi::alias_agent::MemoryBackendKind;
+use crate::observability::ObservabilityBackend;
 use crate::providers::{ModelProviderRef, ModelProviders, Providers};
 
 /// 顶层配置
@@ -47,23 +49,36 @@ pub struct Config {
 
     #[serde(default)]
     pub scheduler: SchedulerConfig,
+    
+    #[serde(default = "default_memory_backend")]
+    pub memory_backend:String,
+    
+    #[serde(default)]
+    pub observability: ObservabilityConfig,
 }
+
+fn default_memory_backend() -> String {
+    "sqlite".into()
+}
+
 
 impl Default for Config {
     fn default() -> Self {
         let home = UserDirs::new().map_or_else(|| PathBuf::from("."), |u| u.home_dir().to_path_buf());
         let shadow_home = home.join(".shadow");
         let mut agents = HashMap::new();
-        agents.insert("assistant".to_string() , AliasedAgentConfig{
+        agents.insert("assistant".to_string(), AliasedAgentConfig {
             enabled: true,
+            memory: Default::default(),
             model_provider: ModelProviderRef::new("custom.default"),
             risk_profile: Default::default(),
             runtime_profile: Default::default(),
+            resolved: ResolvedRuntime { max_tool_iterations: 20 },
         });
         let mut pdf = Providers::default();
         pdf.models = ModelProviders::default();
         pdf.models.custom = HashMap::new();
-        pdf.models.custom.insert("default".to_string(), CustomModelProviderConfig{
+        pdf.models.custom.insert("default".to_string(), CustomModelProviderConfig {
             base: ModelProviderConfig {
                 api_key: Some("sk-cp-18TqfpOSbQSSNkZNvjO01R3euRRLhj7zreKCW1ssrFficr3yWC3rBzylPD6Nnw2V450mmZu9Q5s6p0CsqAInQOq1r3ZBzYpl_UUG_PkNiVGl4s5OduwRiFE".to_string()),
                 kind: None,
@@ -88,6 +103,7 @@ impl Default for Config {
             skill_bundles: Default::default(),
             providers: pdf,
             scheduler: Default::default(),
+            memory_backend: "sqlite".to_string(),
         }
     }
 }
@@ -229,6 +245,30 @@ impl Config {
         self.providers.models.iter_entries().find(|(ty, alias, _)| *ty == type_key && *alias == alias_key)
     }
 
+    pub fn resolved_agent_config(&self, agent_alias: &str) -> Option<AliasedAgentConfig> {
+        let mut cfg = self.agents.get(agent_alias)?.clone();
+        let runtime_profile_cfg = self.runtime_profile_for_agent(agent_alias);
+        let mut resolved = ResolvedRuntime {
+            max_tool_iterations: runtime_profile_cfg.map(|c| c.max_tool_iterations).filter(|&v| v > 0).unwrap_or(10),
+
+        };
+        if let Some(profile) = runtime_profile_cfg{
+            
+        }
+        cfg.resolved = resolved;
+        Some(cfg)
+        
+    }
+
+
+    fn runtime_profile_for_agent(&self, agent_alias: &str) -> Option<&RuntimeProfileConfig> {
+        self.runtime_profiles.get("agent_alias")
+    }
+
+    pub fn risk_profile_for_agent(&self, agent_alias: &str) -> Option<&RiskProfileConfig> {
+        self.risk_profiles.get("agent_alias")
+    }
+
     pub async fn load_or_init() -> anyhow::Result<Self> {
         let (default_shadow_dir, default_workspace_dir) = default_config_and_data_dirs()?;
         let (shadow_dir, _legacy_workspace_dir, resolution_source) = resolve_runtime_config_dirs(&default_shadow_dir, &default_workspace_dir).await?;
@@ -304,3 +344,13 @@ fn default_scheduler_enabled() -> bool { true }
 fn default_max_tasks() -> usize { 64 }
 fn default_max_concurrent() -> usize { 4 }
 fn default_max_run_history() -> u32 { 50 }
+
+#[derive(Debug, Clone)]
+pub struct ResolvedRuntime {
+   pub max_tool_iterations: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObservabilityConfig {
+    pub backend: ObservabilityBackend,
+}

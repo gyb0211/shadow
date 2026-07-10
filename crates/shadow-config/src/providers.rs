@@ -146,6 +146,22 @@ impl ModelProviders {
         for_each_model_provider_slot!(emit_iter);
         out.into_iter()
     }
+
+    pub fn ensure(&mut self, family: &str, alias: &str) -> Option<&mut ModelProviderConfig> {
+        macro_rules! emit_ensure {
+            // field + field_str + config
+            ($(($field: ident,$type_str: literal, $cfg_ty: ty)) + $(,)?) => {
+                match family {
+                    $(
+                     $type_str =>
+                         Some(&mut self.$field.entry(alias.to_string()).or_default().base),
+                    )+
+                    _ => None,
+                }
+            };
+        }
+        for_each_model_provider_slot!(emit_ensure)
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
