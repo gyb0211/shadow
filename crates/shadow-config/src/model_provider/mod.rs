@@ -15,7 +15,7 @@ pub struct ModelProviderConfig{
     pub kind: Option<String>,
 
     #[serde(default, skip_serializing_if="Option::is_none")]
-    pub url: Option<String>,
+    pub uri: Option<String>,
 
     #[serde(default, skip_serializing_if="Option::is_none")]
     pub model: Option<String>,

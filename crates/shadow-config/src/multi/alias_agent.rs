@@ -1,5 +1,19 @@
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use crate::define_provider_ref;
 use crate::schema::{ResolvedRuntime, RuntimeProfileConfig};
+
+define_provider_ref!(AgentAlias, "agents");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all="snake_case")]
+pub enum AccessMode {
+    Read,
+    Write,
+    ReadWrite,
+}
+
 
 fn default_true() ->bool{true}
 fn default_false()->bool{false}
@@ -9,6 +23,9 @@ pub struct AliasedAgentConfig{
 
     #[serde(default="default_true")]
     pub enabled: bool,
+    
+    #[serde(default)]
+    pub workspace: AgentWorkspaceConfig,
 
     #[serde(default)]
     pub memory: AgentMemoryConfig,
@@ -28,6 +45,8 @@ pub struct AliasedAgentConfig{
 
     #[serde(skip)]
     pub resolved: ResolvedRuntime,
+    
+    
 
 }
 
@@ -47,4 +66,19 @@ pub enum MemoryBackendKind {
     Postgres,
     Markdown,
     Lucid,
+    Unknown
 }
+
+#[derive(Debug, Clone,Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentWorkspaceConfig {
+    #[serde(skip_serializing_if="Option::is_none")]
+    pub path: Option<PathBuf>,
+    
+    pub access: BTreeMap<AgentAlias, AccessMode>,
+    
+    pub unrestricted_filesystem: bool,
+    
+    pub read_memory_from: Vec<AgentAlias>,
+}
+

@@ -1,8 +1,6 @@
 //! Provider 配置条目与解析
 
-use crate::model_provider::{
-    ModelProviderConfig, CustomModelProviderConfig
-};
+use crate::model_provider::{CustomModelProviderConfig, ModelProviderConfig};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -131,8 +129,8 @@ impl ModelProviders {
         for_each_model_provider_slot!(emit_get)
     }
 
-    pub fn iter_entries(&self) ->impl Iterator<Item = (&str, &str, &ModelProviderConfig)>{
-        let mut out:Vec<(&str, &str, &ModelProviderConfig)> = Vec::new();
+    pub fn iter_entries(&self) -> impl Iterator<Item = (&str, &str, &ModelProviderConfig)> {
+        let mut out: Vec<(&str, &str, &ModelProviderConfig)> = Vec::new();
         macro_rules! emit_iter {
             // field + field_str + config
             ($(($field: ident,$type_str: literal, $cfg_ty: ty)) + $(,)?) => {
@@ -161,6 +159,34 @@ impl ModelProviders {
             };
         }
         for_each_model_provider_slot!(emit_ensure)
+    }
+
+    pub fn find_by_name(&self, name: &str) -> Option<(&'static str, String, &ModelProviderConfig)> {
+        if let Some((kind, alias)) = name.split_once(".") {
+            macro_rules! emit_find {
+               ($(($field:ident, $type_str:literal, $cfg_ty:ty)),+ $(,)?) => {
+                   match kind {
+                       $($type_str =>self.$field.get(alias).map(|c| ($type_str, alias.to_string(), &c.base)),)+
+                       _ => None
+                   }
+               };
+            }
+            return for_each_model_provider_slot!(emit_find);
+        }
+
+        let mut hit: Option<(&'static str, String, &ModelProviderConfig)> = None;
+        macro_rules! emit_bare {
+            ($(($field:ident, $type_str:literal, $cfg_ty:ty)),+ $(,)?) => {
+                $(if let Some(c) = self.$field.get(name) {
+                    if hit.is_some(){
+                        return None;
+                    }
+                    hit = Some(($type_str, name.to_string(), &c.base))
+                })+
+            };
+        }
+        for_each_model_provider_slot!(emit_bare);
+        hit
     }
 }
 

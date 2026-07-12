@@ -18,6 +18,7 @@ use shadow_config::Config;
 use shadow_log::Action;
 use shadow_providers::ProviderDispatch;
 use std::io::{BufRead, StdinLock};
+use shadow_runtime::agent;
 
 const STDIN_LINE_CAP: usize = 1024 * 1024;
 

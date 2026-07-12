@@ -1,14 +1,21 @@
 //! 空记忆后端 -- 不存储任何记忆
 
-use shadow_core::{Attributable, Memory, MemoryCategory, MemoryEntry, MemoryKind, Role};
 use anyhow::Result;
 use async_trait::async_trait;
+use shadow_core::{Attributable, Memory, MemoryCategory, MemoryEntry, MemoryKind, Role};
 
 #[derive(Debug, Default, Clone)]
-pub struct NoneMemory{
+pub struct NoneMemory {
     alias: String,
 }
 
+impl NoneMemory {
+    pub fn new(alias: &str) -> Self {
+        Self {
+            alias: alias.to_string(),
+        }
+    }
+}
 
 impl Attributable for NoneMemory {
     fn role(&self) -> Role {
@@ -25,11 +32,24 @@ impl Memory for NoneMemory {
         "none"
     }
 
-    async fn store(&self, key: &str, content: &str, category: MemoryCategory, session_id: Option<&str>) -> Result<()> {
+    async fn store(
+        &self,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        session_id: Option<&str>,
+    ) -> Result<()> {
         Ok(())
     }
 
-    async fn recall(&self, query: &str, limit: usize, session_id: Option<&str>, since: Option<&str>, until: Option<&str>) -> Result<Vec<MemoryEntry>> {
+    async fn recall(
+        &self,
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+    ) -> Result<Vec<MemoryEntry>> {
         Ok(vec![])
     }
 
@@ -37,7 +57,11 @@ impl Memory for NoneMemory {
         Ok(None)
     }
 
-    async fn list(&self, category: Option<&MemoryCategory>, session_id: Option<&str>) -> Result<Vec<MemoryEntry>> {
+    async fn list(
+        &self,
+        category: Option<&MemoryCategory>,
+        session_id: Option<&str>,
+    ) -> Result<Vec<MemoryEntry>> {
         Ok(vec![])
     }
 
@@ -54,14 +78,31 @@ impl Memory for NoneMemory {
     }
 
     async fn health_check(&self) -> bool {
-       true
+        true
     }
 
-    async fn store_with_agent(&self, key: &str, content: &str, category: MemoryCategory, session_id: Option<&str>, _namespace: Option<&str>, _importance: Option<f64>, agent_id: Option<&str>) -> Result<()> {
-     Ok(())
+    async fn store_with_agent(
+        &self,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        session_id: Option<&str>,
+        _namespace: Option<&str>,
+        _importance: Option<f64>,
+        agent_id: Option<&str>,
+    ) -> Result<()> {
+        Ok(())
     }
 
-    async fn recall_for_agent(&self, allowed_agent_ids: &[&str], query: &str, limit: usize, session_id: Option<&str>, since: Option<&str>, until: Option<&str>) -> Result<Vec<MemoryEntry>> {
+    async fn recall_for_agent(
+        &self,
+        allowed_agent_ids: &[&str],
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+    ) -> Result<Vec<MemoryEntry>> {
         Ok(vec![])
     }
 }

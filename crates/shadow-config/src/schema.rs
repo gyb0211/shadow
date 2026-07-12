@@ -7,17 +7,17 @@ pub use crate::multi::skill_bundle::SkillBundleConfig;
 
 pub use crate::model_provider::*;
 
+use crate::multi::alias_agent::MemoryBackendKind;
+use crate::observability::ObservabilityBackend;
+use crate::providers::{ModelProviderRef, ModelProviders, Providers};
+use anyhow::Context;
+use directories::UserDirs;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::future::poll_fn;
-use std::path::PathBuf;
-use anyhow::Context;
-use directories::UserDirs;
+use std::path::{Path, PathBuf};
 use tokio::fs;
-use crate::multi::alias_agent::MemoryBackendKind;
-use crate::observability::ObservabilityBackend;
-use crate::providers::{ModelProviderRef, ModelProviders, Providers};
 
 /// 顶层配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,32 +49,47 @@ pub struct Config {
 
     #[serde(default)]
     pub scheduler: SchedulerConfig,
-    
+
     #[serde(default = "default_memory_backend")]
-    pub memory_backend:String,
-    
+    pub memory_backend: String,
+
+    #[serde(default)]
+    pub memory: MemoryConfig,
+
+    #[serde(default)]
+    pub storage: StorageConfig,
+
     #[serde(default)]
     pub observability: ObservabilityConfig,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub embedding_routes: Vec<EmbeddingRouteConfig>,
 }
 
 fn default_memory_backend() -> String {
     "sqlite".into()
 }
 
-
 impl Default for Config {
     fn default() -> Self {
-        let home = UserDirs::new().map_or_else(|| PathBuf::from("."), |u| u.home_dir().to_path_buf());
+        let home =
+            UserDirs::new().map_or_else(|| PathBuf::from("."), |u| u.home_dir().to_path_buf());
         let shadow_home = home.join(".shadow");
         let mut agents = HashMap::new();
-        agents.insert("assistant".to_string(), AliasedAgentConfig {
-            enabled: true,
-            memory: Default::default(),
-            model_provider: ModelProviderRef::new("custom.default"),
-            risk_profile: Default::default(),
-            runtime_profile: Default::default(),
-            resolved: ResolvedRuntime { max_tool_iterations: 20 },
-        });
+        agents.insert(
+            "assistant".to_string(),
+            AliasedAgentConfig {
+                enabled: true,
+                workspace: Default::default(),
+                memory: Default::default(),
+                model_provider: ModelProviderRef::new("custom.default"),
+                risk_profile: Default::default(),
+                runtime_profile: Default::default(),
+                resolved: ResolvedRuntime {
+                    max_tool_iterations: 20,
+                },
+            },
+        );
         let mut pdf = Providers::default();
         pdf.models = ModelProviders::default();
         pdf.models.custom = HashMap::new();
@@ -82,7 +97,7 @@ impl Default for Config {
             base: ModelProviderConfig {
                 api_key: Some("sk-cp-18TqfpOSbQSSNkZNvjO01R3euRRLhj7zreKCW1ssrFficr3yWC3rBzylPD6Nnw2V450mmZu9Q5s6p0CsqAInQOq1r3ZBzYpl_UUG_PkNiVGl4s5OduwRiFE".to_string()),
                 kind: None,
-                url: Some("https://api.minimaxi.com/v1".to_string()),
+                uri: Some("https://api.minimaxi.com/v1".to_string()),
                 model: Some("MiniMax-M2.7".to_string()),
                 temperature: None,
                 timeout_secs: None,
@@ -104,6 +119,10 @@ impl Default for Config {
             providers: pdf,
             scheduler: Default::default(),
             memory_backend: "sqlite".to_string(),
+            memory: Default::default(),
+            storage: Default::default(),
+            observability: Default::default(),
+            embedding_routes: vec![],
         }
     }
 }
@@ -129,12 +148,10 @@ impl ConfigResolutionSource {
     }
 }
 
-
 fn default_config_and_data_dirs() -> anyhow::Result<(PathBuf, PathBuf)> {
     let config_dir = default_config_dir()?;
     Ok((config_dir.clone(), config_dir.join("data")))
 }
-
 
 fn default_config_dir() -> anyhow::Result<PathBuf> {
     if let Ok(custom) = std::env::var("SHADOW_CONFIG_DIR") {
@@ -145,58 +162,96 @@ fn default_config_dir() -> anyhow::Result<PathBuf> {
         }
     }
 
-    if let Ok(home) = std::env::var("HOME") && !home.is_empty() {
+    if let Ok(home) = std::env::var("HOME")
+        && !home.is_empty()
+    {
         return Ok(PathBuf::from(home).join(".shadow"));
     }
 
-    let home = UserDirs::new().map(|u| u.home_dir().to_path_buf()).context("Could not find home directory")?;
+    let home = UserDirs::new()
+        .map(|u| u.home_dir().to_path_buf())
+        .context("Could not find home directory")?;
     Ok(home.join(".shadow"))
 }
 
-async fn resolve_runtime_config_dirs(default_shadow_dir: &PathBuf, default_data_dir: &PathBuf) -> anyhow::Result<(PathBuf, PathBuf, ConfigResolutionSource)> {
+async fn resolve_runtime_config_dirs(
+    default_shadow_dir: &PathBuf,
+    default_data_dir: &PathBuf,
+) -> anyhow::Result<(PathBuf, PathBuf, ConfigResolutionSource)> {
     if let Ok(custom_config_dir) = std::env::var("SHADOW_CONFIG_DIR") {}
-    if let Ok(custom_data_dir) = std::env::var("SHADOW_DATA_DIR") && !custom_data_dir.trim().is_empty() {
+    if let Ok(custom_data_dir) = std::env::var("SHADOW_DATA_DIR")
+        && !custom_data_dir.trim().is_empty()
+    {
         // let expanded = expand_tilde_path(&custom_data_dir);
         // let (shadow_dir, data_dir) = resolve_config_dir_for_data(&expanded);
         // return Ok(shadow_dir, data_dir, ConfigResolutionSource::EnvDataDir);
     }
 
-    if let Ok(custom_workspace) = std::env::var("SHADOW_WORKSPACE") && !custom_workspace.trim().is_empty() {
+    if let Ok(custom_workspace) = std::env::var("SHADOW_WORKSPACE")
+        && !custom_workspace.trim().is_empty()
+    {
         // let expanded = expand_tilde_path(&custom_data_dir);
         // let (shadow_dir, data_dir) = resolve_config_dir_for_data(&expanded);
         // return Ok(shadow_dir, data_dir, ConfigResolutionSource::EnvWorkspaceLegacy);
     }
 
-
-    if cfg!(target_os = "macos") && let Ok(exe) = std::env::current_exe()
-        && let Some(homebrew_config_dir) = try_resolve_macos_homebrew_config_dir(&exe).await {
-        return Ok(
-            (homebrew_config_dir.clone(),
-             homebrew_config_dir.join("workspace"), ConfigResolutionSource::HomebrewConfigDir)
-        );
+    if cfg!(target_os = "macos")
+        && let Ok(exe) = std::env::current_exe()
+        && let Some(homebrew_config_dir) = try_resolve_macos_homebrew_config_dir(&exe).await
+    {
+        return Ok((
+            homebrew_config_dir.clone(),
+            homebrew_config_dir.join("workspace"),
+            ConfigResolutionSource::HomebrewConfigDir,
+        ));
     }
 
-    Ok((default_data_dir.to_path_buf(), default_data_dir.to_path_buf(), ConfigResolutionSource::DefaultConfigDir))
+    Ok((
+        default_data_dir.to_path_buf(),
+        default_data_dir.to_path_buf(),
+        ConfigResolutionSource::DefaultConfigDir,
+    ))
 }
 
 async fn try_resolve_macos_homebrew_config_dir(exe: &PathBuf) -> Option<PathBuf> {
     let parts = exe.iter().collect::<Vec<_>>();
     let prefix = match parts.as_slice() {
         [prefix @ .., cellar, formula, _version, bin, exe_name]
-        if os_str_eq(cellar, "Cellar") && os_str_eq(formula, "shadow") && os_str_eq(bin, "bin") && os_str_eq(exe_name, "shadow") => prefix.iter().collect::<PathBuf>(),
-        [prefix @ .., opt, formula, bin, exe_name]
-        if os_str_eq(opt, "opt") && os_str_eq(formula, "shadow") && os_str_eq(bin, "bin") && os_str_eq(exe_name, "shadow") => {
-            let prefix = prefix.iter().collect::<PathBuf>();
-            if !prefix.as_os_str().is_empty() && fs::metadata(prefix.join("Cellar")).await.is_ok_and(|metadata| metadata.is_dir()) {
-                prefix
-            } else { return None; }
+            if os_str_eq(cellar, "Cellar")
+                && os_str_eq(formula, "shadow")
+                && os_str_eq(bin, "bin")
+                && os_str_eq(exe_name, "shadow") =>
+        {
+            prefix.iter().collect::<PathBuf>()
         }
-        [prefix @ .., bin, exe_name]
-        if os_str_eq(bin, "bin") && os_str_eq(exe_name, "shadow") => {
+        [prefix @ .., opt, formula, bin, exe_name]
+            if os_str_eq(opt, "opt")
+                && os_str_eq(formula, "shadow")
+                && os_str_eq(bin, "bin")
+                && os_str_eq(exe_name, "shadow") =>
+        {
             let prefix = prefix.iter().collect::<PathBuf>();
-            if !prefix.as_os_str().is_empty() && fs::metadata(prefix.join("Cellar")).await.is_ok_and(|metadata| metadata.is_dir()) {
+            if !prefix.as_os_str().is_empty()
+                && fs::metadata(prefix.join("Cellar"))
+                    .await
+                    .is_ok_and(|metadata| metadata.is_dir())
+            {
                 prefix
-            } else { return None; }
+            } else {
+                return None;
+            }
+        }
+        [prefix @ .., bin, exe_name] if os_str_eq(bin, "bin") && os_str_eq(exe_name, "shadow") => {
+            let prefix = prefix.iter().collect::<PathBuf>();
+            if !prefix.as_os_str().is_empty()
+                && fs::metadata(prefix.join("Cellar"))
+                    .await
+                    .is_ok_and(|metadata| metadata.is_dir())
+            {
+                prefix
+            } else {
+                return None;
+            }
         }
         _ => {
             return None;
@@ -239,27 +294,50 @@ impl Config {
         self.providers.models.find(type_key, alias_key)
     }
 
-    pub fn resolved_model_provider_for_agent(&self, agent_alias: &String) -> Option<(&str, &str, &ModelProviderConfig)> {
+    pub fn resolved_model_provider_for_agent(
+        &self,
+        agent_alias: &String,
+    ) -> Option<(&str, &str, &ModelProviderConfig)> {
         let agent = self.agents.get(agent_alias)?;
         let (type_key, alias_key) = agent.model_provider.split_once(".")?;
-        self.providers.models.iter_entries().find(|(ty, alias, _)| *ty == type_key && *alias == alias_key)
+        self.providers
+            .models
+            .iter_entries()
+            .find(|(ty, alias, _)| *ty == type_key && *alias == alias_key)
     }
 
     pub fn resolved_agent_config(&self, agent_alias: &str) -> Option<AliasedAgentConfig> {
         let mut cfg = self.agents.get(agent_alias)?.clone();
         let runtime_profile_cfg = self.runtime_profile_for_agent(agent_alias);
         let mut resolved = ResolvedRuntime {
-            max_tool_iterations: runtime_profile_cfg.map(|c| c.max_tool_iterations).filter(|&v| v > 0).unwrap_or(10),
-
+            max_tool_iterations: runtime_profile_cfg
+                .map(|c| c.max_tool_iterations)
+                .filter(|&v| v > 0)
+                .unwrap_or(10),
         };
-        if let Some(profile) = runtime_profile_cfg{
-            
-        }
+        if let Some(profile) = runtime_profile_cfg {}
         cfg.resolved = resolved;
         Some(cfg)
-        
     }
 
+    pub fn agent_workspace_dir(&self, agent_alias: &str) -> PathBuf {
+        if let Some(cfg) = self.agents.get(agent_alias)
+            && let Some(custom) = cfg.workspace.path.as_ref()
+        {
+            return custom.clone();
+        }
+
+        self.install_root_dir()
+            .join("agents")
+            .join(agent_alias)
+            .join("workspace")
+    }
+    pub fn install_root_dir(&self) -> PathBuf {
+        self.config_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
 
     fn runtime_profile_for_agent(&self, agent_alias: &str) -> Option<&RuntimeProfileConfig> {
         self.runtime_profiles.get("agent_alias")
@@ -271,25 +349,36 @@ impl Config {
 
     pub async fn load_or_init() -> anyhow::Result<Self> {
         let (default_shadow_dir, default_workspace_dir) = default_config_and_data_dirs()?;
-        let (shadow_dir, _legacy_workspace_dir, resolution_source) = resolve_runtime_config_dirs(&default_shadow_dir, &default_workspace_dir).await?;
+        let (shadow_dir, _legacy_workspace_dir, resolution_source) =
+            resolve_runtime_config_dirs(&default_shadow_dir, &default_workspace_dir).await?;
 
         let config_path = shadow_dir.join("config.toml");
         let data_dir = shadow_dir.join("data");
-        fs::create_dir_all(&data_dir).await.with_context(|| format!("Failed to create data directory: {}", data_dir.display().to_string()))?;
+        fs::create_dir_all(&data_dir).await.with_context(|| {
+            format!(
+                "Failed to create data directory: {}",
+                data_dir.display().to_string()
+            )
+        })?;
 
         let workspace_dir = data_dir;
 
         let shared_dir = shadow_dir.join("shared");
-        fs::create_dir_all(&shared_dir).await.with_context(|| format!("Failed to create shared directory: {}", shared_dir.display().to_string()))?;
+        fs::create_dir_all(&shared_dir).await.with_context(|| {
+            format!(
+                "Failed to create shared directory: {}",
+                shared_dir.display().to_string()
+            )
+        })?;
 
         if config_path.exists() {
-            let contents = fs::read_to_string(&config_path).await.context("Failed to read config file")?;
+            let contents = fs::read_to_string(&config_path)
+                .await
+                .context("Failed to read config file")?;
             let mut config = serde_json::from_str::<Config>(&contents).unwrap_or(Config::default());
-
 
             if let Some(default_profile) = config.risk_profiles.get_mut("default") {
                 // default_profile.ensure_default_auto_approve();
-
             }
 
             config.config_path = config_path.clone();
@@ -301,15 +390,52 @@ impl Config {
 
             // todo env
 
-
             // todo validate
-
 
             Ok(config)
         } else {
             Ok(Config::default())
         }
     }
+
+    pub fn resolve_active_storage(&self) -> ActiveStorage<'_> {
+        let backend = self.memory.backend.trim();
+        if backend.is_empty() || backend.eq_ignore_ascii_case("none") {
+            return ActiveStorage::None;
+        }
+
+        let (kind, alias) = backend.split_once(".").unwrap_or((backend, "default"));
+        match kind {
+            "sqlite" => self
+                .storage
+                .sqlite
+                .get(alias)
+                .map(ActiveStorage::Sqlite)
+                .unwrap_or(ActiveStorage::None),
+            
+            _ => ActiveStorage::None
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ActiveStorage<'a> {
+    None,
+    Sqlite(&'a SqliteStorageConfig),
+}
+impl ActiveStorage<'_> {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ActiveStorage::None => "none",
+            ActiveStorage::Sqlite(_) => "sqlite",
+        }
+    }
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SqliteStorageConfig {
+    pub path: Option<String>,
+    pub open_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -339,18 +465,128 @@ impl Default for SchedulerConfig {
     }
 }
 
-fn default_true() -> bool { true }
-fn default_scheduler_enabled() -> bool { true }
-fn default_max_tasks() -> usize { 64 }
-fn default_max_concurrent() -> usize { 4 }
-fn default_max_run_history() -> u32 { 50 }
+fn default_true() -> bool {
+    true
+}
+fn default_scheduler_enabled() -> bool {
+    true
+}
+fn default_max_tasks() -> usize {
+    64
+}
+fn default_max_concurrent() -> usize {
+    4
+}
+fn default_max_run_history() -> u32 {
+    50
+}
 
 #[derive(Debug, Clone)]
 pub struct ResolvedRuntime {
-   pub max_tool_iterations: usize,
+    pub max_tool_iterations: usize,
+}
+
+impl Default for ResolvedRuntime {
+    fn default() -> Self {
+        Self {
+            max_tool_iterations: 10,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObservabilityConfig {
     pub backend: ObservabilityBackend,
+}
+
+impl Default for ObservabilityConfig {
+    fn default() -> Self {
+        Self {
+            backend: ObservabilityBackend::None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryConfig {
+    pub backend: String,
+    pub auto_save: bool,
+    pub hygiene_enabled: bool,
+    pub archive_after_days: u32,
+    pub purge_after_days: u32,
+    pub conversation_retention_days: u32,
+    pub core_retention_days: u32,
+    pub daily_retention_days: u32,
+    pub embedding_provider: String,
+    pub embedding_model: String,
+    pub embedding_dimensions: usize,
+    pub embedding_api_key: Option<String>,
+    pub vector_weight: f64,
+    pub keyword_weight: f64,
+    pub min_relevance_score: f64,
+    pub embedding_cache_size: usize,
+    pub search_mode: SearchMode,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            backend: "".to_string(),
+            auto_save: false,
+            hygiene_enabled: false,
+            archive_after_days: 0,
+            purge_after_days: 0,
+            conversation_retention_days: 0,
+            core_retention_days: 0,
+            daily_retention_days: 0,
+            embedding_provider: "".to_string(),
+            embedding_model: "".to_string(),
+            embedding_dimensions: 0,
+            embedding_api_key: None,
+            vector_weight: 0.0,
+            keyword_weight: 0.0,
+            min_relevance_score: 0.0,
+            embedding_cache_size: 0,
+            search_mode: Default::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageConfig {
+    #[serde(default, skip_serializing_if="HashMap::is_empty")]
+    sqlite: HashMap<String, SqliteStorageConfig>,
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            sqlite: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingRouteConfig {
+    #[serde(default)]
+    pub hint: String,
+    #[serde(default)]
+    pub model_provider: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub dimensions: Option<usize>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all="snake_case")]
+pub enum SearchMode {
+
+    Bm25,
+    Embedding,
+    #[default]
+    Hubrid,
+
 }
