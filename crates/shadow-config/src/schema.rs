@@ -48,6 +48,9 @@ pub struct Config {
     pub providers: crate::providers::Providers,
 
     #[serde(default)]
+    pub runtime: RuntimeConfig,
+
+    #[serde(default)]
     pub scheduler: SchedulerConfig,
 
     #[serde(default = "default_memory_backend")]
@@ -117,6 +120,7 @@ impl Default for Config {
             runtime_profiles: Default::default(),
             skill_bundles: Default::default(),
             providers: pdf,
+            runtime: Default::default(),
             scheduler: Default::default(),
             memory_backend: "sqlite".to_string(),
             memory: Default::default(),
@@ -296,7 +300,7 @@ impl Config {
 
     pub fn resolved_model_provider_for_agent(
         &self,
-        agent_alias: &String,
+        agent_alias: &str,
     ) -> Option<(&str, &str, &ModelProviderConfig)> {
         let agent = self.agents.get(agent_alias)?;
         let (type_key, alias_key) = agent.model_provider.split_once(".")?;
@@ -412,8 +416,8 @@ impl Config {
                 .get(alias)
                 .map(ActiveStorage::Sqlite)
                 .unwrap_or(ActiveStorage::None),
-            
-            _ => ActiveStorage::None
+
+            _ => ActiveStorage::None,
         }
     }
 }
@@ -554,7 +558,7 @@ impl Default for MemoryConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
-    #[serde(default, skip_serializing_if="HashMap::is_empty")]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     sqlite: HashMap<String, SqliteStorageConfig>,
 }
 
@@ -581,12 +585,190 @@ pub struct EmbeddingRouteConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all="snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum SearchMode {
-
     Bm25,
     Embedding,
     #[default]
     Hubrid,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeKind {
+    #[default]
+    Native,
+    Docker,
+    Cloudflare,
+}
 
+impl RuntimeKind {
+    #[must_use]
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Docker => "docker",
+            Self::Cloudflare => "cloudflare",
+        }
+    }
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RuntimeConfig {
+    /// Runtime kind: native | docker | cloudflare.
+    #[serde(default, deserialize_with = "deserialize_enum_lenient")]
+    pub kind: RuntimeKind,
+
+    /// Docker runtime settings (used when `kind = "docker"`).
+    #[serde(default)]
+    pub docker: DockerRuntimeConfig,
+
+    /// Shell binary the native runtime uses for command execution.
+    ///
+    /// Applies only to `runtime.kind = "native"`; other runtimes ignore it.
+    /// When unset or `null`, the system default `sh` is used. The shell is
+    /// invoked as `<shell> -c "<command>"`, so it must be a POSIX-compatible
+    /// shell binary.
+    ///
+    /// Accepted forms (Unix):
+    /// - a bare command name resolved via `PATH` (e.g. `"bash"`), or
+    /// - an absolute path (e.g. `"/bin/bash"`, `"/usr/bin/zsh"`).
+    ///
+    /// The value is validated when the native runtime is constructed, so a bad
+    /// value is reported up front rather than failing on the first shell
+    /// command. Rejected: empty/whitespace; a relative path with separators
+    /// (e.g. `"./sh"`, `"bin/sh"` — use a bare `PATH` name or an absolute path
+    /// instead); a bare name not found on `PATH`; and a path that does not
+    /// exist or is not executable.
+    ///
+    /// **Ignored on Windows and Android** (and not validated there): Windows
+    /// always uses `cmd.exe`, and Android always uses `/system/bin/sh`
+    /// (its shell is not on `PATH` for spawned processes).
+    ///
+    /// **Examples:**
+    /// ```toml
+    /// [runtime]
+    /// shell = "bash"           # resolves via PATH
+    /// shell = "/bin/zsh"       # absolute path
+    /// ```
+    #[serde(default)]
+    pub shell: Option<String>,
+
+    /// Global reasoning override for model_providers that expose explicit controls.
+    /// - `None`: model_provider default behavior
+    /// - `Some(true)`: request reasoning/thinking when supported
+    /// - `Some(false)`: disable reasoning/thinking when supported
+    #[serde(default)]
+    pub reasoning_enabled: Option<bool>,
+    /// Optional reasoning effort for model_providers that expose a level control.
+    #[serde(default, deserialize_with = "deserialize_reasoning_effort_opt")]
+    pub reasoning_effort: Option<String>,
+}
+
+/// Docker runtime configuration (`[runtime.docker]` section).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DockerRuntimeConfig {
+    /// Runtime image used to execute shell commands.
+    #[serde(default = "default_docker_image")]
+    pub image: String,
+
+    /// Docker network mode (`none`, `bridge`, etc.).
+    #[serde(default = "default_docker_network")]
+    pub network: String,
+
+    /// Optional memory limit in MB (`None` = no explicit limit).
+    #[serde(default = "default_docker_memory_limit_mb")]
+    pub memory_limit_mb: Option<u64>,
+
+    /// Optional CPU limit (`None` = no explicit limit).
+    #[serde(default = "default_docker_cpu_limit")]
+    pub cpu_limit: Option<f64>,
+
+    /// Mount root filesystem as read-only.
+    #[serde(default = "default_true")]
+    pub read_only_rootfs: bool,
+
+    /// Mount configured workspace into `/workspace`.
+    #[serde(default = "default_true")]
+    pub mount_workspace: bool,
+
+    /// Optional workspace root allowlist for Docker mount validation.
+    #[serde(default)]
+    pub allowed_workspace_roots: Vec<String>,
+}
+
+fn default_docker_image() -> String {
+    "alpine:3.20".into()
+}
+
+fn default_docker_network() -> String {
+    "none".into()
+}
+
+fn default_docker_memory_limit_mb() -> Option<u64> {
+    Some(512)
+}
+
+fn default_docker_cpu_limit() -> Option<f64> {
+    Some(1.0)
+}
+
+impl Default for DockerRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            image: default_docker_image(),
+            network: default_docker_network(),
+            memory_limit_mb: default_docker_memory_limit_mb(),
+            cpu_limit: default_docker_cpu_limit(),
+            read_only_rootfs: true,
+            mount_workspace: true,
+            allowed_workspace_roots: Vec::new(),
+        }
+    }
+}
+
+fn deserialize_reasoning_effort_opt<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<String> = Option::deserialize(deserializer)?;
+    value
+        .map(|raw| normalize_reasoning_effort(&raw).map_err(serde::de::Error::custom))
+        .transpose()
+}
+
+fn deserialize_enum_lenient<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let raw = serde_json::Value::deserialize(deserializer)?;
+    Ok(T::deserialize(raw).unwrap_or_default())
+}
+
+/// Deserialize an `Option<String>` that maps an empty literal `""` to
+/// `None`. Used by `JiraConfig::email` so a config that round-tripped
+/// `email = ""` to disk (the legacy `email: String` had no
+/// `skip_serializing_if`) doesn't deserialize as `Some("")` and silently
+/// break Basic auth — the email-required validation was removed when
+/// Server/DC Bearer-token support landed, so this is the last line of
+/// defense.
+fn deserialize_optional_email_skip_empty<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<String> = Option::deserialize(deserializer)?;
+    Ok(value.filter(|s| !s.trim().is_empty()))
+}
+
+fn normalize_reasoning_effort(value: &str) -> std::result::Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "minimal" | "low" | "medium" | "high" | "xhigh" => Ok(normalized),
+        _ => Err(format!(
+            "reasoning_effort {value:?} is invalid (expected one of: minimal, low, medium, high, xhigh)"
+        )),
+    }
 }

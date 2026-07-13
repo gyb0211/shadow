@@ -261,7 +261,7 @@ pub trait Memory: Attributable {
     async fn forget(&self, key: &str) -> Result<bool>;
 
     /// 删除记忆, 返回是否删除成功
-    async fn forget_for_agent(&self, key: &str) -> Result<bool>;
+    async fn forget_for_agent(&self, key: &str, agent_id: &str) -> Result<bool>;
 
     async fn purge_namespace(&self, _namespace: &str) -> Result<usize> {
         anyhow::bail!("purge_namespace not supported by this memory backend")
@@ -283,7 +283,7 @@ pub trait Memory: Attributable {
         Ok(Vec::new())
     }
 
-    async fn rename_agent(&self, _agent_alias: &str) -> Result<usize> {
+    async fn rename_agent(&self, _from: &str, _to: &str) -> Result<usize> {
         anyhow::bail!("rename_agent not supported by this memory backend ")
     }
 
@@ -427,7 +427,7 @@ pub trait Memory: Attributable {
         agent_id: Option<&str>,
     ) -> Result<()>;
 
-    async fn recall_for_agent(
+    async fn recall_for_agents(
         &self,
         allowed_agent_ids: &[&str],
         query: &str,
@@ -490,3 +490,4 @@ pub fn normalize_recent_recall_query(query: &str) -> &str {
         query
     }
 }
+

@@ -278,7 +278,7 @@ impl Memory for MarkdownMemory {
         Ok(false)
     }
 
-    async fn forget_for_agent(&self, key: &str) -> anyhow::Result<bool> {
+    async fn forget_for_agent(&self, key: &str, agent_id: &str) -> anyhow::Result<bool> {
         Ok(false)
     }
 
@@ -304,7 +304,7 @@ impl Memory for MarkdownMemory {
         self.store(key, content, category, session_id).await
     }
 
-    async fn recall_for_agent(
+    async fn recall_for_agents(
         &self,
         allowed_agent_ids: &[&str],
         query: &str,

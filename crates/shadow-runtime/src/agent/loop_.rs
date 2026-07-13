@@ -1,11 +1,12 @@
 use anyhow::Context;
-use shadow_config::Config;
+use shadow_config::{platform, Config};
 use shadow_config::multi::alias_agent::MemoryBackendKind;
 use shadow_config::observability::ObservabilityBackend;
 use shadow_config::schema::AliasedAgentConfig;
 use std::path::PathBuf;
 use std::sync::Arc;
 use shadow_core::Memory;
+use shadow_core::runtime::RuntimeAdapter;
 use shadow_memory::create_memory_for_agent;
 use crate::security::SecurityPolicy;
 
@@ -71,7 +72,7 @@ pub async fn run(
             // todo record
         }
 
-        let runtime = Arc::from(platform::create_runtime(&config.runtime)?);
+        let runtime: Arc<dyn RuntimeAdapter> = Arc::from(platform::create_runtime(&config.runtime)?);
         // todo check is subagent
         let is_subagent_caller = false;
 
@@ -87,7 +88,7 @@ pub async fn run(
                 create_memory_for_agent(
                     &config, agent_alias,
                     agent_model_provider.and_then(|e| e.api_key.as_deref())
-                ).await?;
+                ).await?
             }
   
         };

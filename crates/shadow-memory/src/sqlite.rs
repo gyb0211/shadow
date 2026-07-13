@@ -6,8 +6,9 @@
 //!
 //! FTS 索引通过触发器自动同步, 业务代码只需操作主表
 
+use std::collections::HashSet;
 use crate::embedding::{EmbeddingProvider, NoopEmbedding, create_embedding_provider};
-use anyhow::Context;
+use anyhow::{Context, Error};
 use async_trait::async_trait;
 use parking_lot::{Mutex, RwLock};
 use rusqlite::{Connection, ErrorCode, Row, params, ToSql};
@@ -16,12 +17,14 @@ use std::fmt::Write as _;
 use crate::vector;
 use chrono::Local;
 use shadow_config::schema::SearchMode;
-use shadow_core::kennel::memory::{MemoryKind, is_recent_recall_query};
-use shadow_core::{Attributable, Memory, MemoryCategory, MemoryEntry, Role};
+use shadow_core::kennel::memory::{MemoryKind, is_recent_recall_query, StoreOptions, ExportFilter, MemoryStats};
+use shadow_core::{kennel, Attributable, Memory, MemoryCategory, MemoryEntry, Role};
 use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard, mpsc};
 use std::thread;
 use std::time::Duration;
+use uuid::Uuid;
+use shadow_core::kennel::attribution;
 
 const SQLITE_OPEN_TIMEOUT_CAP_SECS: u64 = 300;
 static SQLITE_MEMORY_STARTUP_LOCK: StdMutex<()> = StdMutex::new(());
@@ -489,6 +492,239 @@ impl SqliteMemory {
         }).await?
     }
 
+    async fn store_row_with_metadata(
+        &self,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        session_id: Option<&str>,
+        options: StoreOptions,
+        agent_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let embedding_bytes = match self.get_or_compute_embedding(content).await {
+            Ok(emb) => emb.map(|emb| vector::vec_to_bytes(&emb)),
+            Err(e) => {
+               // todo log
+                None
+            }
+        };
+
+        let conn = self.conn.clone();
+        let key = key.to_string();
+        let content = content.to_string();
+        let sid = session_id.map(String::from);
+        let ns = options.namespace.unwrap_or_else(|| "default".to_string());
+        let imp = options.importance.unwrap_or(0.5);
+        let kind = options
+            .kind
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        let pinned = i64::from(options.pinned);
+        let tenant_id = options.tenant_id;
+        let aid = agent_id.map(String::from);
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let conn = conn.lock();
+            let now = Local::now().to_rfc3339();
+            let cat = Self::category_to_str(&category);
+            let id = Uuid::new_v4().to_string();
+
+            conn.execute(
+                "INSERT INTO memories (
+                    id, key, content, category, embedding, created_at, updated_at,
+                    session_id, namespace, importance, agent_id, kind, pinned, tenant_id
+                 )
+                 VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                    COALESCE(?11, (SELECT id FROM agents WHERE alias = 'default' LIMIT 1)),
+                    ?12, ?13, ?14
+                 )
+                 ON CONFLICT(agent_id, key) DO UPDATE SET
+                    content = excluded.content,
+                    category = excluded.category,
+                    embedding = excluded.embedding,
+                    updated_at = excluded.updated_at,
+                    session_id = excluded.session_id,
+                    namespace = excluded.namespace,
+                    importance = excluded.importance,
+                    kind = excluded.kind,
+                    pinned = excluded.pinned,
+                    tenant_id = excluded.tenant_id",
+                params![
+                    id,
+                    key,
+                    content,
+                    cat,
+                    embedding_bytes,
+                    now,
+                    now,
+                    sid,
+                    ns,
+                    imp,
+                    aid,
+                    kind,
+                    pinned,
+                    tenant_id
+                ],
+            )?;
+            Ok(())
+        })
+            .await?
+    }
+
+    fn category_to_str(cat: &MemoryCategory) -> String {
+        match cat {
+            MemoryCategory::Core => "core".into(),
+            MemoryCategory::Daily => "daily".into(),
+            MemoryCategory::Conversation => "conversation".into(),
+            MemoryCategory::Custom(name) => name.clone(),
+        }
+    }
+
+    fn like_fallback_matches(text: &str, term: &str) -> bool {
+        let text = text.to_lowercase();
+        if let Some(prefix) = term.strip_suffix('*')
+            && !prefix.is_empty()
+        {
+            let prefix = prefix.to_lowercase();
+            return text
+                .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
+                .any(|token| token.starts_with(&prefix));
+        }
+        text.contains(&term.to_lowercase())
+    }
+
+    /// Vector similarity search: scan embeddings and compute cosine similarity.
+    ///
+    /// Optional `category` and `session_id` filters reduce full-table scans
+    /// when the caller already knows the scope of relevant memories.
+    pub fn vector_search(
+        conn: &Connection,
+        query_embedding: &[f32],
+        limit: usize,
+        category: Option<&str>,
+        session_id: Option<&str>,
+    ) -> anyhow::Result<Vec<(String, f32)>> {
+        let mut sql = "SELECT id, embedding FROM memories WHERE embedding IS NOT NULL".to_string();
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let mut idx = 1;
+
+        if let Some(cat) = category {
+            let _ = write!(sql, " AND category = ?{idx}");
+            param_values.push(Box::new(cat.to_string()));
+            idx += 1;
+        }
+        if let Some(sid) = session_id {
+            let _ = write!(sql, " AND session_id = ?{idx}");
+            param_values.push(Box::new(sid.to_string()));
+        }
+
+        let mut stmt = conn.prepare(&sql)?;
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(AsRef::as_ref).collect();
+        let rows = stmt.query_map(params_ref.as_slice(), |row| {
+            let id: String = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((id, blob))
+        })?;
+
+        let mut scored: Vec<(String, f32)> = Vec::new();
+        for row in rows {
+            let (id, blob) = row?;
+            let emb = vector::bytes_to_vec(&blob);
+            let sim = vector::cosine_similarity(query_embedding, &emb);
+            if sim > 0.0 {
+                scored.push((id, sim));
+            }
+        }
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+        Ok(scored)
+    }
+    /// FTS5 BM25 keyword search
+    pub fn fts5_search(
+        conn: &Connection,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<(String, f32)>> {
+        // Escape FTS5 special chars and build query
+        let fts_query: String = query
+            .split_whitespace()
+            .map(Self::fts5_term_query)
+            .collect::<Vec<_>>()
+            .join(" OR ");
+
+        if fts_query.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let sql = "SELECT m.id, bm25(memories_fts) as score
+                   FROM memories_fts f
+                   JOIN memories m ON m.rowid = f.rowid
+                   WHERE memories_fts MATCH ?1
+                   ORDER BY score
+                   LIMIT ?2";
+
+        let mut stmt = conn.prepare(sql)?;
+        #[allow(clippy::cast_possible_wrap)]
+        let limit_i64 = limit as i64;
+
+        let rows = stmt.query_map(params![fts_query, limit_i64], |row| {
+            let id: String = row.get(0)?;
+            let score: f64 = row.get(1)?;
+            // BM25 returns negative scores (lower = better), negate for ranking
+            #[allow(clippy::cast_possible_truncation)]
+            Ok((id, (-score) as f32))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    fn fts5_term_query(term: &str) -> String {
+        if let Some(prefix) = term.strip_suffix('*')
+            && !prefix.is_empty()
+        {
+            let escaped = prefix.replace('"', "\"\"");
+            format!("\"{escaped}\"*")
+        } else {
+            let escaped = term.replace('"', "\"\"");
+            format!("\"{escaped}\"")
+        }
+    }
+
+
+    fn like_search_pattern(term: &str) -> String {
+        if let Some(prefix) = term.strip_suffix('*')
+            && !prefix.is_empty()
+        {
+            return format!("%{}%", Self::escape_like_pattern(prefix));
+        }
+        format!("%{}%", Self::escape_like_pattern(term))
+    }
+
+    fn is_prefix_wildcard_term(term: &str) -> bool {
+        matches!(term.strip_suffix('*'), Some(prefix) if !prefix.is_empty())
+    }
+
+    fn escape_like_pattern(term: &str) -> String {
+        let mut escaped = String::with_capacity(term.len());
+        for ch in term.chars() {
+            if matches!(ch, '%' | '_' | '\\') {
+                escaped.push('\\');
+            }
+            escaped.push(ch);
+        }
+        escaped
+    }
+
+
+
     fn content_hash(query: &str) -> String {
         use sha2::{Digest, Sha256};
         let hash = Sha256::digest(query.as_bytes());
@@ -499,10 +735,19 @@ impl SqliteMemory {
             ))
         )
     }
+
+    pub(crate) fn swap_embedder(&self, embedder: Arc<dyn EmbeddingProvider>) {
+        *self.embedder.write() = embedder;
+    }
+
+    pub fn embedder_dimensions(&self) -> usize {
+        self.embedder.read().dimensions()
+    }
+
 }
 impl Attributable for SqliteMemory {
     fn role(&self) -> Role {
-        Role::Memory(MemoryKind::Sqlite)
+        Role::Memory(attribution::MemoryKind::Sqlite)
     }
     fn alias(&self) -> &str {
         "sqlite"
@@ -567,7 +812,7 @@ impl Memory for SqliteMemory {
             };
 
             let vector_result = if search_mode == SearchMode::Bm25 { Vec::new() } else if let Some(ref qe) = query_embedding {
-                Self::vector_search(&conn, &query, limit * 2, None, session_ref).unwrap_or_default()
+                Self::vector_search(&conn, qe, limit * 2, None, session_ref).unwrap_or_default()
             } else {
                 Vec::new()
             };
@@ -587,7 +832,7 @@ impl Memory for SqliteMemory {
                     final_score: *score,
                 }).collect::<Vec<_>>()
             } else {
-                vector::hybrid_merge(&vector_result, &kw_result, vector_weight, keyword_weight)
+                vector::hybrid_merge(&vector_result, &kw_result, vector_weight, keyword_weight, limit)
             };
 
             let mut results = Vec::new();
@@ -602,7 +847,7 @@ impl Memory for SqliteMemory {
                         limit
                     };
 
-                    let patterns: Vec<String> = raw_keywords.inter().map(|kw| Self::like_search_pattern(kw)).collect();
+                    let patterns: Vec<String> = raw_keywords.iter().map(|kw| Self::like_search_pattern(kw)).collect();
                     let conditions: Vec<String> = patterns.iter().enumerate()
                         .map(|(i, _)| {
                             format!("(m.content like ?{} ESCAPE '\\' OR m.ley like ?{} ESCAPE '\\'}})",
@@ -610,7 +855,7 @@ impl Memory for SqliteMemory {
                                     i * 2 + 2, )
                         }).collect();
 
-                    let were_clause = conditions.join(" OR ");
+                    let where_clause = conditions.join(" OR ");
                     let mut param_idx = patterns.len() * 2 + 1;
                     let mut time_conditions = String::new();
                     if since_ref.is_some() {
@@ -1299,6 +1544,7 @@ impl Memory for SqliteMemory {
         let new_id = new_id.to_string();
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
             let conn = conn.lock();
+            // todo
             crate::conflict::mark_superseded(&conn, &ids, &new_id)
         })
         .await?
@@ -1462,7 +1708,7 @@ impl Memory for SqliteMemory {
         let alias = alias.to_string();
         tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
             let conn = conn.lock();
-            zeroclaw_config::schema::v2::sqlite_ensure_agent_uuid(&conn, &alias)
+            sqlite_ensure_agent_uuid(&conn, &alias)
         })
         .await?
     }
@@ -1481,4 +1727,27 @@ impl Memory for SqliteMemory {
         ));
         self.swap_embedder(embedder);
     }
+}
+
+
+pub fn sqlite_ensure_default_agent_uuid(conn: &Connection) -> anyhow::Result<String> {
+    sqlite_ensure_agent_uuid(conn, "default")
+}
+
+/// Mint-or-query a single agent row keyed by alias. Used by the
+/// SQLite migration's default-agent backfill and by the `ensure_agent_uuid`
+/// trait impl on the memory backend (alias resolution at agent-loop entry).
+pub fn sqlite_ensure_agent_uuid(conn: &Connection, alias: &str) -> anyhow::Result<String> {
+    let new_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT OR IGNORE INTO agents (id, alias, created_at) VALUES (?1, ?2, ?3)",
+        params![new_id, alias, now],
+    )?;
+    let final_id: String = conn.query_row(
+        "SELECT id FROM agents WHERE alias = ?1 LIMIT 1",
+        params![alias],
+        |row| row.get(0),
+    )?;
+    Ok(final_id)
 }

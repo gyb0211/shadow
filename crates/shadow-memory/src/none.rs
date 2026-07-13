@@ -69,7 +69,7 @@ impl Memory for NoneMemory {
         Ok(false)
     }
 
-    async fn forget_for_agent(&self, key: &str) -> Result<bool> {
+    async fn forget_for_agent(&self, key: &str, agent_id: &str) -> Result<bool> {
         Ok(false)
     }
 
@@ -94,7 +94,7 @@ impl Memory for NoneMemory {
         Ok(())
     }
 
-    async fn recall_for_agent(
+    async fn recall_for_agents(
         &self,
         allowed_agent_ids: &[&str],
         query: &str,

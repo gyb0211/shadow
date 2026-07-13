@@ -127,8 +127,8 @@ impl Memory for AgentScopedMarkdownMemory {
         self.own.forget(key).await
     }
 
-    async fn forget_for_agent(&self, key: &str) -> anyhow::Result<bool> {
-        self.own.forget_for_agent(key).await
+    async fn forget_for_agent(&self, key: &str, agent_id: &str) -> anyhow::Result<bool> {
+        self.own.forget_for_agent(key, agent_id).await
     }
 
     async fn count(&self) -> anyhow::Result<usize> {
@@ -168,7 +168,7 @@ impl Memory for AgentScopedMarkdownMemory {
             .await
     }
 
-    async fn recall_for_agent(
+    async fn recall_for_agents(
         &self,
         allowed_agent_ids: &[&str],
         query: &str,

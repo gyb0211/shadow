@@ -15,6 +15,7 @@ pub mod sqlite;
 pub mod strategy;
 pub mod vector;
 pub mod agent_scoped;
+pub mod conflict;
 
 use std::fmt::{Debug, Formatter};
 use std::path::Path;

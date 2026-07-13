@@ -18,6 +18,7 @@ pub mod kennel;
 pub mod runtime;
 pub mod session_store;
 pub mod workspace;
+pub mod platform;
 
 pub use channel::{Channel, ChannelMessage, SendMessage};
 pub use kennel::attribution::*;

@@ -67,7 +67,7 @@ impl Memory for AgentScopedMemory {
         todo!()
     }
 
-    async fn forget_for_agent(&self, key: &str) -> anyhow::Result<bool> {
+    async fn forget_for_agent(&self, key: &str, agent_id: &str) -> anyhow::Result<bool> {
         todo!()
     }
 
@@ -83,7 +83,7 @@ impl Memory for AgentScopedMemory {
         todo!()
     }
 
-    async fn recall_for_agent(&self, allowed_agent_ids: &[&str], query: &str, limit: usize, session_id: Option<&str>, since: Option<&str>, until: Option<&str>) -> anyhow::Result<Vec<MemoryEntry>> {
+    async fn recall_for_agents(&self, allowed_agent_ids: &[&str], query: &str, limit: usize, session_id: Option<&str>, since: Option<&str>, until: Option<&str>) -> anyhow::Result<Vec<MemoryEntry>> {
         todo!()
     }
 }

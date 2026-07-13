@@ -6,6 +6,7 @@ license.workspace = true
 description = "影子配置层 -- TOML schema + 加载 + 密钥管理"
 
 [dependencies]
+shadow-core.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

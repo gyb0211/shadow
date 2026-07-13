@@ -17,8 +17,10 @@ use shadow::config;
 use shadow_config::Config;
 use shadow_log::Action;
 use shadow_providers::ProviderDispatch;
-use std::io::{BufRead, StdinLock};
 use shadow_runtime::agent;
+use shadow_runtime::agent::AgentRuntimeOverrides;
+use std::io::{BufRead, StdinLock};
+use std::path::PathBuf;
 
 const STDIN_LINE_CAP: usize = 1024 * 1024;
 
@@ -264,7 +266,8 @@ async fn main() -> Result<()> {
             temperature,
         } => {
             let final_temperature = temperature.or_else(|| {
-                config.model_provider_for_agent(&agent_alias)
+                config
+                    .model_provider_for_agent(&agent_alias)
                     .and_then(|c| c.temperature)
             });
 
@@ -275,16 +278,22 @@ async fn main() -> Result<()> {
             }
 
             // todo cli-channel 暂时不接入
-            
+
             // todo 其他channel 也暂时不接入
-            
-            Box::pin(agent::run())
 
-
+            Box::pin(agent::run(
+                config,
+                &agent_alias,
+                message,
+                final_temperature,
+                true,
+                None,
+                None,
+                AgentRuntimeOverrides::default(),
+            ))
+            .await.map(|_| ())
         }
     }
-
-    Ok(())
 }
 
 #[derive(Debug)]
