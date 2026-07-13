@@ -329,7 +329,7 @@ pub trait Memory: Attributable {
     async fn refresh_embedder(
         &self,
         _model_provider: &str,
-        _api_key: &str,
+        _api_key: Option<&str>,
         _model: &str,
         _dimensions: usize,
     ) {

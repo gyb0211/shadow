@@ -51,5 +51,5 @@ pub use proxy_client::*;
 pub use migration::{migrate_str, CURRENT_SCHEMA_VERSION};
 pub use providers::{default_base_url, list_providers, resolve_provider, ProviderEntry, ProviderRef, ResolvedProvider};
 pub use providers::{ReliableConfig, RouteEntry, RouterConfig};
-pub use schema::{ Config};
+pub use schema::*;
 pub use secrets::{is_encrypted, SecretStore};

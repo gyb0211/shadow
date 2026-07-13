@@ -133,7 +133,7 @@ pub async fn create_memory_for_agent(
     let mut allowlist_ids = Vec::with_capacity(agent_cfg.workspace.read_memory_from.len());
 
     for peer in &agent_cfg.workspace.read_memory_from {
-        let uuid = inner_arc.ensure_agent_uuid(agent_alias);
+        let uuid = inner_arc.ensure_agent_uuid(agent_alias).await?;
         allowlist_ids.push(uuid);
     }
     let scoped = AgentScopedMemory::new(inner_arc, bound_id, allowlist_ids);

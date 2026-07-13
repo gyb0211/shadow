@@ -580,7 +580,7 @@ pub struct EmbeddingRouteConfig {
     pub api_key: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all="snake_case")]
 pub enum SearchMode {
 
