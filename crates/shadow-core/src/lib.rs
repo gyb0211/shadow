@@ -22,7 +22,10 @@ pub mod platform;
 
 pub use channel::{Channel, ChannelMessage, SendMessage};
 pub use kennel::attribution::*;
-pub use kennel::memory::{Memory, MemoryCategory, MemoryEntry, MemoryStrategy};
+pub use kennel::memory::{
+    ExportFilter, Memory, MemoryCategory, MemoryEntry, MemoryKind, MemoryStats, MemoryStrategy,
+    ProceduralMessage, StoreOptions,
+};
 pub use kennel::observer::{Observer, ObserverEvent};
 pub use kennel::provider::{
     AuthStyle, ChatMessage, ChatRequest, ChatResponse, ModelInfo, ModelProvider,

@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, FixedOffset, Local, NaiveDate};
 use shadow_core::kennel::memory::is_recent_recall_query;
-use shadow_core::{Attributable, Memory, MemoryCategory, MemoryEntry, MemoryKind, Role};
+use shadow_core::{Attributable, Memory, MemoryCategory, MemoryEntry, Role};
+use shadow_core::kennel::attribution::MemoryKind;
 use std::path::{Path, PathBuf};
 
 pub struct MarkdownMemory {
