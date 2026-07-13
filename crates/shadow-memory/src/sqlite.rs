@@ -344,7 +344,7 @@ impl SqliteMemory {
         }
     }
     fn decode_kind(raw: Option<String>) -> Option<MemoryKind> {
-       raw.and_then(Ok(|kind| serde_json::from_str(&kind)).ok())
+        raw.and_then(|kind| serde_json::from_str(&kind).ok())
     }
 
     async fn recall_by_time_only(
