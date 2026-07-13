@@ -9,15 +9,17 @@
 use crate::embedding::{EmbeddingProvider, NoopEmbedding, create_embedding_provider};
 use anyhow::Context;
 use async_trait::async_trait;
-use parking_lot::Mutex;
-use rusqlite::{Connection, ErrorCode, Row, params};
+use parking_lot::{Mutex, RwLock};
+use rusqlite::{Connection, ErrorCode, Row, params, ToSql};
 use std::fmt::Write as _;
 
+use crate::vector;
+use chrono::Local;
 use shadow_config::schema::SearchMode;
-use shadow_core::kennel::memory::{is_recent_recall_query, MemoryKind};
+use shadow_core::kennel::memory::{MemoryKind, is_recent_recall_query};
 use shadow_core::{Attributable, Memory, MemoryCategory, MemoryEntry, Role};
 use std::path::Path;
-use std::sync::{Arc, Mutex as StdMutex, MutexGuard, RwLock, mpsc};
+use std::sync::{Arc, Mutex as StdMutex, MutexGuard, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -346,6 +348,65 @@ impl SqliteMemory {
     fn decode_kind(raw: Option<String>) -> Option<MemoryKind> {
         raw.and_then(|kind| serde_json::from_str(&kind).ok())
     }
+    pub async fn get_or_compute_embedding(&self, query: &str) -> anyhow::Result<Option<Vec<f32>>> {
+        let embedder = self.embedder.read().clone();
+
+        if embedder.dimensions() == 0 {
+            return Ok(None);
+        }
+
+        let hash = Self::content_hash(query);
+        let now = Local::now().to_rfc3339();
+
+        let conn = self.conn.clone();
+
+        let hash_c = hash.clone();
+        let now_c = now.clone();
+        let cached = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Vec<f32>>> {
+            let conn = conn.lock();
+            let mut stmt =
+                conn.prepare("SELECT embedding FROM embedding_cache WHERE content_hash = ?1")?;
+
+            let blob: Option<Vec<u8>> = stmt.query_row(params![hash_c], |row| row.get(0)).ok();
+            if let Some(bytes) = blob {
+                conn.execute(
+                    "UPDATE embedding_cache SET accessed_at = ?1 WHERE content_hash = ?2",
+                    params![now_c, hash_c],
+                )?;
+
+                return Ok(Some(vector::bytes_to_vec(&bytes)));
+            }
+            Ok(None)
+        })
+        .await??;
+
+        if cached.is_some() {}
+
+        let embedding = embedder.embed_one(query).await?;
+        let bytes = vector::vec_to_bytes(&embedding);
+        let conn = self.conn.clone();
+
+        let cache_max = self.cache_max as i64;
+        tokio::task::spawn_blocking(move ||-> anyhow::Result<()> {
+            let conn = conn.lock();
+            conn.execute(
+                "INSERT OR REPLACE INTO embedding_cache (content_hash, embedding, created_at, accessed_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![hash, bytes, now, now],
+            )?;
+            conn.execute(
+                "DELETE FROM embedding_cache WHERE content_hash IN (
+                    SELECT content_hash FROM embedding_cache
+                    ORDER BY accessed_at ASC
+                    LIMIT MAX(0, (SELECT COUNT(*) FROM embedding_cache) - ?1)
+                )",
+                params![cache_max],
+            )?;
+            Ok(())
+        }).await??;
+
+        Ok(Some(embedding))
+    }
 
     async fn recall_by_time_only(
         &self,
@@ -426,6 +487,17 @@ impl SqliteMemory {
             Ok(results)
 
         }).await?
+    }
+
+    fn content_hash(query: &str) -> String {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(query.as_bytes());
+        format!(
+            "{:016x}",
+            u64::from_be_bytes(hash[..8].try_into().expect(
+                "SHA-256 always produces >= 8 bytes"
+            ))
+        )
     }
 }
 impl Attributable for SqliteMemory {
