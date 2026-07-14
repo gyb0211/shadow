@@ -1,91 +1,65 @@
 //! SQLite 记忆后端 -- 使用 SQLite + FTS5 全文检索
 //!
 //! 表结构:
-//! - memory_entries: 主表, 存储记忆条目 (id TEXT PK)
-//! - memory_fts: FTS5 虚拟表, trigram 分词, 用于全文搜索 (外部内容表)
+//! - agents: agent 别名 → UUID 映射
+//! - memories: 主表, 存储记忆条目 (id TEXT PK), UNIQUE(agent_id, key)
+//! - memories_fts: FTS5 虚拟表, BM25 全文搜索 (外部内容表, 触发器同步)
+//! - embedding_cache: 向量缓存 (LRU)
 //!
-//! FTS 索引通过触发器自动同步, 业务代码只需操作主表
+//! FTS 索引通过触发器自动同步, 业务代码只需操作主表。
+//!
+//! 子模块:
+//! - [`schema`]: 建表 / 迁移 / open_connection
+//! - [`store`]: 写路径 (store_row_with_metadata / embedding)
+//! - [`recall`]: 读路径 (fts5_search / vector_search / recall_by_time_only)
+//! - [`agent`]: agent UUID 管理
+//! - [`util`]: 纯函数 + 常量
 
-use std::collections::HashSet;
-use crate::embedding::{EmbeddingProvider, NoopEmbedding, create_embedding_provider};
-use anyhow::{Context, Error};
+pub mod agent;
+pub mod recall;
+pub mod schema;
+pub mod store;
+pub mod util;
+
+use crate::embedding::{create_embedding_provider, EmbeddingProvider, NoopEmbedding};
+use crate::sqlite::schema::{init_schema, open_connection};
+use crate::sqlite::util::{
+    acquire_sqlite_startup_lock, category_to_str, decode_kind, is_prefix_wildcard_term,
+    like_fallback_matches, like_search_pattern, str_to_category,
+};
+use crate::vector;
 use async_trait::async_trait;
 use parking_lot::{Mutex, RwLock};
-use rusqlite::{Connection, ErrorCode, Row, params, ToSql};
-use std::fmt::Write as _;
-
-use crate::vector;
-use chrono::Local;
+use rusqlite::{params, Connection};
 use shadow_config::schema::SearchMode;
-use shadow_core::kennel::memory::{MemoryKind, is_recent_recall_query, StoreOptions, ExportFilter, MemoryStats};
-use shadow_core::{kennel, Attributable, Memory, MemoryCategory, MemoryEntry, Role};
-use std::path::Path;
-use std::sync::{Arc, Mutex as StdMutex, MutexGuard, mpsc};
-use std::thread;
-use std::time::Duration;
-use uuid::Uuid;
 use shadow_core::kennel::attribution;
+use shadow_core::kennel::memory::{
+    is_recent_recall_query, ExportFilter, MemoryStats, StoreOptions,
+};
+use shadow_core::{Attributable, Memory, MemoryCategory, MemoryEntry, Role};
+use std::collections::HashSet;
+use std::fmt::Write as _;
+use std::path::Path;
+use std::sync::Arc;
 
-const SQLITE_OPEN_TIMEOUT_CAP_SECS: u64 = 300;
-static SQLITE_MEMORY_STARTUP_LOCK: StdMutex<()> = StdMutex::new(());
-
-fn acquire_sqlite_startup_lock() -> MutexGuard<'static, ()> {
-    SQLITE_MEMORY_STARTUP_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
+pub use agent::{sqlite_ensure_agent_uuid, sqlite_ensure_default_agent_uuid};
 
 /// SQLite 记忆后端
 ///
 /// 使用 SQLite 存储记忆条目, FTS5 提供全文搜索能力。
-/// 采用 WAL 模式提升并发读写性能, trigram 分词支持中英文混合搜索。
-/// 可选注入 EmbeddingProvider 实现语义搜索 (FTS5 + FTS5向量混合检索)。
+/// 采用 WAL 模式提升并发读写性能。
+/// 可选注入 EmbeddingProvider 实现语义搜索 (FTS5 + 向量混合检索)。
 pub struct SqliteMemory {
     alias: String,
-    conn: Arc<Mutex<Connection>>,
-    /// 保留 embedding provider 引用 (预留给后续语义搜索功能, 当前仅使用 FTS5)
-    #[allow(dead_code)]
-    embedder: RwLock<Arc<dyn EmbeddingProvider>>,
-    vector_weight: f32,
-    keyword_weight: f32,
-    cache_max: usize,
-    search_mode: SearchMode,
+    pub(super) conn: Arc<Mutex<Connection>>,
+    pub(super) embedder: RwLock<Arc<dyn EmbeddingProvider>>,
+    pub(super) vector_weight: f32,
+    pub(super) keyword_weight: f32,
+    pub(super) cache_max: usize,
+    pub(super) search_mode: SearchMode,
 }
 
 impl SqliteMemory {
-    fn open_connection(
-        db_path: &Path,
-        open_timeout_secs: Option<u64>,
-    ) -> anyhow::Result<Connection> {
-        let path_buf = db_path.to_path_buf();
-        let conn = if let Some(secs) = open_timeout_secs {
-            let capped = secs.min(SQLITE_OPEN_TIMEOUT_CAP_SECS);
-            let (tx, rx) = mpsc::channel();
-            thread::spawn(move || {
-                let result = Connection::open(&path_buf);
-                let _ = tx.send(result);
-            });
-
-            match rx.recv_timeout(Duration::from_secs(capped)) {
-                Ok(Ok(c)) => c,
-                Ok(Err(e)) => return Err(e).context("Sqlite failed to open database"),
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    anyhow::bail!(format!(
-                        "Sqlite connection open timeout after {} seconds",
-                        capped
-                    ))
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    anyhow::bail!("Sqlite open thread exit unexpectedly")
-                }
-            }
-        } else {
-            Connection::open(&path_buf).context("SQLite failed to open database")?
-        };
-
-        Ok(conn)
-    }
-
     pub fn with_embedder(
         alias: &str,
         workspace_dir: &Path,
@@ -104,7 +78,7 @@ impl SqliteMemory {
             std::fs::create_dir_all(parent)?;
         }
 
-        let conn = Self::open_connection(&db_path, open_timeout_secs)?;
+        let conn = open_connection(&db_path, open_timeout_secs)?;
 
         conn.execute_batch(
             "PRAGMA foreign_keys = ON;
@@ -115,7 +89,7 @@ impl SqliteMemory {
              PRAGMA temp_store   = MEMORY;",
         )?;
 
-        Self::init_schema(&conn)?;
+        init_schema(&conn)?;
 
         Ok(Self {
             alias: alias.to_string(),
@@ -135,7 +109,7 @@ impl SqliteMemory {
             Arc::new(NoopEmbedding),
             0.7,
             0.3,
-            10_1000,
+            10_000,
             None,
             SearchMode::default(),
         )
@@ -148,12 +122,8 @@ impl SqliteMemory {
             std::fs::create_dir_all(parent)?;
         }
 
-        let conn = Self::open_connection(&db_path, None)?;
-        conn.execute_batch(
-            // foreign_keys is OFF by default in SQLite and is a
-            // per-connection PRAGMA, so the multi-agent migration's
-            // `REFERENCES agents(id)` constraint would be unenforced
-            // without this. Set it before any writes flow through.
+        let conn = open_connection(&db_path, None)?;
+        let _ = conn.execute_batch(
             "PRAGMA foreign_keys = ON;
              PRAGMA journal_mode = WAL;
              PRAGMA synchronous  = NORMAL;
@@ -162,7 +132,7 @@ impl SqliteMemory {
              PRAGMA temp_store   = MEMORY;",
         );
 
-        Self::init_schema(&conn)?;
+        init_schema(&conn)?;
 
         Ok(Self {
             alias: alias.to_string(),
@@ -174,577 +144,8 @@ impl SqliteMemory {
             search_mode: Default::default(),
         })
     }
-
-    fn init_schema(conn: &Connection) -> anyhow::Result<()> {
-        fn is_db_locked_error(e: &rusqlite::Error) -> bool {
-            use rusqlite::ffi::Error;
-            matches!(e, rusqlite::Error::SqliteFailure(err, _)
-            if matches!(err.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked))
-        }
-
-        fn execute_batch_retry(conn: &Connection, sql: &str) -> Result<(), rusqlite::Error> {
-            let mut backoff = Duration::from_millis(10);
-            let max_backoff = Duration::from_millis(200);
-            let max_attempts: usize = 24;
-
-            for attempt in 1..=max_attempts {
-                match conn.execute_batch(sql) {
-                    Ok(()) => return Ok(()),
-                    Err(e) if is_db_locked_error(&e) && attempt < max_attempts => {
-                        std::thread::sleep(backoff);
-                        backoff = (backoff * 2).min(max_backoff)
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-            Ok(())
-        }
-
-        fn memories_has_column(conn: &Connection, name: &str) -> anyhow::Result<bool> {
-            let mut stmt = conn.prepare("PRAGMA table_info(memories)")?;
-            let mut rows = stmt.query([])?;
-            while let Some(row) = rows.next()? {
-                let col_name: String = row.get(1)?;
-                if col_name == name {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
-        }
-
-        fn is_duplicate_column_error(e: &rusqlite::Error) -> bool {
-            matches!(
-                e,
-                rusqlite::Error::SqliteFailure(_, Some(msg)) if msg.contains("duplicate column name")
-            )
-        }
-
-        fn add_memories_column_if_missing(
-            conn: &Connection,
-            name: &str,
-            alter_sql: &str,
-        ) -> anyhow::Result<()> {
-            if memories_has_column(conn, name)? {
-                return Ok(());
-            }
-
-            match execute_batch_retry(conn, alter_sql) {
-                Ok(()) => Ok(()),
-                Err(e) if is_duplicate_column_error(&e) => Ok(()),
-                Err(e) => Err(e)
-                    .with_context(|| format!("SQLite migration failed adding memories.{name}")),
-            }
-        }
-        execute_batch_retry(
-            conn,
-            "-- Core memories table. This is an intermediate shape; the V3
-            -- migration in `zeroclaw_config::schema::v2::migrate_sqlite_memory_to_v3`
-            -- rebuilds it with the `agent_id` column and a composite
-            -- `UNIQUE (agent_id, key)` constraint immediately after init.
-            CREATE TABLE IF NOT EXISTS memories (
-                id          TEXT PRIMARY KEY,
-                key         TEXT NOT NULL UNIQUE,
-                content     TEXT NOT NULL,
-                category    TEXT NOT NULL DEFAULT 'core',
-                embedding   BLOB,
-                created_at  TEXT NOT NULL,
-                updated_at  TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
-            CREATE INDEX IF NOT EXISTS idx_memories_key ON memories(key);
-
-            -- FTS5 full-text search (BM25 scoring)
-            CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-                key, content, content=memories, content_rowid=rowid
-            );
-
-            -- FTS5 triggers: keep in sync with memories table
-            CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-                INSERT INTO memories_fts(rowid, key, content)
-                VALUES (new.rowid, new.key, new.content);
-            END;
-            CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-                INSERT INTO memories_fts(memories_fts, rowid, key, content)
-                VALUES ('delete', old.rowid, old.key, old.content);
-            END;
-            CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-                INSERT INTO memories_fts(memories_fts, rowid, key, content)
-                VALUES ('delete', old.rowid, old.key, old.content);
-                INSERT INTO memories_fts(rowid, key, content)
-                VALUES (new.rowid, new.key, new.content);
-            END;
-
-            -- Embedding cache with LRU eviction
-            CREATE TABLE IF NOT EXISTS embedding_cache (
-                content_hash TEXT PRIMARY KEY,
-                embedding    BLOB NOT NULL,
-                created_at   TEXT NOT NULL,
-                accessed_at  TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_cache_accessed ON embedding_cache(accessed_at);",
-        )
-        .with_context(|| "SQLite init_schema failed: CREATE base schema")?;
-
-        add_memories_column_if_missing(
-            conn,
-            "session_id",
-            "ALTER TABLE memories ADD COLUMN session_id TEXT;",
-        )?;
-        execute_batch_retry(
-            conn,
-            "CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);",
-        )
-        .with_context(|| "SQLite init_schema failed: CREATE INDEX idx_memories_session")?;
-
-        add_memories_column_if_missing(
-            conn,
-            "namespace",
-            "ALTER TABLE memories ADD COLUMN namespace TEXT DEFAULT 'default';",
-        )?;
-        execute_batch_retry(
-            conn,
-            "CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories(namespace);",
-        )
-        .with_context(|| "SQLite init_schema failed: CREATE INDEX idx_memories_namespace")?;
-
-        add_memories_column_if_missing(
-            conn,
-            "importance",
-            "ALTER TABLE memories ADD COLUMN importance REAL DEFAULT 0.5;",
-        )?;
-
-        add_memories_column_if_missing(
-            conn,
-            "superseded_by",
-            "ALTER TABLE memories ADD COLUMN superseded_by TEXT;",
-        )?;
-        add_memories_column_if_missing(conn, "kind", "ALTER TABLE memories ADD COLUMN kind TEXT;")?;
-        add_memories_column_if_missing(
-            conn,
-            "pinned",
-            "ALTER TABLE memories ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;",
-        )?;
-        add_memories_column_if_missing(
-            conn,
-            "tenant_id",
-            "ALTER TABLE memories ADD COLUMN tenant_id TEXT;",
-        )?;
-        execute_batch_retry(
-            conn,
-            "CREATE INDEX IF NOT EXISTS idx_memories_namespace_category ON memories(namespace, category);",
-        )
-            .with_context(|| "SQLite init_schema failed: CREATE INDEX idx_memories_namespace_category")?;
-
-        // Self::migrate_session_ids_to_sanitized(conn)?;
-
-        Ok(())
-    }
-
-    fn str_to_category(s: &str) -> MemoryCategory {
-        match s {
-            "core" => MemoryCategory::Core,
-            "daily" => MemoryCategory::Daily,
-            "conversation" => MemoryCategory::Conversation,
-            other => MemoryCategory::Custom(other.to_string()),
-        }
-    }
-    fn decode_kind(raw: Option<String>) -> Option<MemoryKind> {
-        raw.and_then(|kind| serde_json::from_str(&kind).ok())
-    }
-    pub async fn get_or_compute_embedding(&self, query: &str) -> anyhow::Result<Option<Vec<f32>>> {
-        let embedder = self.embedder.read().clone();
-
-        if embedder.dimensions() == 0 {
-            return Ok(None);
-        }
-
-        let hash = Self::content_hash(query);
-        let now = Local::now().to_rfc3339();
-
-        let conn = self.conn.clone();
-
-        let hash_c = hash.clone();
-        let now_c = now.clone();
-        let cached = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Vec<f32>>> {
-            let conn = conn.lock();
-            let mut stmt =
-                conn.prepare("SELECT embedding FROM embedding_cache WHERE content_hash = ?1")?;
-
-            let blob: Option<Vec<u8>> = stmt.query_row(params![hash_c], |row| row.get(0)).ok();
-            if let Some(bytes) = blob {
-                conn.execute(
-                    "UPDATE embedding_cache SET accessed_at = ?1 WHERE content_hash = ?2",
-                    params![now_c, hash_c],
-                )?;
-
-                return Ok(Some(vector::bytes_to_vec(&bytes)));
-            }
-            Ok(None)
-        })
-        .await??;
-
-        if cached.is_some() {}
-
-        let embedding = embedder.embed_one(query).await?;
-        let bytes = vector::vec_to_bytes(&embedding);
-        let conn = self.conn.clone();
-
-        let cache_max = self.cache_max as i64;
-        tokio::task::spawn_blocking(move ||-> anyhow::Result<()> {
-            let conn = conn.lock();
-            conn.execute(
-                "INSERT OR REPLACE INTO embedding_cache (content_hash, embedding, created_at, accessed_at)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![hash, bytes, now, now],
-            )?;
-            conn.execute(
-                "DELETE FROM embedding_cache WHERE content_hash IN (
-                    SELECT content_hash FROM embedding_cache
-                    ORDER BY accessed_at ASC
-                    LIMIT MAX(0, (SELECT COUNT(*) FROM embedding_cache) - ?1)
-                )",
-                params![cache_max],
-            )?;
-            Ok(())
-        }).await??;
-
-        Ok(Some(embedding))
-    }
-
-    async fn recall_by_time_only(
-        &self,
-        limit: usize,
-        session_id: Option<&str>,
-        since: Option<&str>,
-        until: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
-        let conn = self.conn.clone();
-
-        let sid = session_id.map(String::from);
-        let since_owned = since.map(String::from);
-        let until_owned = until.map(String::from);
-
-        tokio::task::spawn_blocking(move || {
-            let conn = conn.lock();
-            let since_ref = since_owned.as_deref();
-            let until_ref = until_owned.as_deref();
-
-
-            let mut sql =
-                "SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, m.namespace, m.importance, m.superseded_by, m.kind, m.pinned, a.alias, m.agent_id, m.tenant_id \
-                 FROM memories m LEFT JOIN agents a ON a.id = m.agent_id \
-                 WHERE m.superseded_by IS NULL AND 1=1"
-                    .to_string();
-
-            let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-            let mut idx = 1;
-
-            if let Some(sid) = sid.as_deref() {
-                let _ = write!(sql, " AND m.session_id = ?{idx}");
-                param_values.push(Box::new(sid.to_string()));
-                idx += 1;
-            }
-            if let Some(s) = since_ref {
-                let _ = write!(sql, " AND m.created_at >= ?{idx}");
-                param_values.push(Box::new(s.to_string()));
-                idx += 1;
-            }
-            if let Some(u) = until_ref {
-                let _ = write!(sql, " AND m.created_at <= ?{idx}");
-                param_values.push(Box::new(u.to_string()));
-                idx += 1;
-            }
-
-            let _ = write!(sql, "ORDER BY m.updated_at DESC LIMIT ?{idx}");
-            param_values.push(Box::new(limit as i64));
-
-            let mut stmt = conn.prepare(&sql)?;
-            let params_ref : Vec<&dyn rusqlite::types::ToSql>=
-            param_values.iter().map(AsRef::as_ref).collect();
-            let rows = stmt.query_map(params_ref.as_slice(), |row| {
-                Ok(MemoryEntry {
-                    id: row.get(0)?,
-                    key: row.get(1)?,
-                    content: row.get(2)?,
-                    category: Self::str_to_category(&row.get::<_, String>(3)?),
-                    timestamp: row.get(4)?,
-                    session_id: row.get(5)?,
-                    score: None,
-                    namespace: row.get::<_, Option<String>>(6)?.unwrap_or_else(|| "default".into()),
-                    importance: row.get(7)?,
-                    superseded_by: row.get(8)?,
-                    kind: Self::decode_kind(row.get(9)?),
-                    pinned: row.get::<_, i64>(10)? != 0,
-                    tenant_id: row.get(13)?,
-                    agent_alias: row.get(11)?,
-                    agent_id: row.get(12)?,
-                })
-            } )?;
-
-            let mut results = Vec::new();
-
-            for row in rows {
-                results.push(row?);
-            }
-
-            Ok(results)
-
-        }).await?
-    }
-
-    async fn store_row_with_metadata(
-        &self,
-        key: &str,
-        content: &str,
-        category: MemoryCategory,
-        session_id: Option<&str>,
-        options: StoreOptions,
-        agent_id: Option<&str>,
-    ) -> anyhow::Result<()> {
-        let embedding_bytes = match self.get_or_compute_embedding(content).await {
-            Ok(emb) => emb.map(|emb| vector::vec_to_bytes(&emb)),
-            Err(e) => {
-               // todo log
-                None
-            }
-        };
-
-        let conn = self.conn.clone();
-        let key = key.to_string();
-        let content = content.to_string();
-        let sid = session_id.map(String::from);
-        let ns = options.namespace.unwrap_or_else(|| "default".to_string());
-        let imp = options.importance.unwrap_or(0.5);
-        let kind = options
-            .kind
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()?;
-        let pinned = i64::from(options.pinned);
-        let tenant_id = options.tenant_id;
-        let aid = agent_id.map(String::from);
-
-        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let conn = conn.lock();
-            let now = Local::now().to_rfc3339();
-            let cat = Self::category_to_str(&category);
-            let id = Uuid::new_v4().to_string();
-
-            conn.execute(
-                "INSERT INTO memories (
-                    id, key, content, category, embedding, created_at, updated_at,
-                    session_id, namespace, importance, agent_id, kind, pinned, tenant_id
-                 )
-                 VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                    COALESCE(?11, (SELECT id FROM agents WHERE alias = 'default' LIMIT 1)),
-                    ?12, ?13, ?14
-                 )
-                 ON CONFLICT(agent_id, key) DO UPDATE SET
-                    content = excluded.content,
-                    category = excluded.category,
-                    embedding = excluded.embedding,
-                    updated_at = excluded.updated_at,
-                    session_id = excluded.session_id,
-                    namespace = excluded.namespace,
-                    importance = excluded.importance,
-                    kind = excluded.kind,
-                    pinned = excluded.pinned,
-                    tenant_id = excluded.tenant_id",
-                params![
-                    id,
-                    key,
-                    content,
-                    cat,
-                    embedding_bytes,
-                    now,
-                    now,
-                    sid,
-                    ns,
-                    imp,
-                    aid,
-                    kind,
-                    pinned,
-                    tenant_id
-                ],
-            )?;
-            Ok(())
-        })
-            .await?
-    }
-
-    fn category_to_str(cat: &MemoryCategory) -> String {
-        match cat {
-            MemoryCategory::Core => "core".into(),
-            MemoryCategory::Daily => "daily".into(),
-            MemoryCategory::Conversation => "conversation".into(),
-            MemoryCategory::Custom(name) => name.clone(),
-        }
-    }
-
-    fn like_fallback_matches(text: &str, term: &str) -> bool {
-        let text = text.to_lowercase();
-        if let Some(prefix) = term.strip_suffix('*')
-            && !prefix.is_empty()
-        {
-            let prefix = prefix.to_lowercase();
-            return text
-                .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
-                .any(|token| token.starts_with(&prefix));
-        }
-        text.contains(&term.to_lowercase())
-    }
-
-    /// Vector similarity search: scan embeddings and compute cosine similarity.
-    ///
-    /// Optional `category` and `session_id` filters reduce full-table scans
-    /// when the caller already knows the scope of relevant memories.
-    pub fn vector_search(
-        conn: &Connection,
-        query_embedding: &[f32],
-        limit: usize,
-        category: Option<&str>,
-        session_id: Option<&str>,
-    ) -> anyhow::Result<Vec<(String, f32)>> {
-        let mut sql = "SELECT id, embedding FROM memories WHERE embedding IS NOT NULL".to_string();
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        let mut idx = 1;
-
-        if let Some(cat) = category {
-            let _ = write!(sql, " AND category = ?{idx}");
-            param_values.push(Box::new(cat.to_string()));
-            idx += 1;
-        }
-        if let Some(sid) = session_id {
-            let _ = write!(sql, " AND session_id = ?{idx}");
-            param_values.push(Box::new(sid.to_string()));
-        }
-
-        let mut stmt = conn.prepare(&sql)?;
-        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
-            param_values.iter().map(AsRef::as_ref).collect();
-        let rows = stmt.query_map(params_ref.as_slice(), |row| {
-            let id: String = row.get(0)?;
-            let blob: Vec<u8> = row.get(1)?;
-            Ok((id, blob))
-        })?;
-
-        let mut scored: Vec<(String, f32)> = Vec::new();
-        for row in rows {
-            let (id, blob) = row?;
-            let emb = vector::bytes_to_vec(&blob);
-            let sim = vector::cosine_similarity(query_embedding, &emb);
-            if sim > 0.0 {
-                scored.push((id, sim));
-            }
-        }
-
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(limit);
-        Ok(scored)
-    }
-    /// FTS5 BM25 keyword search
-    pub fn fts5_search(
-        conn: &Connection,
-        query: &str,
-        limit: usize,
-    ) -> anyhow::Result<Vec<(String, f32)>> {
-        // Escape FTS5 special chars and build query
-        let fts_query: String = query
-            .split_whitespace()
-            .map(Self::fts5_term_query)
-            .collect::<Vec<_>>()
-            .join(" OR ");
-
-        if fts_query.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let sql = "SELECT m.id, bm25(memories_fts) as score
-                   FROM memories_fts f
-                   JOIN memories m ON m.rowid = f.rowid
-                   WHERE memories_fts MATCH ?1
-                   ORDER BY score
-                   LIMIT ?2";
-
-        let mut stmt = conn.prepare(sql)?;
-        #[allow(clippy::cast_possible_wrap)]
-        let limit_i64 = limit as i64;
-
-        let rows = stmt.query_map(params![fts_query, limit_i64], |row| {
-            let id: String = row.get(0)?;
-            let score: f64 = row.get(1)?;
-            // BM25 returns negative scores (lower = better), negate for ranking
-            #[allow(clippy::cast_possible_truncation)]
-            Ok((id, (-score) as f32))
-        })?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
-    }
-
-    fn fts5_term_query(term: &str) -> String {
-        if let Some(prefix) = term.strip_suffix('*')
-            && !prefix.is_empty()
-        {
-            let escaped = prefix.replace('"', "\"\"");
-            format!("\"{escaped}\"*")
-        } else {
-            let escaped = term.replace('"', "\"\"");
-            format!("\"{escaped}\"")
-        }
-    }
-
-
-    fn like_search_pattern(term: &str) -> String {
-        if let Some(prefix) = term.strip_suffix('*')
-            && !prefix.is_empty()
-        {
-            return format!("%{}%", Self::escape_like_pattern(prefix));
-        }
-        format!("%{}%", Self::escape_like_pattern(term))
-    }
-
-    fn is_prefix_wildcard_term(term: &str) -> bool {
-        matches!(term.strip_suffix('*'), Some(prefix) if !prefix.is_empty())
-    }
-
-    fn escape_like_pattern(term: &str) -> String {
-        let mut escaped = String::with_capacity(term.len());
-        for ch in term.chars() {
-            if matches!(ch, '%' | '_' | '\\') {
-                escaped.push('\\');
-            }
-            escaped.push(ch);
-        }
-        escaped
-    }
-
-
-
-    fn content_hash(query: &str) -> String {
-        use sha2::{Digest, Sha256};
-        let hash = Sha256::digest(query.as_bytes());
-        format!(
-            "{:016x}",
-            u64::from_be_bytes(hash[..8].try_into().expect(
-                "SHA-256 always produces >= 8 bytes"
-            ))
-        )
-    }
-
-    pub(crate) fn swap_embedder(&self, embedder: Arc<dyn EmbeddingProvider>) {
-        *self.embedder.write() = embedder;
-    }
-
-    pub fn embedder_dimensions(&self) -> usize {
-        self.embedder.read().dimensions()
-    }
-
 }
+
 impl Attributable for SqliteMemory {
     fn role(&self) -> Role {
         Role::Memory(attribution::MemoryKind::Sqlite)
@@ -767,7 +168,7 @@ impl Memory for SqliteMemory {
         category: MemoryCategory,
         session_id: Option<&str>,
     ) -> anyhow::Result<()> {
-        self.store_with_agent(key, content, category, session_id, None, None, None)
+        self.store_row_with_metadata(key, content, category, session_id, StoreOptions::default(), None)
             .await
     }
 
@@ -801,36 +202,46 @@ impl Memory for SqliteMemory {
         let keyword_weight = self.keyword_weight;
         let search_mode = self.search_mode.clone();
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<MemoryEntry>>{
+        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<MemoryEntry>> {
             let conn = conn.lock();
             let session_ref = sid.as_deref();
             let since_ref = since_owned.as_deref();
             let until_ref = until_owned.as_deref();
 
-            let kw_result = if search_mode == SearchMode::Bm25 { Vec::new() } else {
+            let kw_result = if search_mode == SearchMode::Bm25 {
+                Vec::new()
+            } else {
                 Self::fts5_search(&conn, &query, limit * 2).unwrap_or_default()
             };
 
-            let vector_result = if search_mode == SearchMode::Bm25 { Vec::new() } else if let Some(ref qe) = query_embedding {
+            let vector_result = if search_mode == SearchMode::Bm25 {
+                Vec::new()
+            } else if let Some(ref qe) = query_embedding {
                 Self::vector_search(&conn, qe, limit * 2, None, session_ref).unwrap_or_default()
             } else {
                 Vec::new()
             };
 
             let merged = if vector_result.is_empty() {
-                kw_result.iter().map(|(id, score)| vector::ScoredResult {
-                    id: id.clone(),
-                    vector_score: None,
-                    keyword_score: Some(*score),
-                    final_score: *score,
-                }).collect::<Vec<_>>()
+                kw_result
+                    .iter()
+                    .map(|(id, score)| vector::ScoredResult {
+                        id: id.clone(),
+                        vector_score: None,
+                        keyword_score: Some(*score),
+                        final_score: *score,
+                    })
+                    .collect::<Vec<_>>()
             } else if kw_result.is_empty() {
-                vector_result.iter().map(|(id, score)| vector::ScoredResult {
-                    id: id.clone(),
-                    vector_score: None,
-                    keyword_score: Some(*score),
-                    final_score: *score,
-                }).collect::<Vec<_>>()
+                vector_result
+                    .iter()
+                    .map(|(id, score)| vector::ScoredResult {
+                        id: id.clone(),
+                        vector_score: None,
+                        keyword_score: Some(*score),
+                        final_score: *score,
+                    })
+                    .collect::<Vec<_>>()
             } else {
                 vector::hybrid_merge(&vector_result, &kw_result, vector_weight, keyword_weight, limit)
             };
@@ -838,22 +249,33 @@ impl Memory for SqliteMemory {
             let mut results = Vec::new();
             if merged.is_empty() {
                 const MAX_LIKE_KEYWORDS: usize = 8;
-                let raw_keywords: Vec<String> = query.split_whitespace().take(MAX_LIKE_KEYWORDS).map(str::to_string).collect();
+                let raw_keywords: Vec<String> = query
+                    .split_whitespace()
+                    .take(MAX_LIKE_KEYWORDS)
+                    .map(str::to_string)
+                    .collect();
                 if !raw_keywords.is_empty() {
-                    let needs_prefix_filter = raw_keywords.iter().any(|keyword| Self::is_prefix_wildcard_term(keyword));
+                    let needs_prefix_filter =
+                        raw_keywords.iter().any(|keyword| is_prefix_wildcard_term(keyword));
                     let sql_limit = if needs_prefix_filter {
                         limit.saturating_mul(8).min(limit.saturating_add(512))
                     } else {
                         limit
                     };
 
-                    let patterns: Vec<String> = raw_keywords.iter().map(|kw| Self::like_search_pattern(kw)).collect();
-                    let conditions: Vec<String> = patterns.iter().enumerate()
+                    let patterns: Vec<String> =
+                        raw_keywords.iter().map(|kw| like_search_pattern(kw)).collect();
+                    let conditions: Vec<String> = patterns
+                        .iter()
+                        .enumerate()
                         .map(|(i, _)| {
-                            format!("(m.content like ?{} ESCAPE '\\' OR m.ley like ?{} ESCAPE '\\'}})",
-                                    i * 2 + 1,
-                                    i * 2 + 2, )
-                        }).collect();
+                            format!(
+                                "(m.content like ?{} ESCAPE '\\' OR m.key like ?{} ESCAPE '\\')",
+                                i * 2 + 1,
+                                i * 2 + 2,
+                            )
+                        })
+                        .collect();
 
                     let where_clause = conditions.join(" OR ");
                     let mut param_idx = patterns.len() * 2 + 1;
@@ -894,14 +316,15 @@ impl Memory for SqliteMemory {
                             id: row.get(0)?,
                             key: row.get(1)?,
                             content: row.get(2)?,
-                            category: Self::str_to_category(&row.get::<_, String>(3)?),
+                            category: str_to_category(&row.get::<_, String>(3)?),
                             timestamp: row.get(4)?,
                             session_id: row.get(5)?,
                             score: Some(1.0),
-                            namespace: row.get::<_, Option<String>>(6)?.unwrap_or_else(|| "default".into()),
+                            namespace: row.get::<_, Option<String>>(6)?
+                                .unwrap_or_else(|| "default".into()),
                             importance: row.get(7)?,
                             superseded_by: row.get(8)?,
-                            kind: Self::decode_kind(row.get(9)?),
+                            kind: decode_kind(row.get(9)?),
                             pinned: row.get::<_, i64>(10)? != 0,
                             tenant_id: row.get(13)?,
                             agent_alias: row.get(11)?,
@@ -911,14 +334,15 @@ impl Memory for SqliteMemory {
                     for row in rows {
                         let entry = row?;
                         if let Some(sid) = session_ref
-                            && entry.session_id.as_deref() != Some(sid) {
+                            && entry.session_id.as_deref() != Some(sid)
+                        {
                             continue;
                         }
                         if needs_prefix_filter
                             && !raw_keywords.iter().any(|keyword| {
-                            Self::like_fallback_matches(&entry.key, keyword)
-                                || Self::like_fallback_matches(&entry.content, keyword)
-                        })
+                                like_fallback_matches(&entry.key, keyword)
+                                    || like_fallback_matches(&entry.content, keyword)
+                            })
                         {
                             continue;
                         }
@@ -928,10 +352,88 @@ impl Memory for SqliteMemory {
                         }
                     }
                 }
+            } else {
+                // merged is non-empty: fetch full MemoryEntry rows for the
+                // ranked IDs, preserving the hybrid-merge order.
+                let ordered_ids: Vec<String> = merged.iter().map(|s| s.id.clone()).collect();
+                let id_placeholders: Vec<String> =
+                    (0..ordered_ids.len()).map(|i| format!("?{}", i + 1)).collect();
+
+                let mut sql = format!(
+                    "SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, \
+                     m.namespace, m.importance, m.superseded_by, m.kind, m.pinned, \
+                     a.alias, m.agent_id, m.tenant_id \
+                     FROM memories m LEFT JOIN agents a ON a.id = m.agent_id \
+                     WHERE m.superseded_by IS NULL AND m.id IN ({})",
+                    id_placeholders.join(", ")
+                );
+
+                let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = ordered_ids
+                    .iter()
+                    .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>)
+                    .collect();
+                let mut idx = ordered_ids.len() + 1;
+
+                if let Some(sid) = session_ref {
+                    let _ = write!(sql, " AND m.session_id = ?{idx}");
+                    param_values.push(Box::new(sid.to_string()));
+                    idx += 1;
+                }
+                if let Some(s) = since_ref {
+                    let _ = write!(sql, " AND m.created_at >= ?{idx}");
+                    param_values.push(Box::new(s.to_string()));
+                    idx += 1;
+                }
+                if let Some(u) = until_ref {
+                    let _ = write!(sql, " AND m.created_at <= ?{idx}");
+                    param_values.push(Box::new(u.to_string()));
+                }
+
+                let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+                    param_values.iter().map(AsRef::as_ref).collect();
+                let mut stmt = conn.prepare(&sql)?;
+                let rows = stmt.query_map(params_ref.as_slice(), |row| {
+                    Ok(MemoryEntry {
+                        id: row.get(0)?,
+                        key: row.get(1)?,
+                        content: row.get(2)?,
+                        category: str_to_category(&row.get::<_, String>(3)?),
+                        timestamp: row.get(4)?,
+                        session_id: row.get(5)?,
+                        score: None,
+                        namespace: row.get::<_, Option<String>>(6)?
+                            .unwrap_or_else(|| "default".into()),
+                        importance: row.get(7)?,
+                        superseded_by: row.get(8)?,
+                        kind: decode_kind(row.get(9)?),
+                        pinned: row.get::<_, i64>(10)? != 0,
+                        tenant_id: row.get(13)?,
+                        agent_alias: row.get(11)?,
+                        agent_id: row.get(12)?,
+                    })
+                })?;
+
+                let mut by_id: std::collections::HashMap<String, MemoryEntry> =
+                    std::collections::HashMap::new();
+                for row in rows {
+                    let entry = row?;
+                    by_id.insert(entry.id.clone(), entry);
+                }
+
+                for scored in &merged {
+                    if let Some(mut entry) = by_id.get(&scored.id).cloned() {
+                        entry.score = Some(scored.final_score as f64);
+                        results.push(entry);
+                        if results.len() >= limit {
+                            break;
+                        }
+                    }
+                }
             }
             results.truncate(limit);
-                Ok(results)
-            }).await?
+            Ok(results)
+        })
+        .await?
     }
 
     async fn get(&self, key: &str) -> anyhow::Result<Option<MemoryEntry>> {
@@ -951,14 +453,14 @@ impl Memory for SqliteMemory {
                     id: row.get(0)?,
                     key: row.get(1)?,
                     content: row.get(2)?,
-                    category: Self::str_to_category(&row.get::<_, String>(3)?),
+                    category: str_to_category(&row.get::<_, String>(3)?),
                     timestamp: row.get(4)?,
                     session_id: row.get(5)?,
                     score: None,
                     namespace: row.get::<_, Option<String>>(6)?.unwrap_or_else(|| "default".into()),
                     importance: row.get(7)?,
                     superseded_by: row.get(8)?,
-                    kind: Self::decode_kind(row.get(9)?),
+                    kind: decode_kind(row.get(9)?),
                     pinned: row.get::<_, i64>(10)? != 0,
                     tenant_id: row.get(13)?,
                     agent_alias: row.get(11)?,
@@ -971,7 +473,7 @@ impl Memory for SqliteMemory {
                 _ => Ok(None),
             }
         })
-            .await?
+        .await?
     }
 
     async fn get_for_agent(
@@ -996,14 +498,14 @@ impl Memory for SqliteMemory {
                     id: row.get(0)?,
                     key: row.get(1)?,
                     content: row.get(2)?,
-                    category: Self::str_to_category(&row.get::<_, String>(3)?),
+                    category: str_to_category(&row.get::<_, String>(3)?),
                     timestamp: row.get(4)?,
                     session_id: row.get(5)?,
                     score: None,
                     namespace: row.get::<_, Option<String>>(6)?.unwrap_or_else(|| "default".into()),
                     importance: row.get(7)?,
                     superseded_by: row.get(8)?,
-                    kind: Self::decode_kind(row.get(9)?),
+                    kind: decode_kind(row.get(9)?),
                     pinned: row.get::<_, i64>(10)? != 0,
                     tenant_id: row.get(13)?,
                     agent_alias: row.get(11)?,
@@ -1016,7 +518,7 @@ impl Memory for SqliteMemory {
                 _ => Ok(None),
             }
         })
-            .await?
+        .await?
     }
 
     async fn list(
@@ -1040,14 +542,14 @@ impl Memory for SqliteMemory {
                     id: row.get(0)?,
                     key: row.get(1)?,
                     content: row.get(2)?,
-                    category: Self::str_to_category(&row.get::<_, String>(3)?),
+                    category: str_to_category(&row.get::<_, String>(3)?),
                     timestamp: row.get(4)?,
                     session_id: row.get(5)?,
                     score: None,
                     namespace: row.get::<_, Option<String>>(6)?.unwrap_or_else(|| "default".into()),
                     importance: row.get(7)?,
                     superseded_by: row.get(8)?,
-                    kind: Self::decode_kind(row.get(9)?),
+                    kind: decode_kind(row.get(9)?),
                     pinned: row.get::<_, i64>(10)? != 0,
                     tenant_id: row.get(13)?,
                     agent_alias: row.get(11)?,
@@ -1056,7 +558,7 @@ impl Memory for SqliteMemory {
             };
 
             if let Some(ref cat) = category {
-                let cat_str = Self::category_to_str(cat);
+                let cat_str = category_to_str(cat);
                 let mut stmt = conn.prepare(
                     "SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, m.namespace, m.importance, m.superseded_by, m.kind, m.pinned, a.alias, m.agent_id, m.tenant_id
                      FROM memories m LEFT JOIN agents a ON a.id = m.agent_id
@@ -1066,7 +568,8 @@ impl Memory for SqliteMemory {
                 for row in rows {
                     let entry = row?;
                     if let Some(sid) = session_ref
-                        && entry.session_id.as_deref() != Some(sid) {
+                        && entry.session_id.as_deref() != Some(sid)
+                    {
                         continue;
                     }
                     results.push(entry);
@@ -1081,7 +584,8 @@ impl Memory for SqliteMemory {
                 for row in rows {
                     let entry = row?;
                     if let Some(sid) = session_ref
-                        && entry.session_id.as_deref() != Some(sid) {
+                        && entry.session_id.as_deref() != Some(sid)
+                    {
                         continue;
                     }
                     results.push(entry);
@@ -1090,7 +594,7 @@ impl Memory for SqliteMemory {
 
             Ok(results)
         })
-            .await?
+        .await?
     }
 
     async fn forget(&self, key: &str) -> anyhow::Result<bool> {
@@ -1180,12 +684,6 @@ impl Memory for SqliteMemory {
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
             let conn = conn.lock();
-            // `agent_alias` is the human alias, but `memories.agent_id` holds
-            // the agent's UUID (FK → agents.id). Resolve alias → id via the same
-            // subselect the insert path uses (`store_with_agent`); binding the
-            // alias straight into agent_id matches zero rows and silently
-            // no-ops. An unknown alias yields a NULL subselect → matches
-            // nothing, which is the correct outcome.
             let affected = conn.execute(
                 "DELETE FROM memories WHERE agent_id = (SELECT id FROM agents WHERE alias = ?1 LIMIT 1)",
                 params![agent_alias],
@@ -1193,7 +691,7 @@ impl Memory for SqliteMemory {
             #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
             Ok(affected)
         })
-            .await?
+        .await?
     }
 
     async fn rename_agent(&self, from: &str, to: &str) -> anyhow::Result<usize> {
@@ -1203,19 +701,6 @@ impl Memory for SqliteMemory {
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
             let conn = conn.lock();
-            // Memory rows ride `memories.agent_id` (FK → agents.id, a stable
-            // UUID); only the human `alias` column moves, so this is a single
-            // agents-row update. An unknown `from` matches nothing → Ok(0).
-            //
-            // Collision-safety: `agents.alias` is UNIQUE, and deleting an agent
-            // purges its memories but leaves the `agents` row behind (an orphan
-            // holding the alias). A bare UPDATE onto a previously-used-then-
-            // deleted `to` alias would hit the UNIQUE constraint and fail. We
-            // hold the connection lock across the whole sequence (single writer),
-            // so: refuse if `to` still has memory rows (a genuine conflict we
-            // won't silently merge), otherwise drop the orphan `to` row and
-            // proceed. (`COUNT(*)` over a NULL subselect when no `to` row exists
-            // is 0, so the common no-collision path falls straight through.)
             let to_rows: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM memories WHERE agent_id = (SELECT id FROM agents WHERE alias = ?1 LIMIT 1)",
                 params![to],
@@ -1226,7 +711,6 @@ impl Memory for SqliteMemory {
                     "cannot rename agent memory to `{to}`: an existing memory store under that alias has {to_rows} row(s); refusing to merge"
                 );
             }
-            // Drop any orphan `to` agents row (verified above to own no memories).
             conn.execute("DELETE FROM agents WHERE alias = ?1", params![to])?;
             let affected = conn.execute(
                 "UPDATE agents SET alias = ?2 WHERE alias = ?1",
@@ -1235,7 +719,7 @@ impl Memory for SqliteMemory {
             #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
             Ok(affected)
         })
-            .await?
+        .await?
     }
 
     async fn count_agent(&self, agent_alias: &str) -> anyhow::Result<usize> {
@@ -1244,10 +728,6 @@ impl Memory for SqliteMemory {
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
             let conn = conn.lock();
-            // Mirror `rename_agent`: it moves the `agents` row (alias -> id), not
-            // the memory rows, so residue is the presence of that alias row (0 or
-            // 1). A memory-row count would miss an agent with an `agents` row but
-            // no memories - a real lag `rename_agent` would still re-point.
             let count: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM agents WHERE alias = ?1",
                 params![agent_alias],
@@ -1279,17 +759,6 @@ impl Memory for SqliteMemory {
             .unwrap_or(false)
     }
 
-    /// Rebuild backend indexes: FTS tables and missing embedding vectors.
-    ///
-    /// Step 1 rebuilds the FTS5 index unconditionally (idempotent, cheap).
-    /// Step 2 fills in vectors for every row with `embedding IS NULL` using
-    /// the configured embedder. If interrupted, re-running is safe — only
-    /// rows still missing a vector are re-processed. Intended to be run
-    /// after bulk writes that didn't go through `store()` (e.g. `zeroclaw
-    /// migrate openclaw`, which uses `NoopEmbedding` for speed). Returns
-    /// the number of rows that received a new embedding; returns 0 if the
-    /// embedder has no dimensions (Noop) or if everything is already
-    /// embedded.
     async fn reindex(&self) -> anyhow::Result<usize> {
         // Step 1: Rebuild FTS5 (always safe, cheap)
         {
@@ -1367,7 +836,7 @@ impl Memory for SqliteMemory {
             }
             if let Some(ref cat) = filter.category {
                 let _ = write!(sql, " AND m.category = ?{idx}");
-                param_values.push(Box::new(Self::category_to_str(cat)));
+                param_values.push(Box::new(category_to_str(cat)));
                 idx += 1;
             }
             if let Some(ref since) = filter.since {
@@ -1390,14 +859,14 @@ impl Memory for SqliteMemory {
                     id: row.get(0)?,
                     key: row.get(1)?,
                     content: row.get(2)?,
-                    category: Self::str_to_category(&row.get::<_, String>(3)?),
+                    category: str_to_category(&row.get::<_, String>(3)?),
                     timestamp: row.get(4)?,
                     session_id: row.get(5)?,
                     score: None,
                     namespace: row.get::<_, Option<String>>(6)?.unwrap_or_else(|| "default".into()),
                     importance: row.get(7)?,
                     superseded_by: row.get(8)?,
-                    kind: Self::decode_kind(row.get(9)?),
+                    kind: decode_kind(row.get(9)?),
                     pinned: row.get::<_, i64>(10)? != 0,
                     tenant_id: row.get(13)?,
                     agent_alias: row.get(11)?,
@@ -1411,7 +880,7 @@ impl Memory for SqliteMemory {
             }
             Ok(results)
         })
-            .await?
+        .await?
     }
 
     async fn export_agent(&self, agent_alias: &str) -> anyhow::Result<Vec<MemoryEntry>> {
@@ -1431,14 +900,14 @@ impl Memory for SqliteMemory {
                     id: row.get(0)?,
                     key: row.get(1)?,
                     content: row.get(2)?,
-                    category: Self::str_to_category(&row.get::<_, String>(3)?),
+                    category: str_to_category(&row.get::<_, String>(3)?),
                     timestamp: row.get(4)?,
                     session_id: row.get(5)?,
                     score: None,
                     namespace: row.get::<_, Option<String>>(6)?.unwrap_or_else(|| "default".into()),
                     importance: row.get(7)?,
                     superseded_by: row.get(8)?,
-                    kind: Self::decode_kind(row.get(9)?),
+                    kind: decode_kind(row.get(9)?),
                     pinned: row.get::<_, i64>(10)? != 0,
                     tenant_id: row.get(13)?,
                     agent_alias: row.get(11)?,
@@ -1451,7 +920,7 @@ impl Memory for SqliteMemory {
             }
             Ok(results)
         })
-            .await?
+        .await?
     }
 
     async fn recall_namespaced(
@@ -1483,9 +952,6 @@ impl Memory for SqliteMemory {
         namespace: Option<&str>,
         importance: Option<f64>,
     ) -> anyhow::Result<()> {
-        // Same routing rule as `store`: no agent context at the trait
-        // boundary, so attribute to the default agent through
-        // `store_with_agent`.
         self.store_row_with_metadata(
             key,
             content,
@@ -1544,7 +1010,6 @@ impl Memory for SqliteMemory {
         let new_id = new_id.to_string();
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
             let conn = conn.lock();
-            // todo
             crate::conflict::mark_superseded(&conn, &ids, &new_id)
         })
         .await?
@@ -1557,7 +1022,7 @@ impl Memory for SqliteMemory {
     ) -> anyhow::Result<u64> {
         let conn = self.conn.clone();
         let namespace = namespace.map(str::to_string);
-        let category = category.map(Self::category_to_str);
+        let category = category.map(category_to_str);
         tokio::task::spawn_blocking(move || -> anyhow::Result<u64> {
             let conn = conn.lock();
             let count = match (namespace, category) {
@@ -1584,7 +1049,7 @@ impl Memory for SqliteMemory {
             };
             Ok(count)
         })
-            .await?
+        .await?
     }
 
     async fn stats(&self) -> anyhow::Result<MemoryStats> {
@@ -1614,7 +1079,12 @@ impl Memory for SqliteMemory {
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
             })?;
-            let by_category = rows.collect::<Result<Vec<_>, _>>()?;
+
+            let mut by_category = Vec::new();
+            for row in rows {
+                by_category.push(row?);
+            }
+
             Ok(MemoryStats {
                 total_rows,
                 by_category,
@@ -1635,9 +1105,6 @@ impl Memory for SqliteMemory {
         since: Option<&str>,
         until: Option<&str>,
     ) -> anyhow::Result<Vec<MemoryEntry>> {
-        // Empty allowlist means "no agent filter": fall back to plain
-        // recall. The wrapper always includes the bound agent's UUID,
-        // so a non-empty allowlist is the live-runtime case.
         if allowed_agent_ids.is_empty() {
             return self.recall(query, limit, session_id, since, until).await;
         }
@@ -1654,12 +1121,6 @@ impl Memory for SqliteMemory {
         let ids: Vec<String> = raw.iter().map(|e| e.id.clone()).collect();
         let allowed: Vec<String> = allowed_agent_ids.iter().map(|s| (*s).to_string()).collect();
 
-        // Single SQL pass that returns only the candidate IDs whose
-        // agent_id is on the allowlist. Legacy NULL-agent_id rows do
-        // not match (the V3 migration backfills `default`, and the
-        // NOT NULL FK rejects new NULLs), so cross-agent leakage of
-        // unattributed rows that an earlier post-fetch fall-through
-        // would have allowed is closed at the query boundary.
         let kept: HashSet<String> =
             tokio::task::spawn_blocking(move || -> anyhow::Result<HashSet<String>> {
                 let conn = conn.lock();
@@ -1712,6 +1173,7 @@ impl Memory for SqliteMemory {
         })
         .await?
     }
+
     async fn refresh_embedder(
         &self,
         model_provider: &str,
@@ -1727,27 +1189,4 @@ impl Memory for SqliteMemory {
         ));
         self.swap_embedder(embedder);
     }
-}
-
-
-pub fn sqlite_ensure_default_agent_uuid(conn: &Connection) -> anyhow::Result<String> {
-    sqlite_ensure_agent_uuid(conn, "default")
-}
-
-/// Mint-or-query a single agent row keyed by alias. Used by the
-/// SQLite migration's default-agent backfill and by the `ensure_agent_uuid`
-/// trait impl on the memory backend (alias resolution at agent-loop entry).
-pub fn sqlite_ensure_agent_uuid(conn: &Connection, alias: &str) -> anyhow::Result<String> {
-    let new_id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
-    conn.execute(
-        "INSERT OR IGNORE INTO agents (id, alias, created_at) VALUES (?1, ?2, ?3)",
-        params![new_id, alias, now],
-    )?;
-    let final_id: String = conn.query_row(
-        "SELECT id FROM agents WHERE alias = ?1 LIMIT 1",
-        params![alias],
-        |row| row.get(0),
-    )?;
-    Ok(final_id)
 }
