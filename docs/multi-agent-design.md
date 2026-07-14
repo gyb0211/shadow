@@ -1,401 +1,497 @@
-# Shadow 多用户/多 Agent 设计文档
+content = """# Shadow 多 Agent 设计文档
 
-> 参考 ZeroClaw multi_agent.rs (472行) + schema.rs AliasedAgentConfig + tool_execution.rs
+> 现状分析 + ZeroClaw 多 agent 经验 + Shadow 落地路径
 
-## 一、ZeroClaw 的多 Agent 架构
+## 1. Shadow 现状 (基于 main 分支)
 
-### 1.1 配置层
+Shadow 的 multi_agent 框架已经**部分就绪**, 数据结构层齐全, 运行时层缺关键组件。
 
-```toml
-# ZeroClaw config.toml
-[agents.researcher]
-enabled = true
-model_provider = "openai.default"
-channels = ["telegram.main"]
-skill_bundles = ["research"]
-risk_profile = "default"
-runtime_profile = "default"
+### 1.1 已实现 (在 `crates/shadow-config/src/multi/`)
 
-[agents.researcher.workspace]
-path = "/data/agents/researcher/workspace"
-# 跨 agent 文件访问白名单 (默认 jailed)
-[agents.researcher.workspace.access]
-coder = "read"       # researcher 可以读 coder 的文件
+| 类型 | 字段 | 状态 |
+|------|------|------|
+| `AliasedAgentConfig` | enabled, workspace, memory, model_provider, risk_profile, runtime_profile | ✅ 有 |
+| `AgentWorkspaceConfig` | path, access, unrestricted_filesystem, read_memory_from | ✅ 有 |
+| `AgentMemoryConfig` | backend | ✅ 有 |
+| `MemoryBackendKind` | None / Sqlite / Postgres / Markdown / Lucid / Unknown | ✅ 有 (比 ZeroClaw 少 Qdrant + Lucid 占位) |
+| `AccessMode` | Read / Write / ReadWrite | ✅ 有 |
 
-[agents.researcher.memory]
-backend = "sqlite"   # 创建后不可更改
+### 1.2 关键缺失 (按 ZeroClaw 对照)
 
-[agents.coder]
-model_provider = "anthropic.claude"
-channels = ["discord.dev"]
-skill_bundles = ["coding"]
+| 能力 | ZeroClaw | Shadow | 差距 |
+|------|----------|--------|------|
+| `[peer_groups.<name>]` | ✅ 联合成员 + mutual membership | ❌ 完全缺失 | 整块缺 |
+| `[peer_groups.<name>].external_peers` | ✅ 外部用户名 | ❌ | 整块缺 |
+| `[peer_groups.<name>].ignore` | ✅ 黑名单 | ❌ | 整块缺 |
+| `[peer_groups.<name>].output_modality` | Mirror/Voice/Text | ❌ | 整块缺 |
+| `ResolvedPeers` 解析器 | ✅ `resolve_peer_set(config, agent_alias)` | ❌ | 整块缺 |
+| `SubAgentSpawn` (运行时子 agent) | ✅ 458 行, 11 种 EscalationViolation | ❌ | 整块缺 |
+| `SubAgentOverrides` (policy 收敛) | ✅ `ensure_no_escalation_beyond` | ❌ | 整块缺 |
+| `SubAgentContext` | ✅ parent_alias + policy + memory allowlist | ❌ | 整块缺 |
+| `[a2a.server]` (跨 agent 发现) | ✅ A2aServerConfig (HTTPS well-known route) | ❌ | 整块缺 |
+| `EscalationViolation` (11 种) | ✅ policy.rs 枚举 | ❌ | 整块缺 |
+| `send_message_to_peer` tool | ✅ LLM 主动触发 | ❌ | 整块缺 |
+| Memory 后端 validator | ✅ `Config::validate()` 检查 `read_memory_from` 同后端 | ❌ | 缺校验 |
 
-[agents.coder.workspace.access]
-researcher = "read_write"  # coder 可以读写 researcher 的文件
+## 2. ZeroClaw 多 Agent 设计理念
 
-[agents.coder.workspace]
-unrestricted_filesystem = false  # 默认 jailed
+### 2.1 三个层次
+
 ```
+┌───────────────────────────────────────────────────────────┐
+│ Level 1: 静态多 Agent (config 定义)                         │
+│ → [agents.<alias>]: 多个 agent 各有独立配置                   │
+│ → [peer_groups.<name>]: 联合成员机制                        │
+└───────────────────────────────────────────────────────────┘
+                          ↓
+┌───────────────────────────────────────────────────────────┐
+│ Level 2: 运行时多 Agent (内存代理)                          │
+│ → spawn_subagent 工具: LLM 派生子任务                       │
+│ → SubAgentSpawn 验证: 权限必须 ≤ parent                    │
+│ → 确保 audit trail 可追溯                                  │
+└───────────────────────────────────────────────────────────┘
+                          ↓
+┌───────────────────────────────────────────────────────────┐
+│ Level 3: 跨 Agent 通信 (A2A)                                 │
+│ → [a2a.server] 暴露 A2A discovery endpoint                 │
+│ → /a2a/agents/<alias> 卡描述                                 │
+│ → external peers 寻址                                      │
+└───────────────────────────────────────────────────────────┘
+```
+
+### 2.2 数据结构 (摘自 `multi_agent.rs`)
 
 ```rust
-// Config 结构
-struct Config {
-    agents: HashMap<String, AliasedAgentConfig>,  // 多 agent
-    channels: ChannelsConfig,                      // 多渠道
-    // ...
+define_provider_ref!(AgentAlias, "agents");
+define_provider_ref!(PeerGroupName, "peer_groups");
+define_provider_ref!(PeerUsername, "channels.peers");
+
+pub enum AccessMode { Read, Write, ReadWrite }   // 跨 agent filesystem 权限
+
+pub enum MemoryBackendKind {                     // 关闭集合, schema is law
+    None, Sqlite, Postgres, Qdrant, Markdown, Lucid,
 }
 
-struct AliasedAgentConfig {
-    enabled: bool,
-    channels: Vec<ChannelRef>,
-    model_provider: ModelProviderRef,
-    risk_profile: RiskProfileRef,
-    runtime_profile: RuntimeProfileRef,
-    skill_bundles: Vec<String>,
-    workspace: AgentWorkspaceConfig,
-    memory: AgentMemoryConfig,
-    a2a: AgentA2aConfig,  // Agent-to-Agent 发现
+pub struct AgentWorkspaceConfig {
+    pub path: Option<PathBuf>,                   // None = derive 路径
+    pub access: BTreeMap<AgentAlias, AccessMode>, // 跨 agent 文件系统
+    pub unrestricted_filesystem: bool,            // escape hatch
+    pub read_memory_from: Vec<AgentAlias>,         // 跨 agent 记忆读
+}
+
+pub struct AgentMemoryConfig {
+    pub backend: MemoryBackendKind,                // agent 创建时锁定
+}
+
+pub struct PeerGroupConfig {
+    pub channel: ChannelRef,                       // "telegram" 或 "telegram.work"
+    pub agents: Vec<AgentAlias>,                   // 成员
+    pub external_peers: Vec<PeerUsername>,         // 非 agent 用户
+    pub ignore: Vec<PeerUsername>,                 // 黑名单
+    pub output_modality: OutputModality,           // 输出偏好
+}
+
+pub struct A2aServerConfig {
+    pub enabled: bool,
+    pub bind: Option<String>, pub port: Option<u16>,
+    pub public_base_url: String,                   // 公开代理后 URL
 }
 ```
 
-### 1.2 隔离层
+### 2.3 关键设计原则 (摘自代码注释)
 
-#### 工作空间隔离
+**不变性 (immutability)**:
+```
+An agent's backend is locked at agent creation and immutable on subsequent loads.
+Config::validate() enforces immutability against the persisted on-disk state.
+```
 
+**校验时机**:
+- `Config::validate()` 启动时检查 cross-backend allowed list 一致性
+- 启动时检查每个 `read_memory_from` entry 真实存在
+- **跨后端不允许**: SQLite agent 不能 recall postgres agent 的 memory
+
+**默认安全**:
 ```
-<install>/
-├── agents/
-│   ├── researcher/
-│   │   └── workspace/     # researcher 的工作目录 (jailed)
-│   │       ├── memory.db
-│   │       ├── sessions/
-│   │       └── skills/
-│   ├── coder/
-│   │   └── workspace/     # coder 的工作目录 (jailed)
-│   │       ├── memory.db
-│   │       └── ...
-│   └── reviewer/
-│       └── workspace/
-└── shared/
-    └── skills/            # 共享技能目录
+A missing entry in `access` means no cross-agent access at all (jailed).
+The enum only encodes the granted modes; absence is the safe default.
 ```
+
+## 3. ZeroClaw 解析器 `peers.rs` (关键运行时逻辑)
 
 ```rust
-struct AgentWorkspaceConfig {
-    path: Option<PathBuf>,                          // 自定义路径 (None = 默认)
-    access: BTreeMap<AgentAlias, AccessMode>,       // 跨 agent 文件访问白名单
-    unrestricted_filesystem: bool,                  // 逃生舱 (审计标记)
-    read_memory_from: Vec<AgentAlias>,              // 跨 agent 记忆读取白名单
+pub struct ResolvedPeers {
+    pub agent_peers: BTreeMap<String, BTreeSet<String>>,     // channel → agent aliases
+    pub external_peers: BTreeMap<String, BTreeSet<String>>,   // channel → usernames
 }
 
-enum AccessMode {
-    Read,       // 只读
-    Write,      // 只写
-    ReadWrite,  // 读写
+impl ResolvedPeers {
+    pub fn is_known_peer(&self, channel_type: &str, target: &str) -> bool;
+    pub fn allows_inbound(&self, channel_type: &str, origin: &str) -> bool;
+}
+
+pub fn resolve_peer_set(config: &Config, agent_alias: &str) -> ResolvedPeers {
+    let mut resolved = ResolvedPeers::default();
+    for group in config.peer_groups.values() {
+        let on_group = group.agents.iter().any(|a| a.as_str() == agent_alias);
+        if !on_group { continue; }
+
+        let channel = group.channel.to_string();
+
+        // 1. mutual membership (排除自己)
+        let self_norm = agent_alias.trim_start_matches('@').to_ascii_lowercase();
+        for member in &group.agents {
+            let normalized = member.as_str().trim_start_matches('@').to_ascii_lowercase();
+            if normalized != self_norm {
+                resolved.agent_peers.entry(channel.clone()).or_default().insert(normalized);
+            }
+        }
+
+        // 2. external peers
+        for ext in &group.external_peers {
+            resolved.external_peers.entry(channel.clone()).or_default()
+                .insert(ext.as_str().trim_start_matches('@').to_ascii_lowercase());
+        }
+
+        // 3. ignore list (subtract)
+        for ignored in &group.ignore {
+            let needle = ignored.as_str().trim_start_matches('@').to_ascii_lowercase();
+            resolved.external_peers.get_mut(&channel).map(|s| s.remove(&needle));
+            resolved.agent_peers.get_mut(&channel).map(|s| s.remove(&needle));
+        }
+    }
+    resolved
 }
 ```
 
-- 默认 jailed: agent 只能访问自己的 workspace
-- 跨 agent 访问需要显式声明 (双向各自声明)
-- `unrestricted_filesystem = true` 解除限制 (审计标记)
+**关键设计**:
+- **大小写不敏感 + 去 `@` 前缀** — 防止渠道 API 不同前缀
+- **mutual membership**: 只 mutual peer 是可见的
+- **self-exclusion**: 自己永远不在自己的 peer set
+- **ignore 是减法**, 不是 peer set 的一部分
 
-#### 记忆隔离
+## 4. SubAgentSpawn 设计 (458 行, ZeroClaw 关键机制)
 
 ```rust
-struct AgentMemoryConfig {
-    backend: MemoryBackendKind,  // sqlite / postgres / qdrant / markdown / none
-    // backend 创建后不可更改 (Config::validate() 强制)
+pub struct SubAgentOverrides {
+    pub policy: Option<SecurityPolicy>,
+    pub allowed_agent_aliases: Option<HashSet<String>>,
 }
 
-enum MemoryBackendKind {
-    None,
-    Sqlite,      // 默认
-    Postgres,    // + pgvector
-    Qdrant,      // 向量数据库
-    Markdown,    // 文件
-    Lucid,       // 混合
+pub struct SubAgentContext {
+    pub parent_alias: String,
+    pub policy: Arc<SecurityPolicy>,
+    pub allowed_agent_aliases: HashSet<String>,
+    pub run_id: String,
+    pub trace_id: String,
+}
+
+pub struct SubAgentSpawn {
+    parent_alias: String,
+    parent_policy: Arc<SecurityPolicy>,
+    parent_allowed: HashSet<String>,    // alias set
+    overrides: SubAgentOverrides,
+}
+
+impl SubAgentSpawn {
+    pub fn for_agent(config: &Config, agent_alias: &str) -> Result<Self>;
+    pub fn with_overrides(self, overrides: SubAgentOverrides) -> Result<Self>;
+    pub fn build(self) -> Result<SubAgentContext>;
 }
 ```
 
-- 每个 agent 有独立的 memory.db (或独立 postgres schema)
-- `read_memory_from` 白名单: agent A 可以读 agent B 的记忆
-- 跨 backend 的记忆共享被拒绝 (验证时检查)
+### 4.1 权限收敛验证 (11 种 EscalationViolation)
 
-### 1.3 通信层
-
-#### DelegateTool (任务委派)
+`SecurityPolicy::ensure_no_escalation_beyond(parent, child)` 检查 11 种升级:
 
 ```rust
-// agent A 调用工具委托任务给 agent B
-// LLM 调用: delegate(target="coder", task="写一个排序函数")
-// → Agent A 的 DelegateTool 查找 agents.coder 配置
-// → 创建临时 Agent B 实例
-// → Agent B 执行任务
-// → 结果返回给 Agent A
+pub enum EscalationViolation {
+    AutonomyAboveParent,                    // autonomy 升级
+    ReadWriteRootNotInParent,               // RW 路径不在父白名单
+    ReadOnlyRootNotInParent,                // RO 路径不在父白名单
+    WriteOnlyRootNotInParent,               // WO 路径不在父白名单
+    CommandNotInParent,                     // 命令不在父白名单
+    WorkspaceOnlyDisabledByChild,           // workspace_only 被关
+    ForbiddenPathDroppedByChild,            // forbidden_paths 被去掉
+    ShellEnvPassthroughExpanded,            // shell env passthrough 扩大
+    MaxActionsExceeded,                     // max_actions 缩小 (但 child 反过来)
+    MaxCostExceeded,                         // max_cost 缩小
+    ShellTimeoutExceeded,                    // shell timeout 缩小
+    BlockHighRiskCommandsDisabledByChild,    // block_high_risk 被关
+    RequireApprovalDisabledByChild,          // require_approval 被关
+}
 ```
 
-#### SpawnSubagentTool (子 agent 生成)
+**Ordinal 排序**:
+```rust
+pub enum AutonomyLevel {
+    ReadOnly,    // = 0
+    Supervised,  // = 1
+    Full,        // = 2
+}
+// 派生: PartialOrd + Ord, 子 agent autonomy 必须 <= parent
+```
+
+### 4.2 SubAgent memory allowlist 收敛
 
 ```rust
-// 生成一个一次性子 agent (不持久化配置)
-// 子 agent 继承父 agent 的 provider/memory/workspace
-// 适合: 并行任务拆分
+// SubAgentOverrides 里的 allowed_agent_aliases 必须 ⊆ parent.allowed
+fn validate_memory_allowlist(
+    parent: &HashSet<String>,
+    requested: Option<&HashSet<String>>,
+) -> Result<HashSet<String>> {
+    match requested {
+        Some(req) => {
+            let extra: Vec<_> = req.difference(parent).collect();
+            if !extra.is_empty() {
+                anyhow::bail!("SubAgent memory allowlist exceeds parent: {extra:?}");
+            }
+            Ok(req.clone())
+        }
+        None => Ok(parent.clone()),  // inherit
+    }
+}
 ```
 
-#### PeerGroup (多 agent 群聊)
+**Alias vs UUID**: SubAgentSpawn 持有 alias (config 层), consumer (`create_memory_for_agent`) 负责把 alias 解析为后端 UUID (SQLite) 或保留 alias (markdown/qdrant)。
 
-```toml
-[peer_groups.dev_team]
-channel = "telegram.dev"    # 渠道
-agents = ["researcher", "coder", "reviewer"]
-external_peers = ["@alice", "@bob"]
-output_modality = "mirror"  # mirror / voice / text
+### 4.3 tracing 集成
+
+```rust
+SubAgentContext::trace_id format: 
+"agent.<parent_alias>.subagent.<run_id>"
 ```
 
-- 多个 agent + 人类用户在同一个渠道
-- 消息路由: @researcher 的问题路由给 researcher agent
-- agent 之间可以互相看到消息
+- run_id 是 UUID v4 (与 agent_id 不同)
+- 提交后写入 `agent.<alias>.subagent.<run_id>` span
+- 日志归因跨 run 可追溯
 
-#### A2A 协议 (Agent-to-Agent)
+## 5. Shadow 复刻路线 (3 个 PR)
+
+### PR 1: 数据结构层 (`crates/shadow-config/src/multi/peer_group.rs`)
+
+直接抄 ZeroClaw, 加:
+
+```rust
+pub mod peer_group;  // 新增
+
+// mirror multi_agent.rs 的 peer_group 子模块
+define_provider_ref!(PeerGroupName, "peer_groups");
+define_provider_ref!(PeerUsername, "channels.peers");
+
+pub enum OutputModality { Mirror, Voice, Text }
+
+pub struct PeerGroupConfig {
+    pub channel: ChannelRef,
+    pub agents: Vec<AgentAlias>,
+    pub external_peers: Vec<PeerUsername>,
+    pub ignore: Vec<PeerUsername>,
+    pub output_modality: OutputModality,
+}
+
+// 加到 shadow-config/src/lib.rs
+pub use peer_group::{PeerGroupConfig, PeerGroupName, PeerUsername, OutputModality};
+
+// 加到 Config::agents: BTreeMap<String, PeerGroupConfig>
+```
+
+**改动量**: ~150 行新代码 + 已有 schema 集成
+
+### PR 2: 解析器 (`crates/shadow-runtime/src/peers.rs`)
+
+抄 ZeroClaw 的解析器:
+
+```rust
+pub struct ResolvedPeers {
+    pub agent_peers: BTreeMap<String, BTreeSet<String>>,
+    pub external_peers: BTreeMap<String, BTreeSet<String>>,
+}
+
+pub fn resolve_peer_set(config: &Config, agent_alias: &str) -> ResolvedPeers {
+    // 抄 ZeroClaw 的全部 logic
+}
+```
+
+集成到 channel orchestrator:
+```rust
+// orchestrator 收到 message 时:
+let peers = shadow_runtime::peers::resolve_peer_set(&config, &self_handle);
+if !peers.allows_inbound(&channel_type, &origin) { return; }
+```
+
+### PR 3: SubAgentSpawn (`crates/shadow-runtime/src/subagent/`)
+
+这是最大块, 抄 ZeroClaw 458 行 subagent/mod.rs:
+
+```rust
+pub struct SubAgentOverrides { ... }
+pub struct SubAgentContext { ... }
+pub struct SubAgentSpawn { ... }
+
+pub fn for_agent(config: &Config, agent_alias: &str) -> Result<Self>;
+pub fn with_overrides(self, overrides: SubAgentOverrides) -> Result<Self>;
+pub fn build(self) -> Result<SubAgentContext>;
+```
+
+接入 `spawn_subagent` tool 和 cron 的 `JobType::Agent`, 调用 builder。
+
+同时补 EscalationViolation:
+
+```rust
+// crates/shadow-runtime/src/security/escalation.rs
+pub enum EscalationViolation { ... 11 种 ... }
+
+impl SecurityPolicy {
+    pub fn ensure_no_escalation_beyond(&self, parent: &Self) -> Result<(), EscalationViolation>;
+}
+```
+
+## 6. A2A (Agent-to-Agent) Discovery
+
+### 6.1 ZeroClaw 设计
 
 ```toml
 [a2a.server]
 enabled = true
-# agent 发布为可发现的 A2A 服务
+bind = "0.0.0.0"          # 可选, 默认 gateway host
+port = 8443              # 可选, 默认 gateway port
+public_base_url = ""     # 可选, 公开代理 URL
 
-[agents.researcher.a2a]
-published = true
-exposed_skills = ["search", "summarize"]
+[agents.clamps.a2a]
+published = true         # 是否出现在 discovery catalog
+exposed_skills = ["github-pr-workflow"]  # 卡上显示哪些 skill
 ```
 
-- Agent 发布为可发现的服务 (类似 microservice)
-- 其他系统可以通过 HTTP 调用 agent 的技能
-- 双层门控: server.enabled + agent.a2a.published
+A2A 是一个标准协议 (Google), ZeroClaw 在 gateway 暴露 `/.well-known/agents.json`, 包含每个 `published=true` 的 agent 卡片 (含 name/skills/url)。
 
-### 1.4 渠道层
+### 6.2 Shadow 缺什么
 
-```toml
-[channels.telegram.main]
-token = "..."
-# Telegram 渠道
-
-[channels.discord.dev]
-token = "..."
-# Discord 渠道
-```
-
-```rust
-struct Config {
-    agents: HashMap<String, AliasedAgentConfig>,
-    channels: ChannelsConfig,  // Telegram / Discord / Slack / WebSocket / SMS
-}
-```
-
-- 每个 agent 绑定到特定渠道: `agent.channels = ["telegram.main"]`
-- 一个渠道可以服务多个 agent (通过 peer_groups)
-- 渠道负责消息路由 (用户消息 → 正确的 agent)
-
-## 二、Shadow 当前状态
-
-### 2.1 配置结构
-
-```rust
-// Shadow config.toml
-struct Config {
-    agent: AgentSection,        // 单 agent (不是 HashMap)
-    providers: ProvidersConfig,
-    memory: MemorySection,
-}
-
-struct AgentSection {
-    alias: String,              // "shadow"
-    model_provider: String,     // "openai.minimax"
-    model: String,
-    autonomy: String,
-    max_iterations: usize,
-    max_history: usize,
-    system_prompt: Option<String>,
-}
-```
-
-### 2.2 与 ZeroClaw 的差距
-
-| 维度 | ZeroClaw | Shadow | 差距 |
-|------|----------|--------|------|
-| Agent 数量 | HashMap (多 agent) | 单 AgentSection | P0 |
-| 工作空间隔离 | 每 agent 独立目录 + jailed | 共享进程目录 | P1 |
-| 跨 agent 文件访问 | access 白名单 | 不需要 (单 agent) | P2 |
-| 记忆隔离 | 每 agent 独立 memory.db | 单 memory.db | P1 |
-| 跨 agent 记忆 | read_memory_from 白名单 | 不需要 | P2 |
-| 任务委派 | DelegateTool | 无 | P2 |
-| 子 agent | SpawnSubagentTool | 无 | P2 |
-| Peer 组 | PeerGroupConfig | 无 | P3 |
-| A2A 协议 | A2A server + published | 无 | P3 |
-| 渠道集成 | Telegram/Discord/Slack | 无 | P2 |
-| Memory backend 选择 | 每 agent 选 backend | 全局一个 | P1 |
-| risk_profile | 每 agent 选风险等级 | 全局一个 autonomy | P2 |
-
-## 三、Shadow 多用户演进路线
-
-### 层级 1: 多 Agent 配置 (最小改动, P0)
-
-改动范围: shadow-config + TUI/CLI 启动逻辑
-
-```toml
-# ~/.shadow/config.toml
-
-[agents.default]
-alias = "shadow"
-model_provider = "openai.minimax"
-model = "MiniMax-M2.7"
-autonomy = "full"
-max_iterations = 10
-
-[agents.coder]
-alias = "coder"
-model_provider = "openai.glm"
-model = "GLM-4.7"
-autonomy = "supervised"
-system_prompt = "你是一个编程助手"
-
-[agents.writer]
-alias = "writer"
-model_provider = "openai.minimax"
-model = "MiniMax-M2.7"
-system_prompt = "你是一个写作助手"
-```
-
-```rust
-// shadow-config/src/schema.rs
-struct Config {
-    // 旧: agent: AgentSection
-    // 新: agents: HashMap<String, AgentSection>
-    agents: HashMap<String, AgentSection>,
-    // 向后兼容: 如果 config.toml 只有 [agent] 段, 迁移为 agents.default
-}
-
-// 启动时选择 agent
-// shadow chat -m "hello" --agent coder
-// shadow chat  # 默认用 agents.default
-```
-
-改动点:
-- Config.agent → Config.agents: HashMap<String, AgentSection>
-- 迁移逻辑: 旧 [agent] 段自动迁移为 [agents.default]
-- CLI: --agent <name> 参数选择 agent
-- TUI: 启动时选择 agent (或默认 default)
-- build_agent() 接收 AgentSection 参数
-
-不需要改:
-- Agent 结构 (已经是通用设计)
-- Provider/Memory/Tool/Observer (都是 trait, 不绑定具体 agent)
-- SkillsService (从 agent 的 workspace 加载)
-
-### 层级 2: 工作空间隔离 (P1)
-
-改动范围: shadow-config + shadow-runtime (ShellTool/FileRead/FileWrite)
-
-```rust
-struct AgentSection {
-    alias: String,
-    model_provider: String,
-    // 新增:
-    workspace: Option<PathBuf>,  // None = ~/.shadow/agents/<alias>/
-}
-
-// 工作目录结构:
-// ~/.shadow/agents/<alias>/
-//   ├── memory.db
-//   ├── sessions/
-//   ├── skills/
-//   └── logs/
-```
-
-改动点:
-- AgentSection 加 workspace 字段
-- ShellTool/FileReadTool/FileWriteTool 限制在 workspace 内 (PathGuardedTool)
-- Memory/SessionStore/SkillsService 从 agent 的 workspace 加载
-- config_dir() 改为 agent_workspace_dir(alias)
-
-不需要:
-- 跨 agent 文件访问 (access 白名单) -- 单用户场景不需要
-- unrestricted_filesystem -- Shadow 信任用户
-
-### 层级 3: 跨 Agent 通信 (P2)
-
-改动范围: shadow-runtime (DelegateTool)
-
-```rust
-// DelegateTool: agent A 委托任务给 agent B
-// 1. Agent A 的 LLM 调用 delegate(target="coder", task="写排序函数")
-// 2. DelegateTool 查找 config.agents["coder"]
-// 3. 创建临时 Agent B (用 coder 的 provider/memory/tools)
-// 4. Agent B 执行 task
-// 5. 结果返回给 Agent A
-```
-
-改动点:
-- DelegateTool 实现 (持有 Config 引用, 按名字创建临时 Agent)
-- Agent 构建支持 "临时模式" (不持久化 session, 不加载全部技能)
-
-不需要:
-- SpawnSubagentTool (太复杂, DelegateTool 够用)
-- PeerGroup (需要渠道集成)
-- A2A 协议 (需要 HTTP 服务)
-
-### 层级 4: 渠道集成 (P2/P3)
-
-改动范围: 新建 shadow-channels crate
-
-```
-shadow-channels/
-├── telegram.rs    # Telegram Bot API
-├── discord.rs     # Discord Bot API
-└── webhook.rs     # HTTP Webhook
-```
-
-- 消息路由: 用户消息 → 正确的 agent
-- 每个 agent 绑定渠道: `agent.channels = ["telegram.main"]`
-- 需要长连接 (tokio + telegram-bot-api)
-
-### 不做的 (刻意精简)
-
-| 功能 | 原因 |
+| 组件 | 状态 |
 |------|------|
-| AccessMode 白名单 | 单用户, 不需要跨 agent 文件控制 |
-| read_memory_from | 单用户, 不需要跨 agent 记忆共享 |
-| unrestricted_filesystem | Shadow 信任用户, 不需要审计 |
-| SpawnSubagentTool | DelegateTool 够用 |
-| PeerGroup | 需要渠道, 太复杂 |
-| A2A 协议 | 需要 HTTP 服务, 太复杂 |
-| risk_profile | 用 autonomy 字段够了 |
-| MemoryBackendKind 选择 | 全局 sqlite 够用, 不需要每 agent 选 |
-| Skill bundle 系统 | 直接从 workspace/skills/ 加载 |
+| `[a2a.server]` config | ❌ |
+| `[agents.<alias>.a2a]` config | ❌ |
+| A2aServerSection (默认关闭) | ❌ |
+| AgentA2aConfig (per-alias 开关) | ❌ |
+| shadow-gateway crate (HTTPS, well-known routes) | ❌ (空壳) |
+| 卡片 JSON 序列化 | ❌ |
 
-## 四、建议的实施顺序
+### 6.3 A2A 工作量评估
 
-```
-现在 (main 分支):
-  单 agent, 共享目录, 单 memory
+| 子任务 | 行数估 | 说明 |
+|------|--------|------|
+| A2aServerConfig + AgentA2aConfig | ~100 | 抄 struct |
+| shadow-gateway 加 a2a 模块 | ~300 | axum routes + 卡片序列化 |
+| exposure_skills 过滤 | ~50 | 从 SkillsService::resolve_effective_skills 提取 |
+| 集成到 orchestrator | ~100 | 注册 a2a routes |
 
-Step 1 (层级 1): 多 Agent 配置
-  Config.agents: HashMap
-  --agent 参数选择
-  向后兼容迁移
+A2A 总体 ~600 行, 工作量大, 但都是 axum + serde 模板化代码。
 
-Step 2 (层级 2): 工作空间隔离
-  每 agent 独立目录
-  PathGuardedTool 限制路径
-  独立 memory/sessions/skills
+## 7. 内存多 Agent (关键)
 
-Step 3 (层级 3): 跨 Agent 通信
-  DelegateTool
-  临时 Agent 创建
+### 7.1 Shadow 当前 AgentScoped 能力
 
-Step 4 (层级 4): 渠道集成 (如有需求)
-  Telegram/Discord
-  消息路由
+```rust
+// Shadow agent_scoped.rs (抄 ZeroClaw):
+pub struct AgentScopedMemory {
+    inner: Arc<dyn Memory>,
+    agent_id: String,
+    allowed_agent_ids: HashSet<String>,
+}
 ```
 
-每一步都是增量改进, 不破坏现有功能。
-层级 1 的改动最小 (只改 config + 启动逻辑), 可以先做。
+✅ 已完整。`read_memory_from` allowlist 通过后端 UUID 解析后传入:
+
+```rust
+// shadow-memory/src/lib.rs:
+let inner = create_memory_with_storage_and_routes(...)?;   // Sqlite
+let inner_arc: Arc<dyn Memory> = Arc::from(inner);
+
+let bound_id = inner_arc.ensure_agent_uuid(agent_alias).await?;
+let mut allowlist_ids = Vec::new();
+for peer in &agent_cfg.workspace.read_memory_from {
+    let uuid = inner_arc.ensure_agent_uuid(peer.as_str()).await?;
+    allowlist_ids.push(uuid);
+}
+let scoped = AgentScopedMemory::new(inner_arc, bound_id, allowlist_ids);
+```
+
+✅ Shadow 已做。缺的是 **Config::validate() 校验**:
+- 每个 `read_memory_from.alias` 在 `agents` 表存在
+- **同后端**: 不能让 SQLite agent recall postgres agent (混合 UUID)
+
+```rust
+// shadow-config/src/validation.rs (新增)
+impl Config {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        for (alias, agent) in &self.agents {
+            // 1. own backend 合法
+            if !valid_backends.contains(&agent.memory.backend) {
+                bail!("agents.{alias}: unknown backend");
+            }
+
+            // 2. read_memory_from 同后端
+            for peer_alias in &agent.workspace.read_memory_from {
+                let peer = self.agents.get(peer_alias.as_str()).ok_or(...)?;
+                if peer.memory.backend != agent.memory.backend {
+                    bail!("agents.{alias}.read_memory_from.{peer_alias}: cross-backend disallowed");
+                }
+            }
+        }
+        Ok(())
+    }
+}
+```
+
+### 7.2 跨 Agent recall
+
+```rust
+// shadow-memory/src/agent_scoped.rs 已实现:
+async fn recall(&self, ...) -> Result<Vec<MemoryEntry>> {
+    let allowed = self.allowed_slice();
+    self.inner
+        .recall_for_agents(&allowed, query, limit, session_id, since, until)
+        .await
+}
+```
+
+`recall_for_agents` 限定 UUID, 防止越界。✅ 已实现。
+
+## 8. 工作量估计
+
+| PR | 内容 | 行数估 | 时间估 |
+|----|------|--------|--------|
+| PR 1 | peer_group config | ~150 + 200 集成 | 1 天 |
+| PR 2 | peers.rs 解析器 | ~200 | 1 天 |
+| PR 3 | SubAgentSpawn + EscalationViolation | ~700 | 3 天 |
+| PR 4 | Config::validate 校验 | ~150 | 1 天 |
+| PR 5 | spawn_subagent tool | ~150 | 1 天 |
+| PR 6 | A2A discovery (可选) | ~600 | 3 天 |
+
+总计 (不含 A2A): ~1350 行 + 7 天
+总计 (含 A2A): ~1950 行 + 10 天
+
+## 9. 优先级建议
+
+| 优先级 | 任务 | 原因 |
+|--------|------|------|
+| **P0** | Config::validate 校验 read_memory_from 同后端 | 数据完整性, 缺会崩溃 |
+| **P0** | peer_group config + 解析器 | Shadow 当前多 agent 配置不可用 |
+| **P1** | SubAgentSpawn | 启用 spawn_subagent 工具, agent loop 闭环 |
+| **P1** | EscalationViolation | SubAgent 安全收敛, 不做会越权 |
+| **P2** | cron 集成 spawn_subagent | 时间触发子任务 |
+| **P3** | A2A discovery | 跨进程 agent 发现, 远期 |
+
+## 10. 总结
+
+**Shadow 多 agent 现状**: 数据结构层✅ (AgentWorkspaceConfig/AgentMemoryConfig/AccessMode/read_memory_from), 运行时层❌ (解析器/SubAgent/A2A 缺)。
+
+**ZeroClaw 经验**:
+1. **immutability**: agent 创建后 backend 锁定
+2. **deny-by-default**: access/allowlist 缺失=默认拒绝
+3. **mutual membership**: peer group 自动 mutual peer
+4. **escalation validation**: 11 种 Violation, SubAgent 必须 ≤ parent
+5. **UUID vs alias 分层**: SubAgent 持有 alias, consumer 解析
+
+**落地路径**: 数据结构 → 解析器 → SubAgent (4 PR, ~7 天)。A2A 是远期远景。
+"""
+</content>
