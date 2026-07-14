@@ -6,7 +6,7 @@ use shadow_config::schema::AliasedAgentConfig;
 use std::path::PathBuf;
 use std::sync::Arc;
 use shadow_core::Memory;
-use shadow_core::runtime::RuntimeAdapter;
+use shadow_core::runtime::RuntimePlatformAdapter;
 use shadow_memory::create_memory_for_agent;
 use crate::security::SecurityPolicy;
 
@@ -72,7 +72,7 @@ pub async fn run(
             // todo record
         }
 
-        let runtime: Arc<dyn RuntimeAdapter> = Arc::from(platform::create_runtime(&config.runtime)?);
+        let runtime: Arc<dyn RuntimePlatformAdapter> = Arc::from(platform::create_runtime(&config.runtime)?);
         // todo check is subagent
         let is_subagent_caller = false;
 

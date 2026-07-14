@@ -104,7 +104,7 @@ pub async fn create_memory_for_agent(
 
         for peer in &agent_cfg.workspace.read_memory_from {
             let peer_alias = peer.as_str();
-            let peer_workspace = config.agent_workspace_dir(agent_alias);
+            let peer_workspace = config.agent_workspace_dir(peer_alias);
             peers.push(MarkdownPeer {
                 alias: peer_alias.to_string(),
                 memory: MarkdownMemory::new("markdown", &peer_workspace),
@@ -134,7 +134,7 @@ pub async fn create_memory_for_agent(
     let mut allowlist_ids = Vec::with_capacity(agent_cfg.workspace.read_memory_from.len());
 
     for peer in &agent_cfg.workspace.read_memory_from {
-        let uuid = inner_arc.ensure_agent_uuid(agent_alias).await?;
+        let uuid = inner_arc.ensure_agent_uuid(peer.as_str()).await?;
         allowlist_ids.push(uuid);
     }
     let scoped = AgentScopedMemory::new(inner_arc, bound_id, allowlist_ids);

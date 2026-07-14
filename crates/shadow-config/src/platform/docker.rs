@@ -1,7 +1,7 @@
 use crate::schema::DockerRuntimeConfig;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use shadow_core::runtime::RuntimeAdapter;
+use shadow_core::runtime::RuntimePlatformAdapter;
 
 /// Docker runtime with lightweight container isolation.
 #[derive(Debug, Clone)]
@@ -52,7 +52,7 @@ impl DockerRuntime {
     }
 }
 
-impl RuntimeAdapter for DockerRuntime {
+impl RuntimePlatformAdapter for DockerRuntime {
     fn name(&self) -> &str {
         "docker"
     }
@@ -67,9 +67,9 @@ impl RuntimeAdapter for DockerRuntime {
 
     fn storage_path(&self) -> PathBuf {
         if self.config.mount_workspace {
-            PathBuf::from("/workspace/.zeroclaw")
+            PathBuf::from("/workspace/.shadow")
         } else {
-            PathBuf::from("/tmp/.zeroclaw")
+            PathBuf::from("/tmp/.shadow")
         }
     }
 

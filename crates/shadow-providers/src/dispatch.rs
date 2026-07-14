@@ -47,8 +47,8 @@ impl ProviderDispatch {
     }
 
     /// 同步聊天 -- 返回完整 ChatResponse (含 tool_calls/usage)
-    pub async fn chat(&self, request: ChatRequest<'_>) -> Result<ChatResponse> {
-        self.as_ref().chat(request).await
+    pub async fn chat(&self, request: ChatRequest<'_>, model: &str, temperature: Option<f64>,) -> Result<ChatResponse> {
+        self.as_ref().chat(request, model, temperature).await
     }
     /// 同步聊天 -- 返回完整 ChatResponse (含 tool_calls/usage)
     pub async fn simple_chat(&self, message: &str, model: &str, temperature: Option<f64>) -> Result<String> {
@@ -63,11 +63,14 @@ impl ProviderDispatch {
 
 impl ProviderDispatchRef<'_> {
     /// 同步聊天 -- 自动包裹归因 span
-    pub async fn chat(&self, request: ChatRequest<'_>) -> Result<ChatResponse> {
+    pub async fn chat(&self, request: ChatRequest<'_>, model: &str, temperature: Option<f64>,) -> Result<ChatResponse> {
         let span = shadow_log::attribution_span!(&*self.inner);
-        let model = request.model.clone();
-        let temperature = request.temperature;
-        self.inner.chat(request, &model, temperature).instrument(span).await
+        async move {
+            shadow_log::scope!(
+                model: model,
+               =>  self.inner.chat(request, &model, temperature)
+            ).await
+        }.instrument(span).await
     }
 
     pub async fn simple_chat(&self, message: &str, model: &str, temperature: Option<f64>) -> Result<String> {

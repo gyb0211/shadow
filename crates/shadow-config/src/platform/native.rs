@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use shadow_core::platform::is_android;
-use shadow_core::runtime::RuntimeAdapter;
+use shadow_core::runtime::RuntimePlatformAdapter;
 
 /// Command-line argument passed after `cmd.exe /C`.
 ///
@@ -78,7 +78,7 @@ impl NativeRuntime {
     }
 }
 
-impl RuntimeAdapter for NativeRuntime {
+impl RuntimePlatformAdapter for NativeRuntime {
     fn name(&self) -> &str {
         "native"
     }
@@ -93,8 +93,8 @@ impl RuntimeAdapter for NativeRuntime {
 
     fn storage_path(&self) -> PathBuf {
         directories::UserDirs::new().map_or_else(
-            || PathBuf::from(".zeroclaw"),
-            |u| u.home_dir().join(".zeroclaw"),
+            || PathBuf::from(".shadow"),
+            |u| u.home_dir().join(".shadow"),
         )
     }
 

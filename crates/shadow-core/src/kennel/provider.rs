@@ -1,17 +1,17 @@
 //! 模型提供商 trait -- LLM 推理后端抽象
 
+use crate::ToolSpec;
 use crate::kennel::attribution::Attributable;
 use anyhow::Ok;
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream;
-use serde::{ Deserialize, Serialize };
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::str;
 use std::sync::Arc;
-use crate::ToolSpec;
 
 /// 聊天消息
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -22,7 +22,10 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn system(message: impl Into<String>) -> Self {
-        Self { role: "system".to_string(), content: message.into() }
+        Self {
+            role: "system".to_string(),
+            content: message.into(),
+        }
     }
 }
 
@@ -30,10 +33,13 @@ impl ChatMessage {
 #[derive(Debug, Clone)]
 pub struct ChatRequest<'a> {
     pub messages: &'a [ChatMessage],
-    pub model: String,
-    pub temperature: Option<f64>,
-    pub max_tokens: Option<u32>,
     pub tools: Option<&'a [ToolSpec]>,
+    pub thinking: Option<NativeThinkingParams>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NativeThinkingParams {
+    pub budget_tokens: u32,
 }
 
 /// 聊天响应
@@ -71,7 +77,10 @@ pub struct StreamOptions {
 
 impl StreamOptions {
     pub fn new(enabled: bool) -> Self {
-        Self { enabled, count_tokens: false }
+        Self {
+            enabled,
+            count_tokens: false,
+        }
     }
 
     pub fn with_token_count(mut self) -> Self {
@@ -82,11 +91,16 @@ impl StreamOptions {
 
 #[derive(Debug, thiserror::Error)]
 pub enum StreamError {
-    #[error("HTTP error: {0}")] HTTP(String),
-    #[error("JSON parse error: {0}")] JSON(serde_json::Error),
-    #[error("Invalid SSE format: {0}")] InvalidSse(String),
-    #[error("ModelProvider error: {0}")] ModelProvider(String),
-    #[error("IO error: {0}")] IO(#[from] std::io::Error),
+    #[error("HTTP error: {0}")]
+    HTTP(String),
+    #[error("JSON parse error: {0}")]
+    JSON(serde_json::Error),
+    #[error("Invalid SSE format: {0}")]
+    InvalidSse(String),
+    #[error("ModelProvider error: {0}")]
+    ModelProvider(String),
+    #[error("IO error: {0}")]
+    IO(#[from] std::io::Error),
 }
 
 type StreamResult<T> = std::result::Result<T, StreamError>;
@@ -105,16 +119,36 @@ pub struct StreamChunk {
 
 impl StreamChunk {
     pub fn delta(text: impl Into<String>) -> Self {
-        Self { delta: text.into(), reasoning: None, is_final: false, token_count: 0 }
+        Self {
+            delta: text.into(),
+            reasoning: None,
+            is_final: false,
+            token_count: 0,
+        }
     }
     pub fn reasoning(text: impl Into<String>) -> Self {
-        Self { delta: String::new(), reasoning: Some(text.into()), is_final: false, token_count: 0 }
+        Self {
+            delta: String::new(),
+            reasoning: Some(text.into()),
+            is_final: false,
+            token_count: 0,
+        }
     }
     pub fn final_chunk() -> Self {
-        Self { delta: String::new(), reasoning: None, is_final: true, token_count: 0 }
+        Self {
+            delta: String::new(),
+            reasoning: None,
+            is_final: true,
+            token_count: 0,
+        }
     }
     pub fn error(message: impl Into<String>) -> Self {
-        Self { delta: message.into(), reasoning: None, is_final: true, token_count: 0 }
+        Self {
+            delta: message.into(),
+            reasoning: None,
+            is_final: true,
+            token_count: 0,
+        }
     }
     pub fn with_token_estimate(mut self) -> Self {
         self.token_count = self.delta.len().div_ceil(4);
@@ -146,14 +180,12 @@ pub enum AuthStyle {
 /// 在调用 reqwest 时做一次转换.
 #[derive(Debug, Clone, Default)]
 pub struct ModelProviderRuntimeOptions {
-    
-    
-    pub provider_kind:Option<String>,
-    
+    pub provider_kind: Option<String>,
+
     pub provider_api_url: Option<String>,
-    
+
     pub native_tools: Option<bool>,
-    
+
     /// HTTP 请求超时 (None = reqwest 默认)
     pub timeout: Option<std::time::Duration>,
     /// 推理强度 (如 "low" / "medium" / "high"), OpenAI o-series / Anthropic 用
@@ -239,7 +271,9 @@ pub trait ModelProvider: Attributable {
     }
 
     fn convert_tools(&self, tools: &[ToolSpec]) -> ToolsPayload {
-        ToolsPayload::PromptGuided { instructions: build_tool_instructions_text(tools) }
+        ToolsPayload::PromptGuided {
+            instructions: build_tool_instructions_text(tools),
+        }
     }
 
     fn supports_native_tools(&self) -> bool {
@@ -257,9 +291,10 @@ pub trait ModelProvider: Attributable {
         &self,
         message: &str,
         model: &str,
-        temperature: Option<f64>
+        temperature: Option<f64>,
     ) -> Result<String> {
-        self.chat_with_system(None, message, model, temperature).await
+        self.chat_with_system(None, message, model, temperature)
+            .await
     }
 
     async fn chat_with_system(
@@ -267,7 +302,7 @@ pub trait ModelProvider: Attributable {
         system_prompt: Option<&str>,
         message: &str,
         model: &str,
-        temperature: Option<f64>
+        temperature: Option<f64>,
     ) -> Result<String>;
 
     /// 列出可用模型
@@ -276,20 +311,19 @@ pub trait ModelProvider: Attributable {
     }
 
     async fn list_models_with_pricing(&self) -> Result<Vec<ModelInfo>> {
-        Ok(
-            self
-                .list_models().await?
-                .into_iter()
-                .map(|id| ModelInfo { id, pricing: None })
-                .collect()
-        )
+        Ok(self
+            .list_models()
+            .await?
+            .into_iter()
+            .map(|id| ModelInfo { id, pricing: None })
+            .collect())
     }
 
     async fn chat_with_history(
         &self,
         messages: &[ChatMessage],
         model: &str,
-        temperature: Option<f64>
+        temperature: Option<f64>,
     ) -> Result<String> {
         let system = messages
             .iter()
@@ -300,28 +334,35 @@ pub trait ModelProvider: Attributable {
             .rfind(|m| m.role == "user")
             .map(|m| m.content.as_str())
             .unwrap_or("");
-        self.chat_with_system(system, user, model, temperature).await
+        self.chat_with_system(system, user, model, temperature)
+            .await
     }
 
     async fn chat(
         &self,
         request: ChatRequest<'_>,
         model: &str,
-        temperature: Option<f64>
+        temperature: Option<f64>,
     ) -> Result<ChatResponse> {
-        if let Some(tools) = request.tools && !tools.is_empty() && self.supports_native_tools() {
+        // 有工具 且provider不支持工具 ， 就要把工具信息放到system_prompt中
+        if let Some(tools) = request.tools
+            && !tools.is_empty()
+            && !self.supports_native_tools()
+        {
+            // 必须是 prompt 引导的方式才能注入
+            // 如果impl 修改了convert_tools这里 就必须要支持tool
             let tool_instructions = match self.convert_tools(tools) {
                 ToolsPayload::PromptGuided { instructions } => instructions,
                 payload => {
                     anyhow::bail!(
-                        "ModelProvider retunred non-prompt-guided tools payload ({payload:?}) while supports_native_tools() is false"
+                        "ModelProvider returned non-prompt-guided tools payload ({payload:?}) while supports_native_tools() is false"
                     )
                 }
             };
-
+            // 修改system_prompt 注入工具信息
             let mut modified_messages = request.messages.to_vec();
-
-            if let Some(system_message) = modified_messages.iter_mut().find(|m| m.role == "system") {
+            if let Some(system_message) = modified_messages.iter_mut().find(|m| m.role == "system")
+            {
                 if !system_message.content.is_empty() {
                     system_message.content.push_str("\n\n");
                 }
@@ -330,7 +371,9 @@ pub trait ModelProvider: Attributable {
                 modified_messages.insert(0, ChatMessage::system(tool_instructions));
             }
 
-            let text = self.chat_with_history(&modified_messages, model, temperature).await?;
+            let text = self
+                .chat_with_history(&modified_messages, model, temperature)
+                .await?;
             return Ok(ChatResponse {
                 text: Some(text),
                 tool_calls: vec![],
@@ -339,12 +382,16 @@ pub trait ModelProvider: Attributable {
             });
         }
 
-        let text = self.chat_with_history(request.messages, model, temperature).await?;
+        // 如果impl支持tool。 那就让他自己实现， default中不帮impl做
+        // 默认： 支持工具调用 但是 不知道怎么支持的，所以 不注入工具
+        let text = self
+            .chat_with_history(request.messages, model, temperature)
+            .await?;
 
         Ok(ChatResponse {
             text: Some(text),
-                tool_calls: vec![],
-                reasoning_content: None,
+            tool_calls: vec![],
+            reasoning_content: None,
             usage: None,
         })
     }
@@ -354,13 +401,13 @@ pub trait ModelProvider: Attributable {
         messages: &[ChatMessage],
         _tools: &[serde_json::Value],
         model: &str,
-        temperature: Option<f64>
+        temperature: Option<f64>,
     ) -> Result<ChatResponse> {
         let text = self.chat_with_history(messages, model, temperature).await?;
         Ok(ChatResponse {
             text: Some(text),
-                tool_calls: vec![],
-                reasoning_content: None,
+            tool_calls: vec![],
+            reasoning_content: None,
             usage: None,
         })
     }
@@ -379,7 +426,7 @@ pub trait ModelProvider: Attributable {
         _message: &str,
         _model: &str,
         _temperature: Option<f64>,
-        _options: StreamOptions
+        _options: StreamOptions,
     ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
         stream::empty().boxed()
     }
@@ -389,7 +436,7 @@ pub trait ModelProvider: Attributable {
         messages: &[ChatMessage],
         model: &str,
         temperature: Option<f64>,
-        options: StreamOptions
+        options: StreamOptions,
     ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
         let system = messages
             .iter()
@@ -408,152 +455,159 @@ pub trait ModelProvider: Attributable {
         request: ChatRequest<'_>,
         model: &str,
         temperature: Option<f64>,
-        options: StreamOptions
+        options: StreamOptions,
     ) -> stream::BoxStream<'static, StreamResult<StreamEvent>> {
         self.stream_chat_with_history(request.messages, model, temperature, options)
             .map(|chunk_result| chunk_result.map(StreamEvent::from_chunk))
             .boxed()
     }
 }
-
-#[async_trait]
-impl<T: ModelProvider + ?Sized> ModelProvider for Arc<T> {
-    fn capabilities(&self) -> ProviderCapabilities {
-        self.as_ref().capabilities()
-    }
-
-    fn default_max_token(&self) -> u32 {
-        self.as_ref().default_max_token()
-    }
-    fn default_temperature(&self) -> f64 {
-        self.as_ref().default_temperature()
-    }
-
-    fn default_timeout_secs(&self) -> u64 {
-        self.as_ref().default_timeout_secs()
-    }
-
-    fn default_base_url(&self) -> Option<&str> {
-        self.as_ref().default_base_url()
-    }
-
-    fn default_wire_api(&self) -> &str {
-        self.as_ref().default_wire_api()
-    }
-
-    fn convert_tools(&self, tools: &[ToolSpec]) -> ToolsPayload {
-        self.as_ref().convert_tools(tools)
-    }
-
-    fn supports_native_tools(&self) -> bool {
-        self.as_ref().supports_native_tools()
-    }
-
-    fn supports_vision(&self) -> bool {
-        self.as_ref().supports_vision()
-    }
-
-    async fn chat_with_system(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
-        temperature: Option<f64>
-    ) -> anyhow::Result<String> {
-        self.as_ref().chat_with_system(system_prompt, message, model, temperature).await
-    }
-
-    async fn chat_with_history(
-        &self,
-        messages: &[ChatMessage],
-        model: &str,
-        temperature: Option<f64>
-    ) -> anyhow::Result<String> {
-        self.as_ref().chat_with_history(messages, model, temperature).await
-    }
-
-    async fn chat(
-        &self,
-        request: ChatRequest<'_>,
-        model: &str,
-        temperature: Option<f64>
-    ) -> anyhow::Result<ChatResponse> {
-        self.as_ref().chat(request, model, temperature).await
-    }
-
-    async fn warmup(&self) -> anyhow::Result<()> {
-        self.as_ref().warmup().await
-    }
-
-    async fn chat_with_tools(
-        &self,
-        messages: &[ChatMessage],
-        tools: &[serde_json::Value],
-        model: &str,
-        temperature: Option<f64>
-    ) -> anyhow::Result<ChatResponse> {
-        self.as_ref().chat_with_tools(messages, tools, model, temperature).await
-    }
-
-    fn supports_streaming(&self) -> bool {
-        self.as_ref().supports_streaming()
-    }
-
-    fn supports_streaming_tool_events(&self) -> bool {
-        self.as_ref().supports_streaming_tool_events()
-    }
-
-    fn stream_chat_with_system(
-        &self,
-        system_prompt: Option<&str>,
-        message: &str,
-        model: &str,
-        temperature: Option<f64>,
-        options: StreamOptions
-    ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
-        self.as_ref().stream_chat_with_system(system_prompt, message, model, temperature, options)
-    }
-
-    fn stream_chat_with_history(
-        &self,
-        messages: &[ChatMessage],
-        model: &str,
-        temperature: Option<f64>,
-        options: StreamOptions
-    ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
-        self.as_ref().stream_chat_with_history(messages, model, temperature, options)
-    }
-
-    fn stream_chat(
-        &self,
-        request: ChatRequest<'_>,
-        model: &str,
-        temperature: Option<f64>,
-        options: StreamOptions
-    ) -> stream::BoxStream<'static, StreamResult<StreamEvent>> {
-        self.as_ref().stream_chat(request, model, temperature, options)
-    }
-}
+//
+// #[async_trait]
+// impl<T: ModelProvider + ?Sized> ModelProvider for Arc<T> {
+//     fn capabilities(&self) -> ProviderCapabilities {
+//         self.as_ref().capabilities()
+//     }
+//
+//     fn default_max_token(&self) -> u32 {
+//         self.as_ref().default_max_token()
+//     }
+//     fn default_temperature(&self) -> f64 {
+//         self.as_ref().default_temperature()
+//     }
+//
+//     fn default_timeout_secs(&self) -> u64 {
+//         self.as_ref().default_timeout_secs()
+//     }
+//
+//     fn default_base_url(&self) -> Option<&str> {
+//         self.as_ref().default_base_url()
+//     }
+//
+//     fn default_wire_api(&self) -> &str {
+//         self.as_ref().default_wire_api()
+//     }
+//
+//     fn convert_tools(&self, tools: &[ToolSpec]) -> ToolsPayload {
+//         self.as_ref().convert_tools(tools)
+//     }
+//
+//     fn supports_native_tools(&self) -> bool {
+//         self.as_ref().supports_native_tools()
+//     }
+//
+//     fn supports_vision(&self) -> bool {
+//         self.as_ref().supports_vision()
+//     }
+//
+//     async fn chat_with_system(
+//         &self,
+//         system_prompt: Option<&str>,
+//         message: &str,
+//         model: &str,
+//         temperature: Option<f64>,
+//     ) -> anyhow::Result<String> {
+//         self.as_ref()
+//             .chat_with_system(system_prompt, message, model, temperature)
+//             .await
+//     }
+//
+//     async fn chat_with_history(
+//         &self,
+//         messages: &[ChatMessage],
+//         model: &str,
+//         temperature: Option<f64>,
+//     ) -> anyhow::Result<String> {
+//         self.as_ref()
+//             .chat_with_history(messages, model, temperature)
+//             .await
+//     }
+//
+//     async fn chat(
+//         &self,
+//         request: ChatRequest<'_>,
+//         model: &str,
+//         temperature: Option<f64>,
+//     ) -> anyhow::Result<ChatResponse> {
+//         self.as_ref().chat(request, model, temperature).await
+//     }
+//
+//     async fn warmup(&self) -> anyhow::Result<()> {
+//         self.as_ref().warmup().await
+//     }
+//
+//     async fn chat_with_tools(
+//         &self,
+//         messages: &[ChatMessage],
+//         tools: &[serde_json::Value],
+//         model: &str,
+//         temperature: Option<f64>,
+//     ) -> anyhow::Result<ChatResponse> {
+//         self.as_ref()
+//             .chat_with_tools(messages, tools, model, temperature)
+//             .await
+//     }
+//
+//     fn supports_streaming(&self) -> bool {
+//         self.as_ref().supports_streaming()
+//     }
+//
+//     fn supports_streaming_tool_events(&self) -> bool {
+//         self.as_ref().supports_streaming_tool_events()
+//     }
+//
+//     fn stream_chat_with_system(
+//         &self,
+//         system_prompt: Option<&str>,
+//         message: &str,
+//         model: &str,
+//         temperature: Option<f64>,
+//         options: StreamOptions,
+//     ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
+//         self.as_ref()
+//             .stream_chat_with_system(system_prompt, message, model, temperature, options)
+//     }
+//
+//     fn stream_chat_with_history(
+//         &self,
+//         messages: &[ChatMessage],
+//         model: &str,
+//         temperature: Option<f64>,
+//         options: StreamOptions,
+//     ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
+//         self.as_ref()
+//             .stream_chat_with_history(messages, model, temperature, options)
+//     }
+//
+//     fn stream_chat(
+//         &self,
+//         request: ChatRequest<'_>,
+//         model: &str,
+//         temperature: Option<f64>,
+//         options: StreamOptions,
+//     ) -> stream::BoxStream<'static, StreamResult<StreamEvent>> {
+//         self.as_ref()
+//             .stream_chat(request, model, temperature, options)
+//     }
+// }
 
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
     TextDelte(StreamChunk),
     ToolCall(ToolCall),
-    PreExecutedToolCall {
-        name: String,
-        args: String,
-    },
-    PreExecutedToolResult {
-        name: String,
-        output: String,
-    },
+    PreExecutedToolCall { name: String, args: String },
+    PreExecutedToolResult { name: String, output: String },
     Usage(TokenUsage),
     Final,
 }
 
 impl StreamEvent {
     pub fn from_chunk(chunk: StreamChunk) -> Self {
-        if chunk.is_final { Self::Final } else { Self::TextDelte(chunk) }
+        if chunk.is_final {
+            Self::Final
+        } else {
+            Self::TextDelte(chunk)
+        }
     }
 }
 
@@ -567,22 +621,18 @@ pub fn build_tool_instructions_text(tools: &[ToolSpec]) -> String {
     instructions.push_str("\n</tool_call>\n\n");
     instructions.push_str("You may use multiple tool calls in a single response. ");
     instructions.push_str("After tool execution, results appear in <tool_result> tags. ");
-    instructions.push_str(
-        "Continue reasoning with the results until you can give a final answer.\n\n"
-    );
+    instructions
+        .push_str("Continue reasoning with the results until you can give a final answer.\n\n");
     instructions.push_str("### Available Tools\n\n");
 
     for tool in tools {
-        writeln!(&mut instructions, "**{}**: {}", tool.name, tool.description).expect(
-            "writing to String cannot fail"
-        );
+        writeln!(&mut instructions, "**{}**: {}", tool.name, tool.description)
+            .expect("writing to String cannot fail");
 
-        let parameters = serde_json
-            ::to_string(&tool.parameters)
-            .unwrap_or_else(|_| "{}".to_string());
-        writeln!(&mut instructions, "Parameters: `{parameters}`").expect(
-            "writing to String cannot fail"
-        );
+        let parameters =
+            serde_json::to_string(&tool.parameters).unwrap_or_else(|_| "{}".to_string());
+        writeln!(&mut instructions, "Parameters: `{parameters}`")
+            .expect("writing to String cannot fail");
         instructions.push('\n');
     }
 

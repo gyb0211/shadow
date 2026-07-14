@@ -2,12 +2,12 @@ pub mod native;
 pub mod docker;
 
 use shadow_core::platform;
-use shadow_core::runtime::RuntimeAdapter;
+use shadow_core::runtime::RuntimePlatformAdapter;
 use crate::{RuntimeConfig, RuntimeKind};
 use crate::platform::docker::DockerRuntime;
 use crate::platform::native::NativeRuntime;
 
-pub fn create_runtime(config: &RuntimeConfig) -> anyhow::Result<Box<dyn RuntimeAdapter>> {
+pub fn create_runtime(config: &RuntimeConfig) -> anyhow::Result<Box<dyn RuntimePlatformAdapter>> {
     match config.kind {
         RuntimeKind::Native => {
             let shell = config.shell.clone().unwrap_or_else(|| "sh".into());

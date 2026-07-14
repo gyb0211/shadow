@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use anyhow::Result;
 
-pub trait RuntimeAdapter: Send + Sync {
+pub trait RuntimePlatformAdapter: Send + Sync {
     /// 运行时所在的环境
     /// docker. native.
     fn name(&self) -> &str;

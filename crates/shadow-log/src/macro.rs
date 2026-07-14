@@ -42,6 +42,19 @@ macro_rules! record {
     }};
 }
 
+
+#[macro_export]
+macro_rules! scope {
+    ($($key:ident : $value:expr),+ $(,)? => $body:expr) => {{
+        use $crate::__private::tracing::Instrument;
+        ($body).instrument($crate::__private::tracing::info_span!(
+            target: "shadow_log_internal_scope",
+            "shadow_scope",
+            $($key = %($value)),+
+        ))
+    }};
+}
+
 /// 打开归因 span -- 从 Attributable 对象自动填充归因字段
 #[macro_export]
 macro_rules! attribution_span {
