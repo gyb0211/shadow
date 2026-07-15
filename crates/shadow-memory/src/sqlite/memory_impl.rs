@@ -1,22 +1,115 @@
-//! SQLite memory -- 读路径 (query / export / stats)
+//! SQLite memory -- `impl Memory for SqliteMemory` 完整实现
 //!
-//! 所有方法都是 `impl SqliteMemory` 的 `pub(super)` inherent 方法,
-//! 由 `mod.rs` 的 `impl Memory` trait 方法委托调用。
+//! trait 方法自带实现体, 不做 `_inner` 委托拆分。
+//! 仅 store 路径委托到 [`store::store_row_with_metadata`] (合理的 API 分层)。
 
-use crate::sqlite::util::{category_to_str, decode_kind, is_prefix_wildcard_term, like_fallback_matches, like_search_pattern, str_to_category};
+use crate::embedding::{create_embedding_provider, EmbeddingProvider};
+use crate::sqlite::agent::sqlite_ensure_agent_uuid;
+use crate::sqlite::util::{
+    category_to_str, decode_kind, is_prefix_wildcard_term, like_fallback_matches,
+    like_search_pattern, str_to_category,
+};
 use crate::sqlite::SqliteMemory;
 use crate::vector;
+use async_trait::async_trait;
 use rusqlite::params;
 use shadow_config::schema::SearchMode;
-use shadow_core::kennel::memory::{is_recent_recall_query, ExportFilter, MemoryStats};
-use shadow_core::MemoryCategory;
-use shadow_core::MemoryEntry;
+use shadow_core::kennel::memory::{is_recent_recall_query, ExportFilter, MemoryStats, StoreOptions};
+use shadow_core::{Memory, MemoryCategory, MemoryEntry};
 use std::collections::HashSet;
 use std::fmt::Write as _;
+use std::sync::Arc;
 
-impl SqliteMemory {
-    /// [`Memory::recall`](shadow_core::Memory::recall) 的实现。
-    pub(super) async fn recall_inner(
+#[async_trait]
+impl Memory for SqliteMemory {
+    fn name(&self) -> &str {
+        "sqlite"
+    }
+
+    // ── store 路径 (委托 store_row_with_metadata) ─────────────────
+
+    async fn store(
+        &self,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        session_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.store_row_with_metadata(
+            key,
+            content,
+            category,
+            session_id,
+            StoreOptions::default(),
+            None,
+        )
+        .await
+    }
+
+    async fn store_with_metadata(
+        &self,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        session_id: Option<&str>,
+        namespace: Option<&str>,
+        importance: Option<f64>,
+    ) -> anyhow::Result<()> {
+        self.store_row_with_metadata(
+            key,
+            content,
+            category,
+            session_id,
+            StoreOptions {
+                namespace: namespace.map(str::to_string),
+                importance,
+                ..StoreOptions::default()
+            },
+            None,
+        )
+        .await
+    }
+
+    async fn store_with_options(
+        &self,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        session_id: Option<&str>,
+        options: StoreOptions,
+    ) -> anyhow::Result<()> {
+        self.store_row_with_metadata(key, content, category, session_id, options, None)
+            .await
+    }
+
+    async fn store_with_agent(
+        &self,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        session_id: Option<&str>,
+        namespace: Option<&str>,
+        importance: Option<f64>,
+        agent_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.store_row_with_metadata(
+            key,
+            content,
+            category,
+            session_id,
+            StoreOptions {
+                namespace: namespace.map(str::to_string),
+                importance,
+                ..StoreOptions::default()
+            },
+            agent_id,
+        )
+        .await
+    }
+
+    // ── recall / query 路径 ────────────────────────────────────────
+
+    async fn recall(
         &self,
         query: &str,
         limit: usize,
@@ -280,11 +373,7 @@ impl SqliteMemory {
         .await?
     }
 
-    /// [`Memory::get`](shadow_core::Memory::get) 的实现。
-    pub(super) async fn get_inner(
-        &self,
-        key: &str,
-    ) -> anyhow::Result<Option<MemoryEntry>> {
+    async fn get(&self, key: &str) -> anyhow::Result<Option<MemoryEntry>> {
         let conn = self.conn.clone();
         let key = key.to_string();
 
@@ -324,8 +413,7 @@ impl SqliteMemory {
         .await?
     }
 
-    /// [`Memory::get_for_agent`](shadow_core::Memory::get_for_agent) 的实现。
-    pub(super) async fn get_for_agent_inner(
+    async fn get_for_agent(
         &self,
         key: &str,
         agent_id: &str,
@@ -370,8 +458,7 @@ impl SqliteMemory {
         .await?
     }
 
-    /// [`Memory::list`](shadow_core::Memory::list) 的实现。
-    pub(super) async fn list_inner(
+    async fn list(
         &self,
         category: Option<&MemoryCategory>,
         session_id: Option<&str>,
@@ -447,11 +534,97 @@ impl SqliteMemory {
         .await?
     }
 
-    /// [`Memory::export`](shadow_core::Memory::export) 的实现。
-    pub(super) async fn export_inner(
+    async fn recall_namespaced(
         &self,
-        filter: &ExportFilter,
+        namespace: &str,
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
     ) -> anyhow::Result<Vec<MemoryEntry>> {
+        let entries = self
+            .recall(query, limit * 2, session_id, since, until)
+            .await?;
+        let filtered: Vec<MemoryEntry> = entries
+            .into_iter()
+            .filter(|e| e.namespace == namespace)
+            .take(limit)
+            .collect();
+        Ok(filtered)
+    }
+
+    async fn recall_for_agents(
+        &self,
+        allowed_agent_ids: &[&str],
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+    ) -> anyhow::Result<Vec<MemoryEntry>> {
+        if allowed_agent_ids.is_empty() {
+            return self.recall(query, limit, session_id, since, until).await;
+        }
+
+        let full_candidate_limit = self.count().await?.max(limit);
+        let raw = self
+            .recall(query, full_candidate_limit, session_id, since, until)
+            .await?;
+        if raw.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let conn = self.conn.clone();
+        let ids: Vec<String> = raw.iter().map(|e| e.id.clone()).collect();
+        let allowed: Vec<String> = allowed_agent_ids.iter().map(|s| (*s).to_string()).collect();
+
+        let kept: HashSet<String> =
+            tokio::task::spawn_blocking(move || -> anyhow::Result<HashSet<String>> {
+                let conn = conn.lock();
+                let id_placeholders: String = (1..=ids.len())
+                    .map(|i| format!("?{i}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let agent_placeholders: String = (ids.len() + 1..=ids.len() + allowed.len())
+                    .map(|i| format!("?{i}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let sql = format!(
+                    "SELECT id FROM memories \
+                     WHERE id IN ({id_placeholders}) \
+                       AND agent_id IN ({agent_placeholders})"
+                );
+                let mut stmt = conn.prepare(&sql)?;
+                let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+                    Vec::with_capacity(ids.len() + allowed.len());
+                for id in &ids {
+                    params.push(Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>);
+                }
+                for aid in &allowed {
+                    params.push(Box::new(aid.clone()) as Box<dyn rusqlite::types::ToSql>);
+                }
+                let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+                    params.iter().map(AsRef::as_ref).collect();
+                let rows = stmt.query_map(params_ref.as_slice(), |row| row.get::<_, String>(0))?;
+                let mut set = HashSet::new();
+                for row in rows {
+                    set.insert(row?);
+                }
+                Ok(set)
+            })
+            .await??;
+
+        Ok(raw
+            .into_iter()
+            .filter(|e| kept.contains(&e.id))
+            .take(limit)
+            .collect())
+    }
+
+    // ── export / stats ─────────────────────────────────────────────
+
+    async fn export(&self, filter: &ExportFilter) -> anyhow::Result<Vec<MemoryEntry>> {
         let conn = self.conn.clone();
         let filter = filter.clone();
 
@@ -524,11 +697,7 @@ impl SqliteMemory {
         .await?
     }
 
-    /// [`Memory::export_agent`](shadow_core::Memory::export_agent) 的实现。
-    pub(super) async fn export_agent_inner(
-        &self,
-        agent_alias: &str,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    async fn export_agent(&self, agent_alias: &str) -> anyhow::Result<Vec<MemoryEntry>> {
         let conn = self.conn.clone();
         let agent_alias = agent_alias.to_string();
 
@@ -568,8 +737,7 @@ impl SqliteMemory {
         .await?
     }
 
-    /// [`Memory::count_in_scope`](shadow_core::Memory::count_in_scope) 的实现。
-    pub(super) async fn count_in_scope_inner(
+    async fn count_in_scope(
         &self,
         namespace: Option<&str>,
         category: Option<&MemoryCategory>,
@@ -606,8 +774,7 @@ impl SqliteMemory {
         .await?
     }
 
-    /// [`Memory::stats`](shadow_core::Memory::stats) 的实现。
-    pub(super) async fn stats_inner(&self) -> anyhow::Result<MemoryStats> {
+    async fn stats(&self) -> anyhow::Result<MemoryStats> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || -> anyhow::Result<MemoryStats> {
             let conn = conn.lock();
@@ -651,16 +818,14 @@ impl SqliteMemory {
         .await?
     }
 
-    /// [`Memory::health_check`](shadow_core::Memory::health_check) 的实现。
-    pub(super) async fn health_check_inner(&self) -> bool {
+    async fn health_check(&self) -> bool {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || conn.lock().execute_batch("SELECT 1").is_ok())
             .await
             .unwrap_or(false)
     }
 
-    /// [`Memory::reindex`](shadow_core::Memory::reindex) 的实现。
-    pub(super) async fn reindex_inner(&self) -> anyhow::Result<usize> {
+    async fn reindex(&self) -> anyhow::Result<usize> {
         // Step 1: Rebuild FTS5 (always safe, cheap)
         {
             let conn = self.conn.clone();
@@ -711,72 +876,197 @@ impl SqliteMemory {
         Ok(count)
     }
 
-    /// [`Memory::recall_for_agents`](shadow_core::Memory::recall_for_agents) 的实现。
-    pub(super) async fn recall_for_agents_inner(
-        &self,
-        allowed_agent_ids: &[&str],
-        query: &str,
-        limit: usize,
-        session_id: Option<&str>,
-        since: Option<&str>,
-        until: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
-        if allowed_agent_ids.is_empty() {
-            return self.recall_inner(query, limit, session_id, since, until).await;
-        }
+    // ── forget / purge / count ─────────────────────────────────────
 
-        let full_candidate_limit = self.count_inner().await?.max(limit);
-        let raw = self
-            .recall_inner(query, full_candidate_limit, session_id, since, until)
-            .await?;
-        if raw.is_empty() {
-            return Ok(Vec::new());
-        }
-
+    async fn forget(&self, key: &str) -> anyhow::Result<bool> {
         let conn = self.conn.clone();
-        let ids: Vec<String> = raw.iter().map(|e| e.id.clone()).collect();
-        let allowed: Vec<String> = allowed_agent_ids.iter().map(|s| (*s).to_string()).collect();
+        let key = key.to_string();
 
-        let kept: HashSet<String> =
-            tokio::task::spawn_blocking(move || -> anyhow::Result<HashSet<String>> {
-                let conn = conn.lock();
-                let id_placeholders: String = (1..=ids.len())
-                    .map(|i| format!("?{i}"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let agent_placeholders: String = (ids.len() + 1..=ids.len() + allowed.len())
-                    .map(|i| format!("?{i}"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let sql = format!(
-                    "SELECT id FROM memories \
-                     WHERE id IN ({id_placeholders}) \
-                       AND agent_id IN ({agent_placeholders})"
+        tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+            let conn = conn.lock();
+            let affected = conn.execute("DELETE FROM memories WHERE key = ?1", params![key])?;
+            Ok(affected > 0)
+        })
+        .await?
+    }
+
+    async fn forget_for_agent(&self, key: &str, agent_id: &str) -> anyhow::Result<bool> {
+        let conn = self.conn.clone();
+        let key = key.to_string();
+        let agent_id = agent_id.to_string();
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+            let conn = conn.lock();
+            let affected = conn.execute(
+                "DELETE FROM memories WHERE key = ?1 AND agent_id = ?2",
+                params![key, agent_id],
+            )?;
+            Ok(affected > 0)
+        })
+        .await?
+    }
+
+    async fn purge_namespace(&self, namespace: &str) -> anyhow::Result<usize> {
+        let conn = self.conn.clone();
+        let namespace = namespace.to_string();
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+            let conn = conn.lock();
+            let affected = conn.execute(
+                "DELETE FROM memories WHERE namespace = ?1",
+                params![namespace],
+            )?;
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            Ok(affected)
+        })
+        .await?
+    }
+
+    async fn purge_session(&self, session_id: &str) -> anyhow::Result<usize> {
+        let conn = self.conn.clone();
+        let session_id = session_id.to_string();
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+            let conn = conn.lock();
+            let affected = conn.execute(
+                "DELETE FROM memories WHERE session_id = ?1",
+                params![session_id],
+            )?;
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            Ok(affected)
+        })
+        .await?
+    }
+
+    async fn purge_session_for_agent(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+    ) -> anyhow::Result<usize> {
+        let conn = self.conn.clone();
+        let session_id = session_id.to_string();
+        let agent_id = agent_id.to_string();
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+            let conn = conn.lock();
+            let affected = conn.execute(
+                "DELETE FROM memories WHERE session_id = ?1 AND agent_id = ?2",
+                params![session_id, agent_id],
+            )?;
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            Ok(affected)
+        })
+        .await?
+    }
+
+    async fn purge_agent(&self, agent_alias: &str) -> anyhow::Result<usize> {
+        let conn = self.conn.clone();
+        let agent_alias = agent_alias.to_string();
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+            let conn = conn.lock();
+            let affected = conn.execute(
+                "DELETE FROM memories WHERE agent_id = (SELECT id FROM agents WHERE alias = ?1 LIMIT 1)",
+                params![agent_alias],
+            )?;
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            Ok(affected)
+        })
+        .await?
+    }
+
+    async fn rename_agent(&self, from: &str, to: &str) -> anyhow::Result<usize> {
+        let conn = self.conn.clone();
+        let from = from.to_string();
+        let to = to.to_string();
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+            let conn = conn.lock();
+            let to_rows: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM memories WHERE agent_id = (SELECT id FROM agents WHERE alias = ?1 LIMIT 1)",
+                params![to],
+                |row| row.get(0),
+            )?;
+            if to_rows > 0 {
+                anyhow::bail!(
+                    "cannot rename agent memory to `{to}`: an existing memory store under that alias has {to_rows} row(s); refusing to merge"
                 );
-                let mut stmt = conn.prepare(&sql)?;
-                let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-                    Vec::with_capacity(ids.len() + allowed.len());
-                for id in &ids {
-                    params.push(Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>);
-                }
-                for aid in &allowed {
-                    params.push(Box::new(aid.clone()) as Box<dyn rusqlite::types::ToSql>);
-                }
-                let params_ref: Vec<&dyn rusqlite::types::ToSql> =
-                    params.iter().map(AsRef::as_ref).collect();
-                let rows = stmt.query_map(params_ref.as_slice(), |row| row.get::<_, String>(0))?;
-                let mut set = HashSet::new();
-                for row in rows {
-                    set.insert(row?);
-                }
-                Ok(set)
-            })
-            .await??;
+            }
+            conn.execute("DELETE FROM agents WHERE alias = ?1", params![to])?;
+            let affected = conn.execute(
+                "UPDATE agents SET alias = ?2 WHERE alias = ?1",
+                params![from, to],
+            )?;
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            Ok(affected)
+        })
+        .await?
+    }
 
-        Ok(raw
-            .into_iter()
-            .filter(|e| kept.contains(&e.id))
-            .take(limit)
-            .collect())
+    async fn count_agent(&self, agent_alias: &str) -> anyhow::Result<usize> {
+        let conn = self.conn.clone();
+        let agent_alias = agent_alias.to_string();
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+            let conn = conn.lock();
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM agents WHERE alias = ?1",
+                params![agent_alias],
+                |row| row.get(0),
+            )?;
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            Ok(count as usize)
+        })
+        .await?
+    }
+
+    async fn count(&self) -> anyhow::Result<usize> {
+        let conn = self.conn.clone();
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+            let conn = conn.lock();
+            let count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))?;
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            Ok(count as usize)
+        })
+        .await?
+    }
+
+    async fn supersede(&self, superseded_ids: &[String], new_id: &str) -> anyhow::Result<()> {
+        let conn = self.conn.clone();
+        let ids = superseded_ids.to_vec();
+        let new_id = new_id.to_string();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let conn = conn.lock();
+            crate::conflict::mark_superseded(&conn, &ids, &new_id)
+        })
+        .await?
+    }
+
+    async fn ensure_agent_uuid(&self, alias: &str) -> anyhow::Result<String> {
+        let conn = self.conn.clone();
+        let alias = alias.to_string();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+            let conn = conn.lock();
+            sqlite_ensure_agent_uuid(&conn, &alias)
+        })
+        .await?
+    }
+
+    async fn refresh_embedder(
+        &self,
+        model_provider: &str,
+        api_key: Option<&str>,
+        model: &str,
+        dimensions: usize,
+    ) {
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::from(create_embedding_provider(
+            model_provider,
+            api_key,
+            model,
+            dimensions,
+        ));
+        self.swap_embedder(embedder);
     }
 }
