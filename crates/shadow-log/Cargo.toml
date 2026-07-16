@@ -16,6 +16,9 @@ tokio.workspace = true
 uuid.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+strum = "0.28"
+strum_macros = "0.28"
+serde = { version = "1.0", default-features = false, features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3"

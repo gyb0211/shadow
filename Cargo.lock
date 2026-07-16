@@ -2114,6 +2114,8 @@ dependencies = [
  "serde",
  "serde_json",
  "shadow-core",
+ "strum",
+ "strum_macros",
  "tempfile",
  "tokio",
  "tracing",

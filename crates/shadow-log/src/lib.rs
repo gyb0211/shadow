@@ -11,11 +11,12 @@ pub mod observer_bridge;
 pub mod writer;
 
 mod r#macro;
+mod config;
 
 pub use broadcast::{set_broadcast_hook, current_broadcast_hook, subscribe};
 pub use event::{LogEvent, Severity, Action, EventCategory, EventOutcome};
 pub use layer::LogCaptureLayer;
-pub use writer::{init_from_config, record_event, runtime_trace_path, load_page, LogFilter, LogPage};
+pub use writer::{init_from_config, record_event, runtime_trace_path};
 pub use observer_bridge::{set_observer, clear_observer, LogObserver};
 
 /// 私有 re-export, 宏展开用, 外部 crate 不可直接访问 tracing

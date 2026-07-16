@@ -5,64 +5,168 @@
 //! - 从 visit 中提取 action, message, shadow_attrs (归因字段)
 //! - 组装 LogEvent 后调 record_event
 
-use crate::event::{Action, EventCategory, LogEvent, Severity};
+use crate::event::{Action, Attribution, EventCategory, LogEvent, Severity};
 use crate::writer::record_event;
-use tracing::field::Visit;
-use tracing::{Event, Subscriber};
-use tracing_subscriber::layer::Context;
+use std::fmt::Debug;
+use serde_json::Value;
+use tracing::field::{Field, Visit};
+use tracing::span::{Attributes, Record};
+use tracing::{Event, Id, Subscriber};
 use tracing_subscriber::Layer;
+use tracing_subscriber::layer::Context;
+use tracing_subscriber::registry::{LookupSpan, SpanRef};
+use serde_json::map::Map as JsonMap;
 
 pub struct LogCaptureLayer;
 
-impl<S: Subscriber> Layer<S> for LogCaptureLayer {
-    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        let metadata = event.metadata();
-        let target = metadata.target();
+const SHADOW_ROLE: &str = "sd_role";
+
+const SHADOW_ATTRIBUTION_SPAN: &str = "shadow_log_attribution";
+const SHADOW_SCOPE_SPAN: &str = "shadow_log_scope";
+
+impl<S> Layer<S> for LogCaptureLayer
+where
+    S: Subscriber + for<'l> LookupSpan<'l>,
+{
+    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+        let target = attrs.metadata().target();
+        let Some(span) = ctx.span(id) else {
+            return;
+        };
 
         // 只捕获 record! 宏的事件
-        if target != "shadow_log_event" {
+        if target == SHADOW_ATTRIBUTION_SPAN {
+            let mut v = AttributionSpanCollector::default();
+            attrs.record(&mut v);
+            let mut attribution = Attribution::default();
+            let default_category = v.default_category.as_deref().and_then(EventCategory::parse);
+            v.apply_info(&mut attribution);
+
+            let mut exts = span.extensions_mut();
+            exts.insert(attribution);
+
+            if let Some(cat) = default_category {
+                exts.insert(SpanCategory(cat))
+            }
             return;
         }
 
-        let severity = Severity::from_tracing_level(*metadata.level());
-        let mut visitor = EventVisitor::default();
-        event.record(&mut visitor);
+        if target == SHADOW_SCOPE_SPAN {
+            let mut v = ScopeSpanCollector::default();
+            attrs.record(&mut v);
+            v.install(span);
+        }
+    }
 
-        let action_str = visitor.action.as_deref().unwrap_or("note");
-        let action = match action_str {
-            "start" => Action::Start,
-            "complete" => Action::Complete,
-            "fail" => Action::Fail,
-            "cancel" => Action::Cancel,
-            "send" => Action::Send,
-            "receive" => Action::Receive,
-            "read" => Action::Read,
-            "write" => Action::Write,
-            "delete" => Action::Delete,
-            "query" => Action::Query,
-            "invoke" => Action::Invoke,
-            _ => Action::Note,
-        };
-
-        let category = EventCategory::System;
-        let mut log_event = LogEvent::new(severity, action, category);
-
-        if let Some(msg) = visitor.message {
-            log_event = log_event.with_message(msg);
+    fn on_record(&self, id: &Id, values: &Record<'_>, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(id) else { return; };
+        let target = span.metadata().target();
+        if target == SHADOW_ATTRIBUTION_SPAN {
+            let mut v = AttributionSpanCollector::default();
+            values.record(&mut v);
+            let mut attribution = Attribution::default();
+            v.apply_info(&mut attribution);
+            let mut exts = span.extensions_mut();
+            if let Some(exist) = exts.get_mut::<Attribution>() {
+                exist.merge_from(&attribution)
+            }else{
+                exts.insert(attribution);
+            }
+            return;
         }
 
-        // 解析归因字段 (shadow_attrs JSON 字符串)
-        if let Some(ref attrs_json) = visitor.attrs
-            && let Ok(attrs) = serde_json::from_str::<serde_json::Value>(attrs_json)
-                && let Some(obj) = attrs.as_object() {
-                    for (key, val) in obj {
-                        if let Some(s) = val.as_str() {
-                            log_event = log_event.with_attr(key, s);
-                        }
-                    }
-                }
+        if target == SHADOW_SCOPE_SPAN {
+            let mut v = ScopeSpanCollector::default();
+            values.record(&mut v);
+            v.install(span);
+        }
+    }
 
-        record_event(log_event);
+}
+
+#[derive(Default)]
+struct AttributionSpanCollector {
+    role_family: Option<String>,
+    role_type: Option<String>,
+    attribution_field: Option<String>,
+    composite_prefix: Option<String>,
+    default_category: Option<String>,
+    alias: Option<String>,
+}
+
+impl AttributionSpanCollector {
+    fn apply_info(&self, attr: &mut Attribution) {
+        let Some(alias) = self.alias.as_deref().filter(|s| !s.is_empty()) else {
+            return;
+        };
+        if let Some(prefix) = self.composite_prefix.as_deref().filter(|s| !s.is_empty()) {
+            let ty = self.role_type.as_deref().unwrap_or("");
+            if !ty.is_empty() {
+                attr.set_composite(prefix, &format!("{ty}.{alias}"));
+            } else {
+                attr.set_composite(prefix, alias);
+            }
+        } else if let Some(field) = self.attribution_field.as_deref().filter(|s| !s.is_empty()) {
+            attr.set(field, alias);
+        }
+
+        if let Some(family) = self.role_family.as_deref().filter(|s| !s.is_empty()) {
+            attr.set(SHADOW_ROLE, family);
+        }
+    }
+}
+
+impl Visit for AttributionSpanCollector {
+    fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
+        todo!()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SpanCategory(EventCategory);
+
+#[derive(Default)]
+struct ScopeSpanCollector {
+    category: Option<String>,
+    attribution: Attribution,
+    extra: JsonMap<String, Value>,
+
+}
+#[derive(Default)]
+struct ScopeExtra {
+    extra: JsonMap<String, Value>,
+}
+
+
+impl ScopeSpanCollector {
+    fn install<'a>(&self, span: SpanRef<'a, impl Subscriber + for<'l> LookupSpan<'l>>, ) {
+       if !self.attribution.fields.is_empty() || self.attribution.duration_ms.is_some() {
+           let mut exts = span.extensions_mut();
+           if let Some(exist) = exts.get_mut::<Attribution>(){
+               exist.merge_from(&self.attribution)
+           }else{
+               exts.insert(self.attribution);
+           }
+       }
+
+        if !self.extra.is_empty() {
+            let mut exts = span.extensions_mut();
+            if let Some(exist) = exts.get_mut::<ScopeExtra>(){
+                for (k,v) in self.extra {
+                    exist.extra.entry(k).or_insert(v);
+                }
+            }else{
+                exts.insert(ScopeExtra{extra: self.extra});
+            }
+
+        }
+
+        if let Some(cat) = self.category.as_deref().and_then(EventCategory::parse){
+            span.extensions_mut().insert(SpanCategory(cat))
+        }
+
+
+
     }
 }
 
@@ -95,4 +199,3 @@ impl Visit for EventVisitor {
         }
     }
 }
-
