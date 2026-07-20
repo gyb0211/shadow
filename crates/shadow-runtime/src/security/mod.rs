@@ -9,9 +9,13 @@
 //! 2. 设置工作目录 (如果 policy.workspace 有值)
 //! 3. `filter_env()` 过滤环境变量 -- 只保留白名单中的变量
 
-use std::path::{Path, PathBuf};
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use shadow_config::autonomy::DelegationPolicy;
+use shadow_config::{Config, RiskProfileConfig, RuntimeProfileConfig};
 use shadow_core::AutonomyLevel;
+use std::fs;
+use std::path::{Path, PathBuf};
 // ── 默认配置 ─────────────────────────────────────────────────────────
 
 /// 默认危险命令黑名单 -- 匹配到任意一条则拒绝执行
@@ -70,7 +74,7 @@ const SAFE_ENV_VARS: &[&str] = &[
 pub enum CommandRiskLevel {
     Low,
     Medium,
-    High
+    High,
 }
 
 // ── Sandbox trait ────────────────────────────────────────────────────
@@ -135,28 +139,126 @@ impl Sandbox for NoopSandbox {
 /// let policy = SecurityPolicy::new().with_workspace(PathBuf::from("/tmp/work"));
 /// assert_eq!(policy.workspace(), Some(std::path::Path::new("/tmp/work")));
 /// ```
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SecurityPolicy {
     pub autonomy: AutonomyLevel,
-    /// 危险命令模式 (子串或正则匹配)
-    blocked_patterns: Vec<String>,
-    /// 允许的环境变量名 (白名单)
-    allowed_env_vars: Vec<String>,
-    /// 工作目录 (None = 不限制)
-    workspace: Option<PathBuf>,
-    /// 允许的命令白名单 (空 = 不限制, 全部允许)
-    ///
-    /// 非空时表示只允许执行白名单内的命令. 默认为空 (不限制).
-    allowed_commands: Vec<String>,
-    /// 禁止访问的路径 (系统目录等)
-    ///
-    /// 默认为 [`DEFAULT_FORBIDDEN_PATHS`]. 用于安全策略注入,
-    /// 提醒 agent 不要读写这些系统关键目录.
-    forbidden_paths: Vec<String>,
 
-    block_high_risk_commands: bool,
-    require_approval_for_medium_risk: bool,
+    pub risk_profile_name: String,
+    pub delegation_policy: DelegationPolicy,
+    pub workspace_dir: PathBuf,
+    pub config_path: Option<PathBuf>,
+    pub workspace_only: bool,
+    pub allowed_commands: Vec<String>,
+    pub forbidden_paths: Vec<String>,
+    pub allowed_roots: Vec<PathBuf>,
+    pub allowed_roots_read_only: Vec<PathBuf>,
+    pub max_actions_per_hour: u32,
+    pub max_cost_per_day_cents: u32,
+    pub require_approval_for_medium_risk: bool,
+    pub block_high_risk_commands: bool,
+    pub shell_env_passthrough: Vec<String>,
+    pub shell_timeout_secs: u64,
+    /// Tool name allowlist. `None` is unrestricted (default for agents
+    /// without an explicit `risk_profile.allowed_tools` setting).
+    /// `Some(vec![])` denies every tool. `Some(list)` admits only the
+    /// listed names. Enforced at the agent loop's tool-dispatch site.
+    pub allowed_tools: Option<Vec<String>>,
+    /// Tool name denylist. Subtracts from the allowed set (whether the
+    /// allowed set comes from `allowed_tools` or from the unrestricted
+    /// default). `None` and `Some(vec![])` both mean "exclude nothing".
+    pub excluded_tools: Option<Vec<String>>,
+    /// Tools that never require approval in this profile. Mirrors
+    /// `RiskProfileConfig.auto_approve`.
+    pub auto_approve: Vec<String>,
+    /// Tools that always require approval in this profile. Mirrors
+    /// `RiskProfileConfig.always_ask`.
+    pub always_ask: Vec<String>,
+    /// Whether the sandbox is enabled for this profile. `None`
+    /// inherits the global default at the call site.
+    pub sandbox_enabled: Option<bool>,
+    /// Sandbox backend identifier (e.g. `"firejail"`, `"landlock"`).
+    /// `None` inherits the global default.
+    pub sandbox_backend: Option<String>,
+    /// Extra arguments forwarded to firejail when `sandbox_backend`
+    /// resolves to `"firejail"`.
+    pub firejail_args: Vec<String>,
+    pub tracker: PerSenderTracker,
+
 }
+
+#[derive(Debug)]
+pub struct PerSenderTracker {
+    buckets: std::sync::Arc<parking_lot::Mutex<HashMap<String, ActionTracker>>>,
+}
+
+impl PerSenderTracker {
+    /// Bucket key used when no per-sender context is available (cron, CLI).
+    pub const GLOBAL_KEY: &'static str = "__global__";
+
+    /// Create an empty tracker with no sender buckets.
+    pub fn new() -> Self {
+        Self {
+            buckets: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Resolve the current sender key from the task-local, falling back to GLOBAL_KEY.
+    fn current_key() -> String {
+        zeroclaw_api::TOOL_LOOP_THREAD_ID
+            .try_with(|v| v.clone())
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| Self::GLOBAL_KEY.to_string())
+    }
+
+    /// Record one action for the current sender. Returns `true` if allowed
+    /// (count after recording <= max), `false` if budget exhausted.
+    pub fn record_for_current(&self, max: u32) -> bool {
+        let key = Self::current_key();
+        self.record_within(&key, max)
+    }
+
+    /// Record one action for `key`. Allows the action when count == max (≤ max);
+    /// blocks and returns false when count > max.
+    pub fn record_within(&self, key: &str, max: u32) -> bool {
+        let mut buckets = self.buckets.lock();
+        let tracker = buckets.entry(key.to_string()).or_default();
+        let count = tracker.record();
+        count <= max as usize
+    }
+
+    /// Check if the current sender is at or over the limit (without recording).
+    pub fn is_limited_for_current(&self, max: u32) -> bool {
+        let key = Self::current_key();
+        self.is_exhausted(&key, max)
+    }
+
+    pub fn is_exhausted(&self, key: &str, max: u32) -> bool {
+        if max == 0 {
+            return true;
+        }
+        let mut buckets = self.buckets.lock();
+        match buckets.get_mut(key) {
+            Some(tracker) => tracker.count() >= max as usize,
+            None => false,
+        }
+    }
+}
+
+impl Clone for PerSenderTracker {
+    fn clone(&self) -> Self {
+        Self {
+            buckets: std::sync::Arc::clone(&self.buckets),
+        }
+    }
+}
+
+impl Default for PerSenderTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 
 impl Default for SecurityPolicy {
     fn default() -> Self {
@@ -190,6 +292,36 @@ impl SecurityPolicy {
         }
     }
 
+    pub fn for_agent(config: &Config, agent_alias: &str) -> anyhow::Result<Self> {
+        let risk_profile = config.risk_profile_for_agent(agent_alias).ok_or_else(|| {
+            shadow_log::record!(
+                ERROR,
+                shadow_log::Event::new(module_path!(), shadow_log::Action::Fail).with_outcome(shadow_log::EventOutcome::Failure)
+                .with_attrs(serde_json::json!({"agent_alias": agent_alias})),
+                "SecurityPolicy::for_agent agent has no resolvable risk_profile"
+            );
+            anyhow::Error::msg(
+                format!("agents.{agent_alias} has no resolvable risk_profile (load-time validation should have caught this)")
+            );
+        })?;
+
+        let runtime_profile = config.runtime_profile_for_agent(agent_alias);
+        let agent_workspace = config.agent_workspace_dir(agent_alias);
+
+        fs::create_dir_all(&agent_workspace).with_context(|| {
+            format!(
+                "SecurityPolicy::for_agent: failed to create agent workspace dir :{}",
+                agent_workspace.display()
+            )
+        })?;
+
+        let mut policy: SecurityPolicy =
+            Self::from_profiles(risk_profile, runtime_profile, &agent_workspace);
+        if let Some(agent_cfg) = config.agents.get(agent_alias) {
+            policy.ris
+        }
+    }
+
     /// 设置工作目录 (builder 风格)
     #[must_use]
     pub fn with_workspace(mut self, workspace: PathBuf) -> Self {
@@ -219,35 +351,41 @@ impl SecurityPolicy {
         CommandRiskLevel::Low
     }
 
-
-    pub fn validate_command_execution(&self, command: &str, approved: bool) -> Result<CommandRiskLevel, String>{
-        if !self.is_command_allowed(command){
+    pub fn validate_command_execution(
+        &self,
+        command: &str,
+        approved: bool,
+    ) -> Result<CommandRiskLevel, String> {
+        if !self.is_command_allowed(command) {
             return Err(format!("Command not allowed by security policy: {command}"));
         }
 
-        let risk:CommandRiskLevel = self.command_risk_level(command);
+        let risk: CommandRiskLevel = self.command_risk_level(command);
 
         if risk == CommandRiskLevel::High {
-            if self.block_high_risk_commands && !self.is_command_explicitly_allowed(command){
-                return Err(format!("Command({command}) blocked: high-risk command is disallowed by policy."));
+            if self.block_high_risk_commands && !self.is_command_explicitly_allowed(command) {
+                return Err(format!(
+                    "Command({command}) blocked: high-risk command is disallowed by policy."
+                ));
             }
             if self.autonomy == AutonomyLevel::Supervised && !approved {
-                return Err(format!("Command({command}) required explicit approval(true): high-risk operation."));
+                return Err(format!(
+                    "Command({command}) required explicit approval(true): high-risk operation."
+                ));
             }
-
         }
         if risk == CommandRiskLevel::Medium
-        && self.autonomy == AutonomyLevel::Supervised && self.require_approval_for_medium_risk
+            && self.autonomy == AutonomyLevel::Supervised
+            && self.require_approval_for_medium_risk
             && !approved
         {
-            return Err(format!("Command({command}) required explicit approval(true): medium-risk operation."));
+            return Err(format!(
+                "Command({command}) required explicit approval(true): medium-risk operation."
+            ));
         }
 
         Ok(risk)
     }
-
-
-
 
     /// 设置允许的命令白名单 (builder 风格)
     ///
@@ -332,7 +470,30 @@ impl SecurityPolicy {
     pub fn forbidden_paths(&self) -> &[String] {
         &self.forbidden_paths
     }
+
+    fn from_profiles(
+        risk_profile: &RiskProfileConfig,
+        runtime_profile: Option<&RuntimeProfileConfig>,
+        workspace: &PathBuf,
+    ) -> Self {
+        let effective_workspace_only = if risk_profile.level == AutonomyLevel::Full {
+            false
+        } else {
+            risk_profile.workspace_only
+        };
+
+        let runtime_default = RuntimeProfileConfig::default();
+        let runtime = runtime_profile.unwrap_or(runtime_default);
+
+        Self {
+            autonomy: risk_profile.level,
+            blocked_patterns: vec![],
+            allowed_env_vars: vec![],
+            workspace: None,
+            allowed_commands: vec![],
+            forbidden_paths: vec![],
+            block_high_risk_commands: false,
+            require_approval_for_medium_risk: false,
+        }
+    }
 }
-
-
-

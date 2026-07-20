@@ -10,14 +10,28 @@ pub mod layer;
 pub mod observer_bridge;
 pub mod writer;
 
-mod r#macro;
-mod config;
+pub mod r#macro;
+pub mod config;
+pub mod reader;
+pub mod subscriber;
+mod tool_io;
 
-pub use broadcast::{set_broadcast_hook, current_broadcast_hook, subscribe};
-pub use event::{LogEvent, Severity, Action, EventCategory, EventOutcome};
-pub use layer::LogCaptureLayer;
-pub use writer::{init_from_config, record_event, runtime_trace_path};
-pub use observer_bridge::{set_observer, clear_observer, LogObserver};
+pub use broadcast::*;
+pub use event::*;
+pub use layer::*;
+pub use writer::*;
+
+pub use ::tracing::Span;
+pub use ::tracing::Instrument;
+pub use ::tracing::{debug_span, error_span, info_span, trace_span, warn_span};
+
+pub mod field {
+    pub use ::tracing::field::{Empty,FieldSet };
+}
+
+pub fn display_chain(err: &anyhow::Error) -> String {
+    format!("{err:#}")
+}
 
 /// 私有 re-export, 宏展开用, 外部 crate 不可直接访问 tracing
 #[doc(hidden)]
@@ -28,36 +42,22 @@ pub mod __private {
     pub use ::uuid;
 }
 
-/// 安装全局 subscriber (终端 + LogCaptureLayer)
-///
-/// TUI 模式下 stderr 被 AlternateScreen 隐藏, 但 JSONL 文件仍写入.
-/// LogCaptureLayer 使用独立过滤器 (shadow_log_event=info),
-/// 不受全局 verbose/warn 级别限制, 确保 record! 事件始终持久化.
-pub fn install_subscriber(verbose: bool) {
-    use tracing_subscriber::prelude::*;
-
-    let capture = LogCaptureLayer.with_filter(
-        tracing_subscriber::filter::Targets::new()
-            .with_target("shadow_log_event", tracing::Level::INFO)
-            .with_target("shadow_log_attribution", tracing::Level::INFO),
-    );
-
-    let fmt = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stderr)
-        .with_target(false)
-        .compact();
-
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        if verbose {
-            tracing_subscriber::EnvFilter::new("debug")
-        } else {
-            tracing_subscriber::EnvFilter::new("warn")
-        }
-    });
-
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(fmt)
-        .with(capture)
-        .init();
+pub fn debug_enabled() -> bool {
+    ::tracing::enabled!(
+        target: "log_event",
+        ::tracing::Level::DEBUG
+    )
 }
+
+// #[doc(hidden)]
+// #[must_use]
+// pub fn __private_test_writer_lock() -> impl Drop {
+//     crate::writer::WRITER_TEST_LOCK.lock()
+// }
+// #[doc(hidden)]
+// #[must_use]
+// pub fn __private_test_hook_lock() -> impl Drop {
+//     crate::broadcast::HOOK_TEST_LOCK.lock()
+// }
+
+

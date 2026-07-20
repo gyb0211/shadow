@@ -17,6 +17,9 @@ fn slot() -> &'static RwLock<Option<LogSender>> {
 pub fn set_broadcast_hook(sender: LogSender) {
     *slot().write() = Some(sender);
 }
+pub fn clear_broadcast_hook() {
+    *slot().write() = None;
+}
 
 /// 获取当前广播发送端
 #[must_use]
@@ -28,4 +31,18 @@ pub fn current_broadcast_hook() -> Option<LogSender> {
 #[must_use]
 pub fn subscribe() -> Option<broadcast::Receiver<Value>> {
     slot().read().as_ref().map(|s: &LogSender| s.subscribe())
+}
+
+
+pub fn subscribe_or_install() -> broadcast::Receiver<Value>{
+    {
+        let read = slot().read();
+        if let Some(sender) = read.as_ref() {
+            return sender.subscribe();
+        }
+    }
+    let (tx,rx) = broadcast::channel((65536));
+    set_broadcast_hook(tx);
+    rx
+
 }

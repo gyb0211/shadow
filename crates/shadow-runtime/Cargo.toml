@@ -29,5 +29,11 @@ urlencoding.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 chrono-tz = "0.10"
 
+prometheus = { version = "0.14", default-features = false, optional = true }
+
+[features]
+default = ["obs-prometheus"]
+obs-prometheus = ["dep:prometheus"]
+
 [dev-dependencies]
 tempfile.workspace = true

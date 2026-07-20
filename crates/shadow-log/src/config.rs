@@ -72,6 +72,8 @@ impl ToolIoPolicy {
             _ => Self::Redacted,
         }
     }
+
+    pub fn captures_io(self) -> bool {!matches!(self, Self::Off)}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +123,10 @@ impl ResolvedPolicy {
             tool_id_denylist: config.tool_io_denylist.clone(),
             llm_request_payload: LlmRequestPayloadPolicy::from_raw(&config.llm_request_payload),
         }
+    }
+
+    pub fn is_tool_denylisted(&self, tool: &str) -> bool {
+        self.tool_id_denylist.iter().any(|t| t == tool)
     }
 }
 

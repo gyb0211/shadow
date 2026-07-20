@@ -1,10 +1,10 @@
 //! 观察者 trait -- 指标和追踪
 use async_trait::async_trait;
-use chrono::Duration;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmMessageSnapshot {
@@ -149,7 +149,7 @@ pub enum ObserverEvent {
         cache_type: String,
     },
     /// 错误
-    Error { message: String },
+    Error {component: String,  message: String },
 
     /// 一次发布开始
     DeploymentStart { deploy_id: String },
