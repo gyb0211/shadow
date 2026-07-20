@@ -9,6 +9,7 @@
 //! 2. 设置工作目录 (如果 policy.workspace 有值)
 //! 3. `filter_env()` 过滤环境变量 -- 只保留白名单中的变量
 
+use std::collections::HashMap;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use shadow_config::autonomy::DelegationPolicy;
@@ -204,7 +205,7 @@ impl PerSenderTracker {
 
     /// Resolve the current sender key from the task-local, falling back to GLOBAL_KEY.
     fn current_key() -> String {
-        zeroclaw_api::TOOL_LOOP_THREAD_ID
+        shadow_core::TOOL_LOOP_THREAD_ID
             .try_with(|v| v.clone())
             .ok()
             .flatten()

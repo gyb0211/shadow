@@ -35,6 +35,7 @@ pub use kennel::provider::{
 pub use kennel::tool::{Tool, ToolResult, ToolSpec};
 pub use session_store::{JsonlSessionStore, Session, SessionMetadata, SessionStore};
 pub use workspace::Workspace;
+use crate::kennel::provider::NativeThinkingParams;
 
 /// 代理自主级别
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -48,4 +49,11 @@ pub enum AutonomyLevel {
     Supervised,
     /// 只读, 写操作被拒绝
     ReadOnly,
+}
+
+tokio::task_local! {
+    pub static TOOL_LOOP_THREAD_ID: Option<String>;
+    pub static TOOL_CHOICE_OVERRIDE:  Option<String>;
+    pub static TOOL_LOOP_SESSION_KEY:  Option<String>;
+    pub static NARIVE_THINKING_OVERRIDE:  Option<NativeThinkingParams>;
 }
