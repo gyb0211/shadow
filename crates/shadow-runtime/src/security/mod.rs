@@ -10,6 +10,7 @@
 //! 3. `filter_env()` 过滤环境变量 -- 只保留白名单中的变量
 
 mod detect;
+mod seatbelt;
 
 use std::collections::HashMap;
 use anyhow::Context;
@@ -101,6 +102,9 @@ pub trait Sandbox: Send + Sync {
 
     /// 沙箱名称 (如 "noop", "firejail")
     fn name(&self) -> &str;
+
+    fn description(&self) -> &str;
+
 }
 
 /// 无沙箱 -- 直通执行, 不做任何隔离
@@ -120,6 +124,10 @@ impl Sandbox for NoopSandbox {
 
     fn name(&self) -> &str {
         "noop"
+    }
+
+    fn description(&self) -> &str {
+        "Cannot use sandbox"
     }
 }
 
