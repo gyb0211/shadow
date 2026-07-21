@@ -7,11 +7,12 @@ use shadow_config::schema::AliasedAgentConfig;
 use shadow_config::{Config, platform};
 use shadow_core::{Memory, Observer};
 use shadow_core::runtime::RuntimePlatformAdapter;
-use shadow_log::attribution_span;
+use shadow_log::{attribution_span, Action, Event};
 use shadow_memory::create_memory_for_agent;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info_span, Instrument};
+use shadow_config::policy::SecurityPolicy;
 use crate::observability;
 
 #[derive(Default)]
@@ -142,7 +143,22 @@ pub async fn run(
                 .await?
             }
         };
-
+        
+        shadow_log::record!(
+            INFO,
+            Event::new(module_path!(), Action::Load),
+            "Memory initialized"
+        );
+        
+        // todo 串口相关
+        
+        // todo sop
+        
+        let all_tools_result = tools::all_tools_with_runtime(
+            
+        )
+        
+        
         return Ok("exit".to_string());
     };
     __body.instrument(__scope_span).instrument(__attribution_span).await

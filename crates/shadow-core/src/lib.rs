@@ -15,11 +15,12 @@
 
 pub mod channel;
 pub mod kennel;
+pub mod platform;
 pub mod runtime;
 pub mod session_store;
 pub mod workspace;
-pub mod platform;
 
+use crate::kennel::provider::NativeThinkingParams;
 pub use channel::{Channel, ChannelMessage, SendMessage};
 pub use kennel::attribution::*;
 pub use kennel::memory::{
@@ -35,21 +36,7 @@ pub use kennel::provider::{
 pub use kennel::tool::{Tool, ToolResult, ToolSpec};
 pub use session_store::{JsonlSessionStore, Session, SessionMetadata, SessionStore};
 pub use workspace::Workspace;
-use crate::kennel::provider::NativeThinkingParams;
 
-/// 代理自主级别
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(Default)]
-pub enum AutonomyLevel {
-    /// 完全自主, 无需审批
-    Full,
-    /// 受监督, 敏感操作需审批
-    #[default]
-    Supervised,
-    /// 只读, 写操作被拒绝
-    ReadOnly,
-}
 
 tokio::task_local! {
     pub static TOOL_LOOP_THREAD_ID: Option<String>;

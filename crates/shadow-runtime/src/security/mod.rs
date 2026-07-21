@@ -9,6 +9,8 @@
 //! 2. 设置工作目录 (如果 policy.workspace 有值)
 //! 3. `filter_env()` 过滤环境变量 -- 只保留白名单中的变量
 
+mod detect;
+
 use std::collections::HashMap;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -140,52 +142,7 @@ impl Sandbox for NoopSandbox {
 /// let policy = SecurityPolicy::new().with_workspace(PathBuf::from("/tmp/work"));
 /// assert_eq!(policy.workspace(), Some(std::path::Path::new("/tmp/work")));
 /// ```
-#[derive(Debug, Clone)]
-pub struct SecurityPolicy {
-    pub autonomy: AutonomyLevel,
 
-    pub risk_profile_name: String,
-    pub delegation_policy: DelegationPolicy,
-    pub workspace_dir: PathBuf,
-    pub config_path: Option<PathBuf>,
-    pub workspace_only: bool,
-    pub allowed_commands: Vec<String>,
-    pub forbidden_paths: Vec<String>,
-    pub allowed_roots: Vec<PathBuf>,
-    pub allowed_roots_read_only: Vec<PathBuf>,
-    pub max_actions_per_hour: u32,
-    pub max_cost_per_day_cents: u32,
-    pub require_approval_for_medium_risk: bool,
-    pub block_high_risk_commands: bool,
-    pub shell_env_passthrough: Vec<String>,
-    pub shell_timeout_secs: u64,
-    /// Tool name allowlist. `None` is unrestricted (default for agents
-    /// without an explicit `risk_profile.allowed_tools` setting).
-    /// `Some(vec![])` denies every tool. `Some(list)` admits only the
-    /// listed names. Enforced at the agent loop's tool-dispatch site.
-    pub allowed_tools: Option<Vec<String>>,
-    /// Tool name denylist. Subtracts from the allowed set (whether the
-    /// allowed set comes from `allowed_tools` or from the unrestricted
-    /// default). `None` and `Some(vec![])` both mean "exclude nothing".
-    pub excluded_tools: Option<Vec<String>>,
-    /// Tools that never require approval in this profile. Mirrors
-    /// `RiskProfileConfig.auto_approve`.
-    pub auto_approve: Vec<String>,
-    /// Tools that always require approval in this profile. Mirrors
-    /// `RiskProfileConfig.always_ask`.
-    pub always_ask: Vec<String>,
-    /// Whether the sandbox is enabled for this profile. `None`
-    /// inherits the global default at the call site.
-    pub sandbox_enabled: Option<bool>,
-    /// Sandbox backend identifier (e.g. `"firejail"`, `"landlock"`).
-    /// `None` inherits the global default.
-    pub sandbox_backend: Option<String>,
-    /// Extra arguments forwarded to firejail when `sandbox_backend`
-    /// resolves to `"firejail"`.
-    pub firejail_args: Vec<String>,
-    pub tracker: PerSenderTracker,
-
-}
 
 #[derive(Debug)]
 pub struct PerSenderTracker {

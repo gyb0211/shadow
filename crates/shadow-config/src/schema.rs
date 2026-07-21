@@ -343,7 +343,7 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("."))
     }
 
-    fn runtime_profile_for_agent(&self, agent_alias: &str) -> Option<&RuntimeProfileConfig> {
+    pub fn runtime_profile_for_agent(&self, agent_alias: &str) -> Option<&RuntimeProfileConfig> {
         self.runtime_profiles.get("agent_alias")
     }
 
@@ -419,6 +419,11 @@ impl Config {
 
             _ => ActiveStorage::None,
         }
+    }
+
+    #[must_use]
+    pub fn shared_workspace_dir(&self) -> std::path::PathBuf {
+        self.install_root_dir().join("shared")
     }
 }
 

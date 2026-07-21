@@ -1,11 +1,11 @@
 use std::str::FromStr;
-use crate::security::SecurityPolicy;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Error, Value};
 use shadow_config::Config;
 use std::sync::Arc;
 use async_trait::async_trait;
+use shadow_config::policy::SecurityPolicy;
 use shadow_core::{Tool, ToolResult};
 use crate::cron::{add_agent_job, add_shell_job_with_approval, CRON_DELIVERY_SCHEMA_CHANNELS};
 use crate::cron::types::DeliveryConfig;

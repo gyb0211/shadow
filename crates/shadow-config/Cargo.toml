@@ -7,8 +7,10 @@ description = "影子配置层 -- TOML schema + 加载 + 密钥管理"
 
 [dependencies]
 shadow-core.workspace = true
+shadow-log.workspace = true
 anyhow.workspace = true
 serde.workspace = true
+parking_lot.workspace = true
 serde_json.workspace = true
 toml = "0.8"
 chacha20poly1305 = "0.10"
@@ -18,5 +20,5 @@ tempfile.workspace = true
 directories = "6.0"
 shellexpand = "3.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
-
+regex = "1.10"
 tokio = { version = "1.50", default-features = false, features = ["fs", "io-util", "sync"] }

@@ -44,6 +44,7 @@ pub mod model_provider;
 pub mod proxy_client;
 pub mod observability;
 pub mod platform;
+pub mod policy;
 
 use std::path::Path;
 pub use model_provider::*;
@@ -54,3 +55,6 @@ pub use providers::{default_base_url, list_providers, resolve_provider, Provider
 pub use providers::{ReliableConfig, RouteEntry, RouterConfig};
 pub use schema::*;
 pub use secrets::{is_encrypted, SecretStore};
+pub use multi::*;
+
+pub const UNSET_DISPLAY: &str = "<unset>";
