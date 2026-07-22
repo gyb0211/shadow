@@ -188,6 +188,20 @@ impl ModelProviders {
         for_each_model_provider_slot!(emit_bare);
         hit
     }
+
+    pub fn resolved_endpoint_uri(&self, family: &str, alias: &str) -> Option<&'static str>{
+        use super::schema::FamilyEndpoint;
+        macro_rules! emit_endpoint {
+           ($(($field:ident, $type_str:literal, $cfg_ty:ty)),+ $(,)?) => {
+                match family {
+                    $($type_str => self.$field.get(alias).and_then(|cfg| cfg.endpoint_uri()),)+
+                    _ => None,
+                }
+            };
+        }
+        for_each_model_provider_slot!(emit_endpoint);
+
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

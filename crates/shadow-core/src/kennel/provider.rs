@@ -187,15 +187,13 @@ pub struct ModelProviderRuntimeOptions {
     pub native_tools: Option<bool>,
 
     /// HTTP 请求超时 (None = reqwest 默认)
-    pub timeout: Option<std::time::Duration>,
+    pub provider_timeout_secs: Option<u64>,
     /// 推理强度 (如 "low" / "medium" / "high"), OpenAI o-series / Anthropic 用
     pub reasoning_effort: Option<String>,
     /// 自定义 API path 后缀 (None = 各 family 默认, 如 "/chat/completions")
     pub api_path: Option<String>,
     /// 附加 HTTP headers (会与 auth header 合并)
     pub extra_headers: HashMap<String, String>,
-    /// API key 注入位置
-    pub auth_style: AuthStyle,
 }
 
 #[derive(Clone, Default)]

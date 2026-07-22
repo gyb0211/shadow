@@ -2,13 +2,23 @@ use crate::security::Sandbox;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// macOS Seatbelt 沙箱实现 -- 基于 macOS 内置的 `sandbox-exec` 工具。
+///
+/// 通过生成 Seatbelt 策略文件 (.sb) 并用 `sandbox-exec -f policy.sb` 包装命令,
+/// 实现文件系统/网络/进程的隔离。默认拒绝所有, 只放行工作目录和必要系统路径。
 #[derive(Debug, Clone)]
 pub struct SeatbeltSandbox {
+    /// 策略文件存放目录 (/tmp/shadow-seatbelt)
     policy_dir: PathBuf,
+    /// 生成的策略文件路径 (每个实例唯一)
     policy_path: PathBuf,
 }
 
 impl SeatbeltSandbox {
+    /// 创建沙箱实例, 绑定到指定工作目录。
+    ///
+    /// - workspace 为 None 时使用当前目录, 回退到 /tmp
+    /// - 生成策略文件写入临时目录, 后续 wrap_command 会引用它
     pub fn with_workspace(workspace: Option<&Path>) -> std::io::Result<Self> {
         if !Self::is_installed() {
             return Err(std::io::Error::new(
@@ -17,7 +27,7 @@ impl SeatbeltSandbox {
             ));
         }
 
-        let policy_dir = std::env::temp_dir().join("zeroclaw-seatbelt");
+        let policy_dir = std::env::temp_dir().join("shadow-seatbelt");
         std::fs::create_dir_all(&policy_dir)?;
 
         let session_id = uuid::Uuid::new_v4();
@@ -35,6 +45,9 @@ impl SeatbeltSandbox {
         })
     }
 
+    /// 检测系统是否安装了 sandbox-exec。
+    ///
+    /// 先查 /usr/bin/sandbox-exec 是否存在, 不在则尝试用 no-network profile 执行 true 验证。
     fn is_installed() -> bool {
         Path::new("/usr/bin/sandbox-exec").exists()
             || Command::new("sandbox-exec")
@@ -48,6 +61,7 @@ impl SeatbeltSandbox {
 }
 
 impl Sandbox for SeatbeltSandbox {
+    /// 将原始命令包装为 `sandbox-exec -f policy.sb <原命令>` 形式。
     fn wrap_command(&self, cmd: &mut Command) -> std::io::Result<()> {
         let program = cmd.get_program().to_string_lossy().to_string();
         let args: Vec<String> = cmd
@@ -59,6 +73,7 @@ impl Sandbox for SeatbeltSandbox {
         sandbox_cmd.arg(&self.policy_path);
         sandbox_cmd.arg(&program);
         sandbox_cmd.args(&args);
+        // 用 sandbox-exec 命令替换原始命令
         *cmd = sandbox_cmd;
         Ok(())
     }
@@ -75,6 +90,11 @@ impl Sandbox for SeatbeltSandbox {
         "macOS Seatbelt sandbox (built-in sandbox-exec)"
     }
 }
+
+/// 将字符串转义为 Seatbelt 策略字面量格式。
+///
+/// Seatbelt 的字符串字面量用双引号包裹, 需转义反斜杠、双引号和控制字符。
+/// 控制字符替换为 `?` 以防破坏策略文件语法。
 fn seatbelt_string_literal(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -90,22 +110,31 @@ fn seatbelt_string_literal(value: &str) -> String {
     }
     escaped
 }
+
+/// 生成 Seatbelt 沙箱策略文件内容 (.sb 格式)。
+///
+/// 策略原则: 默认拒绝一切 (deny default), 然后按需放行:
+/// - 进程: 允许执行、fork、自身信号
+/// - 文件读: 系统路径 (/usr, /bin, /System 等) + 工作目录 + 临时目录 + 用户配置
+/// - 文件写: 仅工作目录 + 临时目录 + /dev/null + /dev/tty
+/// - 网络: 默认禁止, 仅允许 DNS (mDNSResponder) 和 localhost 出站连接
+/// - Mach/IPC: 允许日志、通知、安全服务等基础 mach 服务
 fn generate_policy(workspace: &Path) -> String {
     let workspace_str = seatbelt_string_literal(&workspace.to_string_lossy());
     format!(
         r#"(version 1)
 
-;; Deny everything by default
+;; 默认拒绝所有操作
 (deny default)
 
-;; ── Process execution ──────────────────────────────────────
-;; Allow basic process operations needed for command execution
+;; ── 进程执行 ────────────────────────────────────────────────
+;; 允许进程执行所需的基础操作
 (allow process-exec)
 (allow process-fork)
 (allow signal (target self))
 
-;; ── Filesystem reads ───────────────────────────────────────
-;; Allow reading system libraries, frameworks, and executables
+;; ── 文件系统读 ──────────────────────────────────────────────
+;; 允许读取系统库、框架和可执行文件
 (allow file-read*
     (subpath "/usr")
     (subpath "/bin")
@@ -121,21 +150,21 @@ fn generate_policy(workspace: &Path) -> String {
     (literal "/")
     (subpath "/var"))
 
-;; Allow reading the workspace
+;; 允许读取工作目录
 (allow file-read* (subpath "{workspace}"))
 
-;; Allow reading temp directories (needed for policy file itself)
+;; 允许读取临时目录 (策略文件本身也需要)
 (allow file-read* (subpath "/tmp"))
 (allow file-read* (subpath "/private/tmp"))
 (allow file-read*
     (regex #"^/private/var/folders/"))
 
-;; Allow reading user home for tool configs
+;; 允许读取用户家目录下的配置文件 (如 .cargo, .gitconfig 等)
 (allow file-read*
     (regex #"^/Users/[^/]+/\\."))
 
-;; ── Filesystem writes ──────────────────────────────────────
-;; Only allow writes to workspace and temp directories
+;; ── 文件系统写 ──────────────────────────────────────────────
+;; 仅允许写入工作目录和临时目录
 (allow file-write*
     (subpath "{workspace}"))
 (allow file-write*
@@ -146,29 +175,28 @@ fn generate_policy(workspace: &Path) -> String {
 (allow file-write* (subpath "/dev/null"))
 (allow file-write* (subpath "/dev/tty"))
 
-;; ── Network ────────────────────────────────────────────────
-;; Deny all network by default (inherited from deny default)
-;; Allow DNS resolution only
+;; ── 网络 ────────────────────────────────────────────────────
+;; 默认禁止所有网络 (继承自 deny default)
+;; 仅允许 DNS 解析
 (allow network-outbound
     (remote unix-socket (path-literal "/var/run/mDNSResponder")))
 (allow system-socket)
 
-;; Allow localhost connections only (for local dev servers).
-;; Note: macOS sandbox-exec only accepts "localhost:*" or "*:port" in
-;; (remote ip ...) filters — raw IP addresses cause the entire policy
-;; to fail to parse.
+;; 仅允许 localhost 出站连接 (用于本地开发服务器)
+;; 注意: macOS sandbox-exec 的 (remote ip ...) 过滤器只接受
+;; "localhost:*" 或 "*:port" 格式 -- 直接写 IP 地址会导致整个策略解析失败
 (allow network-outbound
     (remote ip "localhost:*"))
 
 ;; ── Mach / IPC ─────────────────────────────────────────────
-;; Allow basic mach services needed for process execution
+;; 允许进程执行所需的基础 mach 服务
 (allow mach-lookup
     (global-name "com.apple.system.logger")
     (global-name "com.apple.system.notification_center")
     (global-name "com.apple.SecurityServer")
     (global-name "com.apple.CoreServices.coreservicesd"))
 
-;; ── Sysctl / misc ──────────────────────────────────────────
+;; ── Sysctl / 其他 ───────────────────────────────────────────
 (allow sysctl-read)
 (allow mach-task-name)
 "#,

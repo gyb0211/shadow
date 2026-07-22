@@ -1,10 +1,10 @@
-use crate::security::{NoopSandbox, Sandbox};
+use crate::security::seatbelt::SeatbeltSandbox;
+use crate::security::{NoopSandbox, Sandbox, docker};
 use shadow_config::RuntimeKind;
 use shadow_config::multi::risk_profile::SandboxConfig;
 use shadow_config::risk_profile::SandboxBackend;
 use std::path::Path;
 use std::sync::Arc;
-use crate::security::seatbelt::SeatbeltSandbox;
 
 pub fn create_sandbox(
     sandbox: &SandboxConfig,
@@ -86,8 +86,16 @@ fn create_selected_sandbox(
             }
         }
         SelectedSandboxBackend::Docker => {
-            None
-        }
+            let result = if let Some(ws) = workspace_dir {
+                docker::DockerSandbox::with_workspace(
+                    docker::DockerSandbox::default_image(),
+                    ws.to_path_buf(),
+                )
+            } else {
+                docker::DockerSandbox::probe()
+            };
+            result.map(|sd| Arc::new(sd) as Arc<dyn Sandbox>).ok()
+        },
         SelectedSandboxBackend::SandboxExec => {
             #[cfg(target_os = "macos")]
             {
@@ -128,6 +136,12 @@ fn detect_best_backend(runtime_kind: &str, workspace_dir: Option<&Path>) -> Sele
             return SelectedSandboxBackend::SandboxExec;
         }
     }
+
+    if !skip_docker && sandbox_backend_available(SelectedSandboxBackend::Docker, workspace_dir) {
+        return SelectedSandboxBackend::Docker;
+    }
+
+    SelectedSandboxBackend::None
 }
 
 fn sandbox_backend_available(
@@ -157,7 +171,18 @@ fn sandbox_backend_available(
                 false
             }
         }
-        SelectedSandboxBackend::Docker => false,
+        SelectedSandboxBackend::Docker => {
+            let result = if let Some(ws) = workspace_dir {
+                docker::DockerSandbox::with_workspace(
+                    docker::DockerSandbox::default_image(),
+                    ws.to_path_buf(),
+                )
+            } else {
+                docker::DockerSandbox::probe()
+            };
+
+            result.is_ok()
+        }
         SelectedSandboxBackend::SandboxExec => seatbelt_available(),
     }
 }

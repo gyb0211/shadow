@@ -10,6 +10,7 @@ shadow-core.workspace = true
 shadow-memory.workspace = true
 shadow-log.workspace = true
 shadow-config.workspace = true
+shadow-providers.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 serde.workspace = true

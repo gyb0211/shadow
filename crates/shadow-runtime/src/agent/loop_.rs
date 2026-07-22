@@ -10,10 +10,18 @@ use shadow_core::runtime::RuntimePlatformAdapter;
 use shadow_log::{attribution_span, Action, Event};
 use shadow_memory::create_memory_for_agent;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 use tracing::{info_span, Instrument};
 use shadow_config::policy::SecurityPolicy;
-use crate::observability;
+use crate::{observability, tools};
+use crate::tools::outcome::ModelSwitchCallback;
+//Global Model Switch request state
+
+static MODEL_SWITCH_REQUEST:LazyLock<Arc<Mutex<Option<(String,String)>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(None)));
+pub fn get_model_switch_state() -> ModelSwitchCallback {
+    Arc::clone(&MODEL_SWITCH_REQUEST)
+}
 
 #[derive(Default)]
 pub struct AgentRuntimeOverrides {

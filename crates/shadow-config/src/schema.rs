@@ -777,3 +777,19 @@ fn normalize_reasoning_effort(value: &str) -> std::result::Result<String, String
         )),
     }
 }
+
+pub trait FamilyEndpoint {
+    fn endpoint_uri(&self) -> Option<&'static str> {
+        None
+    }
+}
+
+macro_rules! impl_default_family_endpoint {
+    ($($t:ty), + $(,)?) => {
+        $(impl FamilyEndpoint for $t {})+
+    };
+
+}
+impl_default_family_endpoint! {
+CustomModelProviderConfig,
+}

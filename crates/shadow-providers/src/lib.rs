@@ -7,133 +7,95 @@
 
 pub mod dispatch;
 pub mod error;
+pub mod factory;
 pub mod openai;
 pub mod rate_limit;
 pub mod reliable;
 pub mod router;
-pub mod factory;
+pub mod catalog;
+mod models_dev;
 
+use std::collections::HashMap;
+pub use dispatch::*;
 pub use error::{ChatError, RetryClass};
 pub use openai::OpenAiCompatibleModelProvider;
 pub use rate_limit::TokenBucket;
-pub use dispatch::*;
 
 use anyhow::Result;
 use shadow_core::{ModelProvider, ModelProviderRuntimeOptions};
 use std::sync::Arc;
+use shadow_config::{Config, ModelProviderConfig};
 
-// /// 工厂函数 -- 按 (family) 创建 provider (向后兼容旧签名)
-// ///
-// /// 等价于 `create_provider_with_opts(family, api_key, base_url, ModelProviderRuntimeOptions::default())`.
-// pub fn create_provider(
-//     provider_type: &str,
-//     api_key: Option<&str>,
-//     base_url: Option<&str>,
-// ) -> Result<Arc<dyn ModelProvider>> {
-//     create_provider_with_opts(
-//         provider_type,
-//         api_key,
-//         base_url,
-//         ModelProviderRuntimeOptions::default(),
-//     )
-// }
-//
-// /// 工厂函数 (带运行时选项) -- 按 (alias, family) 创建 provider
-// ///
-// /// - `alias`: 别名 (如 "openai.default") -- 用于 Attributable::alias(); 传入 family 时回退为 family
-// /// - `family`: 家族名 (如 "openai" / "openrouter" / "ollama" / "compatible") -- 决定 base_url
-// /// - `api_key`: API key (None 时不发 auth header, 兼容 ollama)
-// /// - `base_url`: 自定义 base_url (None 时按 family 选默认)
-// /// - `opts`: 运行时选项 (auth_style / timeout / extra_headers / ...)
-// ///
-// /// 返回 `Arc<dyn ModelProvider>`, 因为 Agent.provider 字段类型是 Arc.
-// pub fn create_provider_with_opts(
-//     alias: &str,
-//     api_key: Option<&str>,
-//     base_url: Option<&str>,
-//     opts: ModelProviderRuntimeOptions,
-// ) -> Result<Arc<dyn ModelProvider>> {
-//     match alias {
-//         "openai" | "openrouter" | "ollama" | "compatible" => {
-//             OpenAiCompatibleModelProvider::new_with_opts(alias, api_key, base_url, opts)
-//                 .map(|p| Arc::new(p) as Arc<dyn ModelProvider>)
-//         }
-//         "anthropic" => AnthropicProvider::new_with_alias(alias, api_key, base_url, opts)
-//             .map(|p| Arc::new(p) as Arc<dyn ModelProvider>),
-//         _ => anyhow::bail!("未知的 provider family: {alias}"),
-//     }
-// }
-//
-// /// 创建 Reliable 包装的 provider -- 从 ResolvedProvider 字段构造完整 3 层栈.
-// ///
-// /// 参数从 `ProviderEntry` 提取 (调用方负责), 避免本 crate 反向依赖 shadow-config.
-// ///
-// /// - `alias`: 完整别名 (如 "openai.default") -- 用于 Attributable::alias()
-// /// - `family`: 家族名 (如 "openai" / "openrouter" / "ollama" / "compatible")
-// /// - `api_keys`: API key 列表 (多 key 支持轮换; 空 vec 表示无 auth)
-// /// - `base_url`: 自定义 base_url (None 时按 family 选默认)
-// /// - `fallback_models`: 主模型失败后依次尝试的备选模型列表
-// /// - `policy`: 重试/退避策略 (max_retries / initial_backoff_ms / max_backoff_ms / jitter_pct)
-// /// - `requests_per_minute`: 限流 (0 = 无限流)
-// ///
-// /// 返回 `Arc<dyn ModelProvider>` -- 内部已 Reliable 包装.
-// pub fn create_reliable_provider(
-//     alias: &str,
-//     family: &str,
-//     api_keys: Vec<String>,
-//     base_url: Option<&str>,
-//     fallback_models: Vec<String>,
-//     policy: RetryPolicy,
-//     requests_per_minute: u32,
-// ) -> Result<Arc<dyn ModelProvider>> {
-//     // 1. 构造 Compat 层 provider -- 按 family 选择具体实现
-//     //    返回 (dyn Provider, dyn KeyRotator) 双重 Arc, 共享同一底层对象
-//     let (inner_provider, rotator): (Arc<dyn ModelProvider>, Arc<dyn KeyRotator>) = match family {
-//         "anthropic" => {
-//             let p = Arc::new(AnthropicProvider::new_with_alias(
-//                 alias,
-//                 api_keys.first().map(String::as_str),
-//                 base_url,
-//                 ModelProviderRuntimeOptions::default(),
-//             )?);
-//             let r = Arc::clone(&p) as Arc<dyn KeyRotator>;
-//             (p, r)
-//         }
-//         // OpenAI 兼容家族 (openai/openrouter/ollama/compatible/其他)
-//         _ => {
-//             let p = Arc::new(OpenAiCompatibleModelProvider::new_with_opts(
-//                 family,
-//                 api_keys.first().map(String::as_str),
-//                 base_url,
-//                 ModelProviderRuntimeOptions::default(),
-//             )?);
-//             let r = Arc::clone(&p) as Arc<dyn KeyRotator>;
-//             (p, r)
-//         }
-//     };
-//
-//     // 2. 构造 Reliable 包装层, 注入 key 轮换 / 限流 / fallback
-//     let mut reliable = ReliableModelProvider::new(alias, inner_provider, policy);
-//     if !api_keys.is_empty() {
-//         reliable = reliable.with_key_rotation(api_keys, rotator);
-//     }
-//     if requests_per_minute > 0 {
-//         reliable = reliable.with_rate_limiter(Arc::new(TokenBucket::new(requests_per_minute)));
-//     }
-//     if !fallback_models.is_empty() {
-//         reliable = reliable.with_fallback_models(fallback_models);
-//     }
-//     Ok(Arc::new(reliable) as Arc<dyn ModelProvider>)
-// }
+pub struct ModelProviderInfo {
+    pub name: &'static str,
+    pub display_name: &'static str,
+    pub local: bool,
+    pub category: ModelProviderCategory,
+}
 
-// pub fn create_model_provider(name: &str, api_key: Option<&str>) -> Result<Box<dyn ModelProvider>> {
-//     create_model_provider_inner(
-//         None,name, "default", api_key, None, &ModelProviderRuntimeOptions::default()
-//     )
-// }
-pub fn create_model_provider(name: &str,  api_key: Option<&str>,api_url: Option<&str>,) -> Result<Box<dyn ModelProvider>> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelProviderCategory {
+    Primary,
+    OpenAiCompatible,
+    FastInference,
+    ModelHosting,
+    ChineseAi,
+    CloudEndpoint,
+}
+
+pub fn list_model_providers() -> Vec<ModelProviderInfo> {
+    let mut out: Vec<ModelProviderInfo> = Vec::new();
+    push_family(&mut out, ModelProviderCategory::Primary, &[
+        ("openrouter", "OpenRouter", false),
+        ("anthropic", "Anthropic", false),
+        ("openai", "OpenAI", false),
+        ("ollama", "Ollama", true),
+        ("gemini", "Google Gemini", true),
+    ]);
+
+    push_family(&mut out, ModelProviderCategory::OpenAiCompatible, &[
+        ("zai", "Z.AI", false),
+        ("glm", "GLM", false),
+        ("minimax", "MiniMax", false),
+        ("qwen", "Qwen", false),
+        ("deepseek", "Deepseek", false),
+        ("qwen", "Qwen", false),
+        ("custom", "Custom(OpenAI-compatible)", false),
+    ]);
+
+
+    out
+}
+
+fn push_family(
+    out: &mut Vec<ModelProviderInfo>,
+    category: ModelProviderCategory,
+    families: &[(&'static str, &'static str, bool)],
+) {
+    out.extend(
+        families
+            .iter()
+            .map(|&(name, display_name, local)| ModelProviderInfo {
+                name,
+                display_name,
+                local,
+                category,
+            })
+    );
+}
+
+pub fn create_model_provider(
+    name: &str,
+    api_key: Option<&str>,
+    api_url: Option<&str>,
+) -> Result<Box<dyn ModelProvider>> {
     create_model_provider_inner(
-        None,name, "default", api_key, api_url, &ModelProviderRuntimeOptions::default()
+        None,
+        name,
+        "default",
+        api_key,
+        api_url,
+        &ModelProviderRuntimeOptions::default(),
     )
 }
 
@@ -145,30 +107,77 @@ fn create_model_provider_inner(
     api_url: Option<&str>,
     options: &ModelProviderRuntimeOptions,
 ) -> Result<Box<dyn ModelProvider>> {
-    if let Some(idx) = raw_name.find(":") {
-
-    }
+    if let Some(idx) = raw_name.find(":") {}
 
     // todo!() url形式的模型配置
-    let provider_kind = options.provider_kind.as_deref().map(str::trim).filter(|value| !value.is_empty()).unwrap_or(raw_name);
+    let provider_kind = options
+        .provider_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(raw_name);
 
-    let resolved_credential = resolve_model_provider_credential(provider_kind, api_key).map(|v| String::from_utf8(v.into_bytes()).unwrap_or_default());
+    let resolved_credential = resolve_model_provider_credential(provider_kind, api_key)
+        .map(|v| String::from_utf8(v.into_bytes()).unwrap_or_default());
 
     let key = resolved_credential.as_ref().map(String::as_str);
 
-
-    let resolved_url =api_url.map(str::trim).filter(|v| !v.is_empty())
+    let resolved_url = api_url
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
         .or_else(|| {
-           options.provider_api_url.as_deref().map(str::trim).filter(|v| !v.is_empty())
+            options
+                .provider_api_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
         });
 
-
-
     factory::dispatch_family_factory(config, provider_kind, alias, key, resolved_url, options)
-
 }
 
+fn resolve_model_provider_credential(
+    _name: &str,
+    credential_override: Option<&str>,
+) -> Option<String> {
+    credential_override
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToString::to_string)
+}
 
-fn resolve_model_provider_credential(_name: &str, credential_override: Option<&str>,) -> Option<String>{
-    credential_override.map(str::trim).filter(|v| !v.is_empty()).map(ToString::to_string)
+pub fn provider_runtime_options_for_alias(config: &Config, family: &str, alias: &str) -> ModelProviderRuntimeOptions {
+    let entry = config.providers.models.find(family, alias);
+    let mut options = model_provider_runtime_options_from_model_provider_entry(config, entry);
+    if options.provider_api_url.is_none() && let Some(uri) = config.providers.models.resolved_endpoint_uri(family, alias){
+
+    }
+    options
+}
+
+pub fn model_provider_runtime_options_from_model_provider_entry(
+    config: &Config,
+    entry: Option<&ModelProviderConfig>
+) -> ModelProviderRuntimeOptions {
+    // let merge_system_to_user = entry.and_then(|e| e.uri.as_deref())
+    //     .map(str::trim).filter(|u| !u.is_empty())
+    //     .and_then(|u|{
+    //         config.providers.models.iter_entries()
+    //             .map(|(_,_,base)| base)
+    //             .find(|c| {
+    //                 c.uri.as_deref().map(str::trim).filter(|u|!u.is_empty())
+    //                     .map(|u| u.trim_end_matches('/')) == Some(u.trim_end_matches('/'))
+    //             })
+    //     }).map(|c| c.merge_system_into_user).unwrap_or(false);
+    // 
+    // let tls_ca_cert_path = entry.and_then(|c|c.tls_ca_cert_path.clone());
+    ModelProviderRuntimeOptions{
+        provider_kind: entry.and_then(|e| {e.kind.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(str::to_string)}),
+        provider_api_url: entry.and_then(|e| e.uri.clone()),
+        native_tools: entry.and_then(|e| e.native_tools),
+        provider_timeout_secs: Some(entry.and_then(|e| e.timeout_secs).unwrap_or(120)),
+        reasoning_effort: config.runtime.reasoning_effort.clone(),
+        api_path: None,
+        extra_headers: entry.map(|e| e.extra_headers.clone()).unwrap_or_default(),
+    }
 }
