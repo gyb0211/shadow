@@ -26,7 +26,7 @@ pub struct AllToolsResult {
 pub fn all_tools_with_runtime(
     config: Arc<Config>,
     security: &Arc<SecurityPolicy>,
-    risk_profile: RiskProfileConfig,
+    risk_profile: &RiskProfileConfig,
     agent_alias: &str,
     runtime: Arc<dyn RuntimePlatformAdapter>,
     memory: Arc<dyn Memory>,

@@ -1,10 +1,10 @@
+use std::collections::HashMap;
 use crate::agent::AgentAttribution;
-use crate::security::SecurityPolicy;
 use anyhow::Context;
 use shadow_config::multi::alias_agent::MemoryBackendKind;
 use shadow_config::observability::ObservabilityBackend;
 use shadow_config::schema::AliasedAgentConfig;
-use shadow_config::{Config, platform};
+use shadow_config::{Config, platform, ModelProviderConfig};
 use shadow_core::{Memory, Observer};
 use shadow_core::runtime::RuntimePlatformAdapter;
 use shadow_log::{attribution_span, Action, Event};
@@ -163,8 +163,40 @@ pub async fn run(
         // todo sop
         
         let all_tools_result = tools::all_tools_with_runtime(
-            
-        )
+            Arc::new(config.clone()),
+            &security,
+            &risk_profile,
+            agent_alias,
+            runtime.clone(),
+            mem.clone(),
+            &config.data_dir,
+            &config.agents,
+            None,
+            &config,
+            is_subagent_caller,
+            None
+        );
+
+        // todo skill
+
+        // todo route scoped tool
+
+
+        let mut provider_name = agent_provider_composite(&config, agent_alias)?;
+        let mut model_name = match agent_model_provider.and_then(|e| e.model.as_deref()){
+            None => anyhow::bail!(
+                "No model configured for agent {agent_alias}:\
+                [providers.models.{provider_name}.<alias>].model is unset and --model was not passed"
+            ),
+            Some(m) => m.to_string(),
+        };
+
+        //todo span
+
+        let provider_runtime_options = match agent_provider_resolved.as_ref() {
+            None => shadow_providers::provider_runtime_options_for_agent(&config, agent_alias),
+            Some((ty, alias, _)) => shadow_providers::provider_runtime_options_for_alias(&config, ty, alias)
+        };
         
         
         return Ok("exit".to_string());
@@ -180,4 +212,8 @@ fn resolve_agent_for_turn(
         .resolved_agent_config(agent_alias)
         .with_context(|| format!("agents.{agent_alias} is not configured."))?;
     Ok(agent)
+}
+
+fn agent_provider_composite(config: &Config, agent_alias: &str) -> Option<String> {
+    config.resolved_model_provider_for_agent(agent_alias).map(|(ty, alias, _)| format!("{ty}.{alias}"))
 }

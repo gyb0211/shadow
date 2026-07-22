@@ -189,7 +189,7 @@ impl ModelProviders {
         hit
     }
 
-    pub fn resolved_endpoint_uri(&self, family: &str, alias: &str) -> Option<&'static str>{
+    pub fn resolved_endpoint_uri(&self, family: &str, alias: &str) -> Option<&'static str> {
         use super::schema::FamilyEndpoint;
         macro_rules! emit_endpoint {
            ($(($field:ident, $type_str:literal, $cfg_ty:ty)),+ $(,)?) => {
@@ -199,8 +199,7 @@ impl ModelProviders {
                 }
             };
         }
-        for_each_model_provider_slot!(emit_endpoint);
-
+        for_each_model_provider_slot!(emit_endpoint)
     }
 }
 

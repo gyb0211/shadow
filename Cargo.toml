@@ -8,6 +8,7 @@ members = [
     "crates/shadow-runtime",   # 运行时: agent loop
     "crates/shadow-providers", # LLM provider 实现
     "crates/shadow-memory",    # 记忆后端实现
+    "crates/shadow-tools",    # 工具后端实现
 ]
 
 [workspace.package]
@@ -23,6 +24,7 @@ shadow-log = { path = "crates/shadow-log" }
 shadow-runtime = { path = "crates/shadow-runtime" }
 shadow-providers = { path = "crates/shadow-providers" }
 shadow-memory = { path = "crates/shadow-memory" }
+shadow-tools = { path = "crates/shadow-tools" }
 
 # 核心依赖
 anyhow = "1.0"

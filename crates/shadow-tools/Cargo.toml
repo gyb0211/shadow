@@ -4,7 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "影子工具集 -- agent 可调用的工具实现"
-publish = false
+#publish = false
 
 [dependencies]
 # 依赖按需添加, 初始为空
+shadow-config = {workspace = true}
+shadow-providers = {workspace = true}
+shadow-core = {workspace = true}
+
+async-trait.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true

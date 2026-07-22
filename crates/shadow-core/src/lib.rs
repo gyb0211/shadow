@@ -30,13 +30,12 @@ pub use kennel::memory::{
 pub use kennel::observer::{Observer, ObserverEvent};
 pub use kennel::provider::{
     AuthStyle, ChatMessage, ChatRequest, ChatResponse, ModelInfo, ModelProvider,
-    ModelProviderRuntimeOptions, ProviderCapabilities, StreamChunk, StreamError, StreamEvent,
-    StreamOptions, TokenUsage, ToolCall, ToolsPayload,
+    ProviderCapabilities, StreamChunk, StreamError, StreamEvent, StreamOptions, TokenUsage,
+    ToolCall, ToolsPayload,
 };
 pub use kennel::tool::{Tool, ToolResult, ToolSpec};
 pub use session_store::{JsonlSessionStore, Session, SessionMetadata, SessionStore};
 pub use workspace::Workspace;
-
 
 tokio::task_local! {
     pub static TOOL_LOOP_THREAD_ID: Option<String>;

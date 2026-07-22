@@ -5,26 +5,26 @@
 //! - **Reliable** (中层): 重试/退避/key 轮换/限流
 //! - **Compat** (底层): 把家族差异 (auth, API path, payload) 适配为统一 OpenAI 形态
 
+pub mod catalog;
 pub mod dispatch;
 pub mod error;
 pub mod factory;
+mod models_dev;
 pub mod openai;
 pub mod rate_limit;
 pub mod reliable;
 pub mod router;
-pub mod catalog;
-mod models_dev;
 
-use std::collections::HashMap;
 pub use dispatch::*;
 pub use error::{ChatError, RetryClass};
 pub use openai::OpenAiCompatibleModelProvider;
 pub use rate_limit::TokenBucket;
+use std::collections::HashMap;
 
 use anyhow::Result;
-use shadow_core::{ModelProvider, ModelProviderRuntimeOptions};
-use std::sync::Arc;
 use shadow_config::{Config, ModelProviderConfig};
+use shadow_core::{ModelProvider};
+use std::sync::Arc;
 
 pub struct ModelProviderInfo {
     pub name: &'static str,
@@ -45,24 +45,31 @@ pub enum ModelProviderCategory {
 
 pub fn list_model_providers() -> Vec<ModelProviderInfo> {
     let mut out: Vec<ModelProviderInfo> = Vec::new();
-    push_family(&mut out, ModelProviderCategory::Primary, &[
-        ("openrouter", "OpenRouter", false),
-        ("anthropic", "Anthropic", false),
-        ("openai", "OpenAI", false),
-        ("ollama", "Ollama", true),
-        ("gemini", "Google Gemini", true),
-    ]);
+    push_family(
+        &mut out,
+        ModelProviderCategory::Primary,
+        &[
+            ("openrouter", "OpenRouter", false),
+            ("anthropic", "Anthropic", false),
+            ("openai", "OpenAI", false),
+            ("ollama", "Ollama", true),
+            ("gemini", "Google Gemini", true),
+        ],
+    );
 
-    push_family(&mut out, ModelProviderCategory::OpenAiCompatible, &[
-        ("zai", "Z.AI", false),
-        ("glm", "GLM", false),
-        ("minimax", "MiniMax", false),
-        ("qwen", "Qwen", false),
-        ("deepseek", "Deepseek", false),
-        ("qwen", "Qwen", false),
-        ("custom", "Custom(OpenAI-compatible)", false),
-    ]);
-
+    push_family(
+        &mut out,
+        ModelProviderCategory::OpenAiCompatible,
+        &[
+            ("zai", "Z.AI", false),
+            ("glm", "GLM", false),
+            ("minimax", "MiniMax", false),
+            ("qwen", "Qwen", false),
+            ("deepseek", "Deepseek", false),
+            ("qwen", "Qwen", false),
+            ("custom", "Custom(OpenAI-compatible)", false),
+        ],
+    );
 
     out
 }
@@ -80,7 +87,7 @@ fn push_family(
                 display_name,
                 local,
                 category,
-            })
+            }),
     );
 }
 
@@ -146,18 +153,24 @@ fn resolve_model_provider_credential(
         .map(ToString::to_string)
 }
 
-pub fn provider_runtime_options_for_alias(config: &Config, family: &str, alias: &str) -> ModelProviderRuntimeOptions {
+pub fn provider_runtime_options_for_alias(
+    config: &Config,
+    family: &str,
+    alias: &str,
+) -> ModelProviderRuntimeOptions {
     let entry = config.providers.models.find(family, alias);
     let mut options = model_provider_runtime_options_from_model_provider_entry(config, entry);
-    if options.provider_api_url.is_none() && let Some(uri) = config.providers.models.resolved_endpoint_uri(family, alias){
-
+    if options.provider_api_url.is_none()
+        && let Some(uri) = config.providers.models.resolved_endpoint_uri(family, alias)
+    {
+        options.provider_api_url = Some(uri.to_string())
     }
     options
 }
 
 pub fn model_provider_runtime_options_from_model_provider_entry(
     config: &Config,
-    entry: Option<&ModelProviderConfig>
+    entry: Option<&ModelProviderConfig>,
 ) -> ModelProviderRuntimeOptions {
     // let merge_system_to_user = entry.and_then(|e| e.uri.as_deref())
     //     .map(str::trim).filter(|u| !u.is_empty())
@@ -169,10 +182,16 @@ pub fn model_provider_runtime_options_from_model_provider_entry(
     //                     .map(|u| u.trim_end_matches('/')) == Some(u.trim_end_matches('/'))
     //             })
     //     }).map(|c| c.merge_system_into_user).unwrap_or(false);
-    // 
+    //
     // let tls_ca_cert_path = entry.and_then(|c|c.tls_ca_cert_path.clone());
-    ModelProviderRuntimeOptions{
-        provider_kind: entry.and_then(|e| {e.kind.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(str::to_string)}),
+    ModelProviderRuntimeOptions {
+        provider_kind: entry.and_then(|e| {
+            e.kind
+                .as_deref()
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .map(str::to_string)
+        }),
         provider_api_url: entry.and_then(|e| e.uri.clone()),
         native_tools: entry.and_then(|e| e.native_tools),
         provider_timeout_secs: Some(entry.and_then(|e| e.timeout_secs).unwrap_or(120)),
@@ -180,4 +199,39 @@ pub fn model_provider_runtime_options_from_model_provider_entry(
         api_path: None,
         extra_headers: entry.map(|e| e.extra_headers.clone()).unwrap_or_default(),
     }
+}
+
+
+
+/// Provider 运行时选项 -- 注入 HTTP 层细节
+///
+/// 由 factory (shadow-providers::create_provider) 接收, 透传给 Compat 层.
+/// 设计为 Option-heavy: MVP 阶段大部分字段为 None, 未来 Reliable 层 / 推理控制会填充.
+///
+/// 注: `extra_headers` 用 `HashMap<String, String>` 而非 `reqwest::HeaderMap`,
+/// 是为了让 shadow-core 保持 HTTP-agnostic (不依赖 reqwest). shadow-providers
+/// 在调用 reqwest 时做一次转换.
+#[derive(Debug, Clone, Default)]
+pub struct ModelProviderRuntimeOptions {
+    pub provider_kind: Option<String>,
+
+    pub provider_api_url: Option<String>,
+
+    pub native_tools: Option<bool>,
+
+    /// HTTP 请求超时 (None = reqwest 默认)
+    pub provider_timeout_secs: Option<u64>,
+    /// 推理强度 (如 "low" / "medium" / "high"), OpenAI o-series / Anthropic 用
+    pub reasoning_effort: Option<String>,
+    /// 自定义 API path 后缀 (None = 各 family 默认, 如 "/chat/completions")
+    pub api_path: Option<String>,
+    /// 附加 HTTP headers (会与 auth header 合并)
+    pub extra_headers: HashMap<String, String>,
+}
+
+
+pub fn create_model_provider_with_options(name: &str, api_key: Option< &str>, opts: &ModelProviderRuntimeOptions) -> anyhow::Result<Box<dyn ModelProvider>>{
+    create_model_provider_inner(
+        None, name, "default", api_key, None, opts
+    )
 }
