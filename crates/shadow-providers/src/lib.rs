@@ -13,7 +13,9 @@ mod models_dev;
 pub mod openai;
 pub mod rate_limit;
 pub mod reliable;
+pub mod reliable_bak;
 pub mod router;
+pub mod router_bak;
 
 pub use dispatch::*;
 pub use error::{ChatError, RetryClass};
@@ -22,9 +24,9 @@ pub use rate_limit::TokenBucket;
 use std::collections::HashMap;
 
 use anyhow::Result;
-use shadow_config::{Config, ModelProviderConfig};
-use shadow_core::{ModelProvider};
-use std::sync::Arc;
+use reliable::ReliableModelProvider;
+use shadow_config::{Config, ModelProviderConfig, ReliableConfig, ModelRouteConfig};
+use shadow_core::ModelProvider;
 
 pub struct ModelProviderInfo {
     pub name: &'static str,
@@ -153,6 +155,105 @@ fn resolve_model_provider_credential(
         .map(ToString::to_string)
 }
 
+pub fn create_routed_model_provider_with_options(
+    config: &Config,
+    primary_name: &str,
+    api_key: Option<&str>,
+    api_url: Option<&str>,
+    reliability: &ReliableConfig,
+    model_routes: &[ModelRouteConfig],
+    default_model: &str,
+    options: &ModelProviderRuntimeOptions,
+) -> anyhow::Result<Box<dyn ModelProvider>> {
+    if model_routes.is_empty() {
+        return create_resilient_model_provider_from_ref(
+            config,
+            primary_name,
+            api_key,
+            api_url,
+            reliability,
+            options,
+        );
+    }
+
+    // todo return RouterModelProvider
+
+    return create_resilient_model_provider_from_ref(
+        config,
+        primary_name,
+        api_key,
+        api_url,
+        reliability,
+        options,
+    );
+}
+
+fn create_resilient_model_provider_from_ref(
+    config: &Config,
+    name: &str,
+    api_key: Option<&str>,
+    api_url: Option<&str>,
+    reliability: &ReliableConfig,
+    options: &ModelProviderRuntimeOptions,
+) -> anyhow::Result<Box<dyn ModelProvider>> {
+    match name.split_once('.') {
+        Some((family, alias)) => create_resilient_model_provider_for_alias(
+            config,
+            family,
+            alias,
+            api_key,
+            api_url,
+            reliability,
+            options,
+        ),
+        None => create_resilient_model_provider_with_options(
+            name,
+            api_key,
+            api_url,
+            reliability,
+            options,
+        ),
+    }
+}
+
+pub fn create_resilient_model_provider_for_alias(
+    config: &Config,
+    family: &str,
+    alias: &str,
+    api_key: Option<&str>,
+    api_url: Option<&str>,
+    reliability: &ReliableConfig,
+    options: &ModelProviderRuntimeOptions,
+) -> anyhow::Result<Box<dyn ModelProvider>> {
+    // todo 先用普通的代替
+    create_resilient_model_provider_with_options(
+        format!("{family}.{alias}").as_str(),
+        api_key,
+        api_url,
+        reliability,
+        options,
+    )
+}
+
+pub fn create_resilient_model_provider_with_options(
+    name: &str,
+    api_key: Option<&str>,
+    api_url: Option<&str>,
+    reliability: &ReliableConfig,
+    options: &ModelProviderRuntimeOptions,
+) -> anyhow::Result<Box<dyn ModelProvider>> {
+    let model_provider =
+        create_model_provider_inner(None, name, "default", api_key, api_url, options)?;
+    let reliable = ReliableModelProvider::new(
+        name,
+        vec![(name.to_string(), model_provider)],
+        reliability.provider_retries,
+        reliability.provider_backoff_ms,
+    );
+    // .with_api_keys(reliability.api_keys.clone());
+    Ok(Box::new(reliable))
+}
+
 pub fn provider_runtime_options_for_alias(
     config: &Config,
     family: &str,
@@ -164,6 +265,24 @@ pub fn provider_runtime_options_for_alias(
         && let Some(uri) = config.providers.models.resolved_endpoint_uri(family, alias)
     {
         options.provider_api_url = Some(uri.to_string())
+    }
+    options
+}
+
+pub fn provider_runtime_options_for_agent(
+    config: &Config,
+    agent_alias: &str,
+) -> ModelProviderRuntimeOptions {
+    let entry = config.model_provider_for_agent(agent_alias);
+    let mut options = model_provider_runtime_options_from_model_provider_entry(config, entry);
+    if let Some(agent) = config.agents.get(agent_alias)
+        && let Some((family, alias)) = agent.model_provider.split_once('.')
+    {
+        if options.provider_api_url.is_none()
+            && let Some(uri) = config.providers.models.resolved_endpoint_uri(family, alias)
+        {
+            options.provider_api_url = Some(uri.to_string());
+        }
     }
     options
 }
@@ -201,8 +320,6 @@ pub fn model_provider_runtime_options_from_model_provider_entry(
     }
 }
 
-
-
 /// Provider 运行时选项 -- 注入 HTTP 层细节
 ///
 /// 由 factory (shadow-providers::create_provider) 接收, 透传给 Compat 层.
@@ -229,9 +346,10 @@ pub struct ModelProviderRuntimeOptions {
     pub extra_headers: HashMap<String, String>,
 }
 
-
-pub fn create_model_provider_with_options(name: &str, api_key: Option< &str>, opts: &ModelProviderRuntimeOptions) -> anyhow::Result<Box<dyn ModelProvider>>{
-    create_model_provider_inner(
-        None, name, "default", api_key, None, opts
-    )
+pub fn create_model_provider_with_options(
+    name: &str,
+    api_key: Option<&str>,
+    opts: &ModelProviderRuntimeOptions,
+) -> anyhow::Result<Box<dyn ModelProvider>> {
+    create_model_provider_inner(None, name, "default", api_key, None, opts)
 }

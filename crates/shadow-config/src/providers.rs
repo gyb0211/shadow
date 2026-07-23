@@ -253,9 +253,7 @@ pub struct ProviderEntry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fallback_models: Vec<String>,
 
-    /// Reliable 层配置 (重试 / 退避 / 限流)
-    #[serde(default, skip_serializing_if = "ReliableConfig::is_default")]
-    pub reliable: ReliableConfig,
+
 }
 
 impl ProviderEntry {
@@ -322,7 +320,7 @@ impl<'de> Deserialize<'de> for ProviderEntry {
             max_tokens: h.max_tokens,
             timeout_secs: h.timeout_secs,
             fallback_models: h.fallback_models,
-            reliable: h.reliable,
+
         })
     }
 }
@@ -340,63 +338,35 @@ impl<'de> Deserialize<'de> for ProviderEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReliableConfig {
     /// 最大重试次数 (0 = 不重试, 只调一次)
-    #[serde(default = "default_max_retries")]
-    pub max_retries: u32,
+    #[serde(default = "default_provider_retries")]
+    pub provider_retries: u32,
 
     /// 初始退避 (毫秒)
-    #[serde(default = "default_initial_backoff_ms")]
-    pub initial_backoff_ms: u64,
-
-    /// 退避上限 (毫秒)
-    #[serde(default = "default_max_backoff_ms")]
-    pub max_backoff_ms: u64,
-
-    /// Jitter 百分比 (0-100), 实际退避 = base * (1 ± jitter_pct/100)
-    #[serde(default = "default_jitter_pct")]
-    pub jitter_pct: u8,
-
-    /// 每分钟最大请求数 (0 = 无限流)
+    #[serde(default = "default_provider_backoff_ms")]
+    pub provider_backoff_ms: u64,
     #[serde(default)]
-    pub requests_per_minute: u32,
+    pub api_keys: Vec<String>,
+
 }
 
-fn default_max_retries() -> u32 {
+fn default_provider_retries() -> u32 {
     3
 }
-fn default_initial_backoff_ms() -> u64 {
+fn default_provider_backoff_ms() -> u64 {
     1000
 }
-fn default_max_backoff_ms() -> u64 {
-    60_000
-}
-fn default_jitter_pct() -> u8 {
-    25
-}
+
 
 impl Default for ReliableConfig {
     fn default() -> Self {
         Self {
-            max_retries: default_max_retries(),
-            initial_backoff_ms: default_initial_backoff_ms(),
-            max_backoff_ms: default_max_backoff_ms(),
-            jitter_pct: default_jitter_pct(),
-            requests_per_minute: 0,
+            provider_retries: default_provider_retries(),
+            provider_backoff_ms: default_provider_backoff_ms(),
+            api_keys: vec![],
         }
     }
 }
 
-impl ReliableConfig {
-    /// 是否全字段等于默认值 (用于 skip_serializing_if)
-    #[must_use]
-    pub fn is_default(&self) -> bool {
-        let d = Self::default();
-        self.max_retries == d.max_retries
-            && self.initial_backoff_ms == d.initial_backoff_ms
-            && self.max_backoff_ms == d.max_backoff_ms
-            && self.jitter_pct == d.jitter_pct
-            && self.requests_per_minute == d.requests_per_minute
-    }
-}
 
 /// Router 配置段 -- 跨 provider 路由与 fallback
 ///

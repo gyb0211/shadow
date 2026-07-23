@@ -19,8 +19,9 @@ pub mod platform;
 pub mod runtime;
 pub mod session_store;
 pub mod workspace;
+pub mod agent;
 
-use crate::kennel::provider::NativeThinkingParams;
+pub use crate::kennel::provider::NativeThinkingParams;
 pub use channel::{Channel, ChannelMessage, SendMessage};
 pub use kennel::attribution::*;
 pub use kennel::memory::{
@@ -41,5 +42,5 @@ tokio::task_local! {
     pub static TOOL_LOOP_THREAD_ID: Option<String>;
     pub static TOOL_CHOICE_OVERRIDE:  Option<String>;
     pub static TOOL_LOOP_SESSION_KEY:  Option<String>;
-    pub static NARIVE_THINKING_OVERRIDE:  Option<NativeThinkingParams>;
+    pub static NATIVE_THINKING_OVERRIDE:  Option<NativeThinkingParams>;
 }

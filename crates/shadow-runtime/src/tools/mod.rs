@@ -17,6 +17,7 @@ pub mod cron;
 pub mod registry;
 mod model_switch;
 pub mod outcome;
+pub(crate) mod scoped;
 
 pub struct AllToolsResult {
     pub tools: Vec<Box<dyn Tool>>,

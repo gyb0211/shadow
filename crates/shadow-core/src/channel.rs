@@ -22,6 +22,15 @@ pub struct SendMessage {
     pub recipient: String,
 }
 
+impl SendMessage {
+    pub fn new(content: impl Into<String>, recipient: impl Into<String>) -> Self{
+        Self{ content: content.into(), recipient: recipient.into() }
+        
+    }
+}
+
+
+
 /// 渠道 trait
 ///
 /// 每个消息平台实现此 trait (CLI/Telegram/Discord...)

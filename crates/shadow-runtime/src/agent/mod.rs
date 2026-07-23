@@ -1,5 +1,7 @@
 mod agent;
 pub mod loop_;
+pub mod system_prompt;
+pub mod turn;
 
 pub use loop_::*;
 use shadow_core::{Attributable, Role};

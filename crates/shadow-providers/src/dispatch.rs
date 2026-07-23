@@ -59,6 +59,12 @@ impl ProviderDispatch {
     pub async fn list_models(&self) -> Result<Vec<String>> {
         self.as_ref().list_models().await
     }
+
+    pub async fn warmup(&self) -> anyhow::Result<()> {
+        use shadow_log::Instrument;
+        let span = shadow_log::attribution_span!(&*self.inner);
+        self.inner.warmup().instrument(span).await
+    }
 }
 
 impl ProviderDispatchRef<'_> {
@@ -73,6 +79,28 @@ impl ProviderDispatchRef<'_> {
         }.instrument(span).await
     }
 
+    /// Wrap the inner provider's `chat_with_system`.
+    pub async fn chat_with_system(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: Option<f64>,
+    ) -> anyhow::Result<String> {
+        use shadow_log::Instrument;
+        let span = shadow_log::attribution_span!(self.inner);
+        async move {
+            shadow_log::scope!(
+                model: model,
+                => self.inner.chat_with_system(system_prompt, message, model, temperature)
+            )
+                .await
+        }
+            .instrument(span)
+            .await
+    }
+
+
     pub async fn simple_chat(&self, message: &str, model: &str, temperature: Option<f64>) -> Result<String> {
         self.inner.simple_chat(message, model, temperature).await
     }
@@ -81,5 +109,11 @@ impl ProviderDispatchRef<'_> {
     pub async fn list_models(&self) -> Result<Vec<String>> {
         let span = shadow_log::attribution_span!(&*self.inner);
         self.inner.list_models().instrument(span).await
+    }
+
+    pub async fn warmup(&self) -> anyhow::Result<()> {
+        use shadow_log::Instrument;
+        let span = shadow_log::attribution_span!(self.inner);
+        self.inner.warmup().instrument(span).await
     }
 }

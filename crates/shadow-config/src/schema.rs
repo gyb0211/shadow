@@ -7,6 +7,7 @@ pub use crate::multi::skill_bundle::SkillBundleConfig;
 
 pub use crate::model_provider::*;
 
+use crate::ReliableConfig;
 use crate::multi::alias_agent::MemoryBackendKind;
 use crate::observability::ObservabilityBackend;
 use crate::providers::{ModelProviderRef, ModelProviders, Providers};
@@ -47,8 +48,14 @@ pub struct Config {
     #[serde(default)]
     pub providers: crate::providers::Providers,
 
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_routes: Vec<ModelRouteConfig>,
+
     #[serde(default)]
     pub runtime: RuntimeConfig,
+
+    #[serde(default)]
+    pub reliability: ReliableConfig,
 
     #[serde(default)]
     pub scheduler: SchedulerConfig,
@@ -120,7 +127,9 @@ impl Default for Config {
             runtime_profiles: Default::default(),
             skill_bundles: Default::default(),
             providers: pdf,
+            model_routes: vec![],
             runtime: Default::default(),
+            reliability: Default::default(),
             scheduler: Default::default(),
             memory_backend: "sqlite".to_string(),
             memory: Default::default(),
@@ -729,6 +738,19 @@ impl Default for DockerRuntimeConfig {
         }
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ModelRouteConfig {
+    #[serde(default)]
+    pub hint: String,
+    #[serde(default)]
+    pub model_provider: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
 
 fn deserialize_reasoning_effort_opt<'de, D>(
     deserializer: D,

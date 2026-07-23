@@ -27,6 +27,12 @@ impl ChatMessage {
             content: message.into(),
         }
     }
+    pub fn user(message: impl Into<String>) -> Self {
+        Self {
+            role: "user".to_string(),
+            content: message.into(),
+        }
+    }
 }
 
 /// 聊天请求
