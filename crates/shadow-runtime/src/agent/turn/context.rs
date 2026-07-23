@@ -9,5 +9,5 @@ pub(crate) struct TurnCtx<'a>{
     pub event_tx:Option<&'a Sender<TurnEvent>>,
     pub temperature: Option<f64>,
     pub turn_id: &'a str,
-    pub agent_alias: &'a str,
+    pub agent_alias: Option<&'a str>,
 }

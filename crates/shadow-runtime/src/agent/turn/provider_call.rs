@@ -20,7 +20,7 @@ pub(crate) struct ProviderCallOutcome {
 // let _ = tx.send(StreamDelta::Status(phase)).await;
 // }
 
-pub async fn call_provider(ctx: TurnCtx<'_>,
+pub async fn call_provider(ctx: &TurnCtx<'_>,
                            model_provider: &dyn ModelProvider,
                            model: &str,
                            messages: &[ChatMessage],
