@@ -106,7 +106,7 @@ impl Default for Config {
         pdf.models.custom.insert("default".to_string(), CustomModelProviderConfig {
             base: ModelProviderConfig {
                 api_key: Some("sk-cp-18TqfpOSbQSSNkZNvjO01R3euRRLhj7zreKCW1ssrFficr3yWC3rBzylPD6Nnw2V450mmZu9Q5s6p0CsqAInQOq1r3ZBzYpl_UUG_PkNiVGl4s5OduwRiFE".to_string()),
-                kind: None,
+                kind: Some("custom".to_string()),
                 uri: Some("https://api.minimaxi.com/v1".to_string()),
                 model: Some("MiniMax-M2.7".to_string()),
                 temperature: None,
@@ -118,12 +118,14 @@ impl Default for Config {
                 context_window: None,
             },
         });
+        let mut risk_profiles = HashMap::new();
+        risk_profiles.insert("assistant".to_string(), RiskProfileConfig::default());
         Self {
             schema_version: 0,
             config_path: Default::default(),
             data_dir: Default::default(),
             agents,
-            risk_profiles: Default::default(),
+            risk_profiles,
             runtime_profiles: Default::default(),
             skill_bundles: Default::default(),
             providers: pdf,
@@ -353,11 +355,11 @@ impl Config {
     }
 
     pub fn runtime_profile_for_agent(&self, agent_alias: &str) -> Option<&RuntimeProfileConfig> {
-        self.runtime_profiles.get("agent_alias")
+        self.runtime_profiles.get(agent_alias)
     }
 
     pub fn risk_profile_for_agent(&self, agent_alias: &str) -> Option<&RiskProfileConfig> {
-        self.risk_profiles.get("agent_alias")
+        self.risk_profiles.get(agent_alias)
     }
 
     pub async fn load_or_init() -> anyhow::Result<Self> {
@@ -750,7 +752,6 @@ pub struct ModelRouteConfig {
     #[serde(default)]
     pub api_key: Option<String>,
 }
-
 
 fn deserialize_reasoning_effort_opt<'de, D>(
     deserializer: D,

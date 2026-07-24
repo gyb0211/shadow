@@ -33,6 +33,27 @@ impl ChatMessage {
             content: message.into(),
         }
     }
+    pub fn assistant(message: impl Into<String>) -> Self {
+        Self {
+            role: "assistant".to_string(),
+            content: message.into(),
+        }
+    }
+
+    pub fn is_system(&self) -> bool {
+        self.role == "system"
+    }
+    pub fn is_user(&self) -> bool {
+        self.role == "user"
+    }
+    pub fn is_assistant(&self) -> bool {
+        self.role == "assistant"
+    }
+    pub fn is_tool(&self) -> bool {
+        self.role == "tool"
+    }
+    
+    
 }
 
 /// 聊天请求
@@ -175,7 +196,6 @@ pub enum AuthStyle {
     /// key 作为 URL query 参数, 字段值是参数名 (如 "key" / "apikey")
     Custom(String),
 }
-
 
 #[derive(Clone, Default)]
 pub struct ProviderCapabilities {

@@ -10,3 +10,11 @@ pub struct ResolvedModelAccess<'a>{
 pub struct ResolvedAgentExecution<'a> {
     pub model_access: ResolvedModelAccess<'a>,
 }
+
+impl <'a> ResolvedAgentExecution<'a>{
+    pub fn resolve(
+        model_access: ResolvedModelAccess<'a>
+    ) -> Self{
+        Self{model_access}
+    }
+}

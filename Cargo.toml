@@ -9,6 +9,7 @@ members = [
     "crates/shadow-providers", # LLM provider 实现
     "crates/shadow-memory",    # 记忆后端实现
     "crates/shadow-tools",    # 工具后端实现
+    "crates/shadow-channels",    # 工具后端实现
 ]
 
 [workspace.package]
@@ -25,6 +26,7 @@ shadow-runtime = { path = "crates/shadow-runtime" }
 shadow-providers = { path = "crates/shadow-providers" }
 shadow-memory = { path = "crates/shadow-memory" }
 shadow-tools = { path = "crates/shadow-tools" }
+shadow-channels = { path = "crates/shadow-channels" }
 
 # 核心依赖
 anyhow = "1.0"
@@ -65,6 +67,7 @@ shadow-config.workspace = true
 shadow-log.workspace = true
 shadow-providers.workspace = true
 shadow-memory.workspace = true
+shadow-channels.workspace = true
 
 # ── Runtime 层 (可选, 默认开启) ──
 shadow-runtime = { workspace = true, optional = true }

@@ -79,6 +79,7 @@ pub enum ChannelKind {
     #[strum(serialize = "acp")]
     AcpChannel,
     Plugin,
+    Cli,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntoStaticStr)]

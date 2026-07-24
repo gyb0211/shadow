@@ -2173,7 +2173,8 @@ impl SecurityPolicy {
     /// no enforcement"), matching the previous default when the budget
     /// fields lived on the risk profile.
     pub fn for_agent(config: &crate::schema::Config, agent_alias: &str) -> anyhow::Result<Self> {
-        let risk_profile = config.risk_profile_for_agent(agent_alias).ok_or_else(|| {
+        let risk_profile = config.risk_profile_for_agent(agent_alias)
+            .ok_or_else(|| {
             ::shadow_log::record!(
                 ERROR,
                 ::shadow_log::Event::new(module_path!(), ::shadow_log::Action::Fail)

@@ -269,6 +269,22 @@ pub fn provider_runtime_options_for_alias(
     options
 }
 
+pub fn options_for_provider_ref(
+    config: &Config,
+    name: &str,
+    fallback: &ModelProviderRuntimeOptions,
+) -> ModelProviderRuntimeOptions {
+    match name.split_once('.') {
+        None => {
+            let mut opts = fallback.clone();
+            opts.provider_kind = None;
+            opts.provider_api_url = None;
+            opts
+        }
+        Some((family, alias)) => provider_runtime_options_for_alias(config, family, alias),
+    }
+}
+
 pub fn provider_runtime_options_for_agent(
     config: &Config,
     agent_alias: &str,

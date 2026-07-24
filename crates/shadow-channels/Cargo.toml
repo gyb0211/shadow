@@ -8,3 +8,8 @@ publish = false
 
 [dependencies]
 # 依赖按需添加, 初始为空
+shadow-core.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+uuid = { version = "1.23.4", features = ["v4"] }

@@ -19,7 +19,7 @@ pub struct ToolLoop<'a> {
 }
 
 
-pub fn run_tool_call_loop(tool_loop : ToolLoop) -> anyhow::Result<String> {
+pub async fn run_tool_call_loop(tool_loop : ToolLoop<'_>) -> anyhow::Result<String> {
 
 
     let ToolLoop {
@@ -40,7 +40,7 @@ pub fn run_tool_call_loop(tool_loop : ToolLoop) -> anyhow::Result<String> {
         ..
     } = tool_loop;
     let ctx = TurnCtx{
-        observer: &(),
+        // observer: &(),
         on_delta: None,
         event_tx: None,
         temperature: None,
@@ -62,9 +62,60 @@ pub fn run_tool_call_loop(tool_loop : ToolLoop) -> anyhow::Result<String> {
             &ctx,
             model_provider,
             model,
-            history,None,should_consume_provider_stream,iteration
-        );
+            history,None,false,iteration
+        ).await?;
+
+        let (response_text) = match chat_result{
+            Ok(resp) => {
+                (resp.text.as_deref().unwrap_or("").to_string())
+
+            },
+            Err(e) =>return Err(e)
+        };
+
+        history.push(ChatMessage::assistant(response_text.clone().to_string()));
+
+        return Ok(response_text.to_string())
     }
 
 
+    Ok("12312".to_string())
+
+}
+#[derive(Debug)]
+pub struct ModelSwitchRequested {
+    pub model_provider: String,
+    pub model: String,
+}
+
+impl std::fmt::Display for ModelSwitchRequested {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "model switch requested to {} {}",
+            self.model_provider, self.model
+        )
+    }
+}
+
+
+#[derive(Debug)]
+pub struct ToolLoopCancelled;
+
+impl std::fmt::Display for ToolLoopCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("tool loop cancelled")
+    }
+}
+
+impl std::error::Error for ToolLoopCancelled {}
+
+impl std::error::Error for ModelSwitchRequested {}
+pub fn is_model_switch_requested(error: &anyhow::Error) -> Option<(String, String)> {
+    error.chain().filter_map(|s| s.downcast_ref::<ModelSwitchRequested>())
+        .map(|e| (e.model_provider.clone(), e.model.clone())).next()
+}
+
+pub fn is_tool_loop_cancelled(error: &anyhow::Error) -> bool{
+    error.chain().any(|e| e.is::<ToolLoopCancelled>())
 }

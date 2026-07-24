@@ -16,7 +16,6 @@
 //! - [`persona`]: Persona 系统 -- 多角色切换
 
 use chrono::Local;
-use shadow_core::AutonomyLevel;
 use std::path::PathBuf;
 
 // ── 子模块 ─────────────────────────────────────────────────────────
@@ -33,7 +32,7 @@ pub mod persona;
 /// PromptGuided 降级 -- 不支持原生工具时用文本解析
 pub mod prompt_guided;
 /// 安全策略注入 -- 将具体安全约束写入 system prompt
-pub mod safety_injection;
+// pub mod safety_injection;
 /// ToolsPayload 多态 -- 不同 provider 的工具格式适配
 pub mod tools_payload;
 /// 工具输出截断 -- 头尾保留 + JSON 感知
@@ -50,7 +49,8 @@ pub use persona::{Persona, PersonaSection, default_persona, get_persona, list_pe
 pub use prompt_guided::{
     ParsedToolCall, build_prompt_guided_instructions, parse_prompt_guided_response,
 };
-pub use safety_injection::SafetyInjectionSection;
+// pub use safety_injection::SafetyInjectionSection;
+use shadow_config::autonomy::AutonomyLevel;
 pub use tools_payload::{ToolFormat, ToolsPayload, convert_tools};
 pub use truncation::{truncate_tool_message, truncate_tool_result};
 

@@ -4,6 +4,7 @@ pub mod system_prompt;
 pub mod turn;
 
 pub use loop_::*;
+pub use turn::*;
 use shadow_core::{Attributable, Role};
 
 pub struct AgentAttribution<'a>(pub &'a str);

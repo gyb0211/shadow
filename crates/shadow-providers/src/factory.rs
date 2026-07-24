@@ -1,6 +1,6 @@
-use crate::OpenAiCompatibleModelProvider;
+use crate::{ModelProviderRuntimeOptions, OpenAiCompatibleModelProvider};
 use shadow_config::{Config, CustomModelProviderConfig, for_each_model_provider_slot, ModelProviderConfig};
-use shadow_core::{AuthStyle, ModelProvider, ModelProviderRuntimeOptions};
+use shadow_core::{AuthStyle, ModelProvider};
 
 pub trait FamilyProviderFactory {
     fn create_provider(

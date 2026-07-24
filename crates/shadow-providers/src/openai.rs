@@ -11,11 +11,35 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use shadow_core::{
-    Attributable, AuthStyle, ChatResponse, ModelProvider, ModelProviderKind,
-    ModelProviderRuntimeOptions, ProviderKind, Role, StreamChunk, TokenUsage,
+    Attributable, AuthStyle, ChatMessage, ChatResponse, ModelProvider, ModelProviderKind,
+    ProviderKind, Role, StreamChunk, TokenUsage,
 };
 
 use std::sync::{Arc, RwLock};
+
+#[derive(Debug, Serialize)]
+struct Message {
+    role: String,
+    content: MessageContent,
+}
+
+#[derive(Debug, Serialize)]
+enum MessageContent {
+    Text(String),
+    Parts(Vec<MessagePart>),
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum MessagePart {
+    Text { text: String },
+    ImageUrl { image_url: ImageUrlPart },
+}
+
+#[derive(Debug, Serialize)]
+struct ImageUrlPart {
+    url: String,
+}
 
 pub struct OpenAiCompatibleModelProvider {
     pub alias: String,
@@ -26,6 +50,10 @@ pub struct OpenAiCompatibleModelProvider {
     supports_vision: bool,
     native_tool_calling: bool,
     timeout_secs: u64,
+
+    reasoning_effort: Option<String>,
+    max_tokens: Option<u32>,
+    merge_system_into_user: bool,
 }
 
 impl OpenAiCompatibleModelProvider {
@@ -69,6 +97,9 @@ impl OpenAiCompatibleModelProvider {
             supports_vision,
             native_tool_calling: true,
             timeout_secs: 60,
+            reasoning_effort: None,
+            max_tokens: None,
+            merge_system_into_user,
         }
     }
     pub fn without_native_tools(mut self) -> Self {
@@ -93,6 +124,110 @@ impl OpenAiCompatibleModelProvider {
             self.timeout_secs,
             10,
         )
+    }
+
+    /// 打薄系统消息
+    /// 严格兼容OpenAI格式 要求的 只能以一个 system 开头的历史消息
+    /// 1. 多个 system 合并成一个
+    /// 2. 没有system或者为空 原样返回（过滤掉空的 len=0）
+    /// 3. 不需要合并的 就把合并后的system放到第一个
+    /// 4. 需要合并的 且 有用户消息的 第一条User.content前 插入system_content
+    /// 5. 要合并 且没有用户消息的 system_content 作为第一个user msg
+    ///
+    fn flatten_system_messages(messages: &[ChatMessage], merge: bool) -> Vec<ChatMessage> {
+        let mut saw_system = false;
+        let mut system_content = String::new();
+        let mut result = Vec::with_capacity(messages.len());
+        for message in messages {
+            if message.is_system() {
+                saw_system = true;
+                if !message.content.is_empty() {
+                    if !system_content.is_empty() {
+                        system_content.push_str("\n\n");
+                    }
+                    system_content.push_str(&message.content);
+                }
+            } else {
+                result.push(message.clone());
+            }
+        }
+
+        if !saw_system {
+            return messages.to_vec();
+        }
+
+        if system_content.is_empty() {
+            return result;
+        }
+
+        if !merge {
+            result.insert(0, ChatMessage::system(system_content));
+            return result;
+        }
+
+        if let Some(first_user) = result.iter_mut().find(|m| m.is_user()) {
+            if !system_content.is_empty() {
+                first_user.content = format!("{system_content}\n\n{}", first_user.content);
+            }
+        } else {
+            result.insert(0, ChatMessage::user(&system_content));
+        }
+
+        result
+    }
+
+    fn strip_native_tool_messages(&self, messages: &[ChatMessage]) -> Vec<ChatMessage> {
+        if self.native_tool_calling {
+            return messages.to_vec();
+        }
+
+        let intermediate = messages.iter().enumerate().find_map(|(idx, msg)| {
+            // todo 丢弃被标记过的消息
+
+            if msg.is_tool() {
+                return None;
+            }
+            if msg.is_assistant()
+                && let Ok(value) = serde_json::from_str::<Value>(&msg.content)
+                && value.get("tool_calls").is_some()
+            {
+                let text = value
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                return if text.is_empty() {
+                    None
+                } else {
+                    Some(ChatMessage::assistant(&text))
+                };
+            }
+            Some(msg.clone())
+        });
+
+        let mut coalesced: Vec<ChatMessage> = Vec::with_capacity(messages.len());
+        for msg in intermediate {
+            match coalesced.last_mut() {
+                Some(last) if last.role == msg.role && !msg.is_system() => {
+                    if !last.content.is_empty() && !msg.content.is_empty() {
+                        last.content.push_str("\n\n");
+                    }
+                    last.content.push_str(&msg.content)
+                }
+                _ => coalesced.push(msg),
+            }
+        }
+
+        coalesced
+    }
+
+    fn to_message_content(role: &String, content: &String, merge: bool) -> MessageContent {
+        MessageContent::Text(content.clone())
+    }
+
+    fn effective_merge_system(&self, model:&str) -> bool {
+        self.merge_system_into_user
+            // || Self::model_requires_system_merge(model)
     }
 }
 
@@ -214,6 +349,79 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             })
             .ok_or_else(|| anyhow::Error::msg(format!("{} no response", self.name)))
     }
+
+    async fn chat_with_history(
+        &self,
+        messages: &[ChatMessage],
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<String> {
+        let normalized = Vec::from(messages);
+        let merge = self.effective_merge_system(model);
+        let eff_msg = Self::flatten_system_messages(&normalized, merge);
+
+        let eff_msg = self.strip_native_tool_messages(&eff_msg);
+
+        let api_messages: Vec<Message> = eff_msg
+            .iter()
+            .map(|m| Message {
+                role: m.role.clone(),
+                content: Self::to_message_content(&m.role, &m.content, !merge),
+            })
+            .collect();
+
+        let request = ApiChatRequest {
+            model: model.to_string(),
+            messages: api_messages,
+            temperature,
+            stream: Some(false),
+            stream_options: None,
+            reasoning_effort: self.reasoning_effort.clone(),
+            tool_stream: None,
+            tools: None,
+            tool_choice: None,
+            max_tokens: self.max_tokens,
+        };
+
+        let url = self.chat_completions_url();
+        let response = match self
+            .apply_auth_header(
+                self.http_client().post(&url).json(&request),
+                self.credential.as_deref(),
+            )
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => return Err(err.into()),
+        };
+
+        if !response.status().is_success() {
+            return Err(anyhow::Error::msg(format!("API error")));
+        }
+
+        let body = response.text().await?;
+        let chat_resp = parse_chat_response_body(&self.name, &body)?;
+        chat_resp
+            .choices
+            .into_iter()
+            .next()
+            .map(|c| {
+                if c.message.tool_calls.is_some()
+                    && c.message.tool_calls.as_ref().is_some_and(|t| t.is_empty())
+                {
+                    serde_json::to_string(&c.message)
+                        .unwrap_or_else(|_| c.message.effective_content())
+                } else {
+                    c.message.effective_content()
+                }
+            })
+            .ok_or_else(|| {
+                // todo log
+
+                anyhow::Error::msg(format!("No Response from {}", self.name))
+            })
+    }
 }
 
 // ── API 类型 (OpenAI Chat Completions 格式) ──
@@ -226,6 +434,33 @@ struct ChatRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ApiTool>>,
     stream: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiChatRequest {
+    model: String,
+    messages: Vec<Message>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptionsBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct StreamOptionsBody {
+    include_usage: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -292,12 +527,17 @@ struct ResponseMessage {
 
 impl ResponseMessage {
     fn effective_content(&self) -> String {
-        self.content.as_ref().map(|c| strip_thing_tags(c))
-            .filter(|c| !c.is_empty()).unwrap_or_default()
+        self.content
+            .as_ref()
+            .map(|c| strip_thing_tags(c))
+            .filter(|c| !c.is_empty())
+            .unwrap_or_default()
     }
 
     fn effective_content_options(&self) -> Option<String> {
-        self.content.as_ref().map(|c| strip_thing_tags(c))
+        self.content
+            .as_ref()
+            .map(|c| strip_thing_tags(c))
             .filter(|c| !c.is_empty())
     }
 }
@@ -309,19 +549,18 @@ fn strip_thing_tags(content: &str) -> String {
     loop {
         if let Some(start) = rest.find("<think>") {
             result.push_str(&rest[..start]);
-            if let Some(end) = rest[start..].find("</think>"){
+            if let Some(end) = rest[start..].find("</think>") {
                 rest = &rest[start + end + "</think>".len()..];
-            }else{
+            } else {
                 break;
             }
-        }else{
+        } else {
             result.push_str(rest);
             break;
         }
     }
     result.trim().to_string()
 }
-
 
 #[derive(Debug, Deserialize)]
 struct RawResponseMessage {
@@ -358,7 +597,11 @@ impl From<RawResponseMessage> for ResponseMessage {
 fn openai_assistant_content_plaintext(content: Option<OpenAiAssistantContent>) -> Option<String> {
     match content? {
         OpenAiAssistantContent::Text(t) => {
-            if t.is_empty() { None } else { Some(t) }
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
         }
         OpenAiAssistantContent::Parts(parts) => {
             let mut text = String::new();
@@ -366,8 +609,12 @@ fn openai_assistant_content_plaintext(content: Option<OpenAiAssistantContent>) -
                 if p.kind.as_deref() != Some("text") {
                     continue;
                 }
-                let Some(pt) = p.text.filter(|text | !text.is_empty()) else { continue; };
-                if !text.is_empty() { text.push('\n'); }
+                let Some(pt) = p.text.filter(|text| !text.is_empty()) else {
+                    continue;
+                };
+                if !text.is_empty() {
+                    text.push('\n');
+                }
                 text.push_str(&pt);
             }
             if text.is_empty() { None } else { Some(text) }
@@ -429,7 +676,7 @@ struct StreamToolCallAccumulator {
 }
 
 #[derive(Debug, Deserialize)]
-struct StreamToolCallDelta{
+struct StreamToolCallDelta {
     index: Option<usize>,
     id: Option<String>,
     function: Option<StreamFunctionDelta>,
@@ -438,11 +685,9 @@ struct StreamToolCallDelta{
     extra_content: Option<serde_json::Value>,
 }
 #[derive(Debug, Deserialize)]
-struct StreamFunctionDelta{
+struct StreamFunctionDelta {
     name: Option<String>,
     arguments: Option<String>,
 }
 
-impl StreamToolCallAccumulator {
-    
-}
+impl StreamToolCallAccumulator {}

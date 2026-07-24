@@ -14,11 +14,12 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use shadow::config;
+use shadow_channels::cli::CliChannel;
 use shadow_config::Config;
 use shadow_log::Action;
 use shadow_providers::ProviderDispatch;
 use shadow_runtime::agent;
-use shadow_runtime::agent::AgentRuntimeOverrides;
+use shadow_runtime::agent::{AgentRuntimeOverrides, CLI_CHANNEL_FN};
 use std::io::{BufRead, StdinLock};
 use std::path::PathBuf;
 
@@ -140,7 +141,7 @@ async fn main() -> Result<()> {
     // shadow_log::init_from_config(workspace_root, 10_000);
 
     // 安装日志 subscriber (终端 + LogCaptureLayer)
-    shadow_log::install_subscriber(cli.verbose);
+    shadow_log::install_global_subscriber(None, "debug", cli.verbose);
 
     // 加载配置
     let mut config = Box::pin(shadow_config::Config::load_or_init()).await?;
@@ -277,7 +278,8 @@ async fn main() -> Result<()> {
                 )
             }
 
-            // todo cli-channel 暂时不接入
+            // todo cli-channel 需要修改
+            let _ = CLI_CHANNEL_FN.set(Box::new(|| Box::new(CliChannel::new("cli"))));
 
             // todo 其他channel 也暂时不接入
 
@@ -291,7 +293,8 @@ async fn main() -> Result<()> {
                 None,
                 AgentRuntimeOverrides::default(),
             ))
-            .await.map(|_| ())
+            .await
+            .map(|_| ())
         }
     }
 }

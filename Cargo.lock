@@ -2067,6 +2067,7 @@ dependencies = [
  "clap",
  "serde",
  "serde_json",
+ "shadow-channels",
  "shadow-config",
  "shadow-core",
  "shadow-log",
@@ -2076,6 +2077,17 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "shadow-channels"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "shadow-core",
+ "tokio",
  "uuid",
 ]
 
@@ -2202,6 +2214,7 @@ dependencies = [
  "shadow-log",
  "shadow-memory",
  "shadow-providers",
+ "shadow-tools",
  "tempfile",
  "tokio",
  "tracing",

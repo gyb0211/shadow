@@ -11,8 +11,7 @@ pub struct ChannelMessage {
     pub id: String,
     pub sender: String,
     pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reply_to: Option<String>,
+    pub reply_target: String,
 }
 
 /// 出站消息
@@ -43,8 +42,6 @@ pub trait Channel: Attributable {
     async fn send(&self, message: &SendMessage) -> Result<()>;
 
     /// 是否支持审批请求
-    fn supports_approval(&self) -> bool {
-        false
-    }
+    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> Result<()>;
 }
 

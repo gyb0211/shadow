@@ -10,6 +10,7 @@ use shadow_core::{Attributable, Memory, Role, Tool, ToolResult};
 use std::collections::HashMap;
 use std::sync::Arc;
 use shadow_config::platform::native::NativeRuntime;
+use shadow_tools::llm_task::LlmTaskTool;
 use crate::tools::model_switch::ModelSwitchTool;
 
 pub mod attribution;

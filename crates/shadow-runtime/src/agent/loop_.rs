@@ -17,8 +17,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 use tracing::{Instrument, info_span};
+use crate::agent::execution::{ResolvedAgentExecution, ResolvedModelAccess};
 use crate::agent::system_prompt::build_system_prompt_with_mode_and_autonomy;
-use crate::agent::turn::turn::{run_tool_call_loop, ToolLoop};
+use crate::agent::turn::turn::{run_tool_call_loop, is_model_switch_requested, ToolLoop, is_tool_loop_cancelled};
 use crate::tools::scoped::ScopedAssembly;
 //Global Model Switch request state
 
@@ -70,13 +71,13 @@ pub async fn run(
     let agent: AliasedAgentConfig = resolve_agent_for_turn(&config, agent_alias)?;
 
     let risk_profile = config
-        .risk_profile_for_agent(agent_alias)
-        .with_context(|| {
-            format!(
-                "agents.{agent_alias}.risk_profile does not name a configured risk_profiles entry."
-            )
-        })?
-        .clone();
+        .risk_profile_for_agent(agent_alias).unwrap_or(&RiskProfileConfig::default()).clone();
+        // .with_context(|| {
+        //     format!(
+        //         "agents.{agent_alias}.risk_profile does not name a configured risk_profiles entry."
+        //     )
+        // })?
+        // .clone();
 
     let memory_composite = {
         match agent.memory.backend {
@@ -221,7 +222,7 @@ pub async fn run(
 
         // todo route scoped tool
 
-        let mut provider_name = agent_provider_composite(&config, agent_alias)?;
+        let mut provider_name = agent_provider_composite(&config, agent_alias).unwrap_or_default();
         let mut model_name = match agent_model_provider.and_then(|e| e.model.as_deref()) {
             None => anyhow::bail!(
                 "No model configured for agent {agent_alias}:\
@@ -288,12 +289,12 @@ pub async fn run(
         )?;
 
         // 审批管理
-        let approval_manager = if interactive {
-            // Some(ApprovalManager::from_risk_profile(&risk_profile))
-            None
-        } else {
-            None
-        };
+        // let approval_manager = if interactive {
+        //     // Some(ApprovalManager::from_risk_profile(&risk_profile))
+        //     None
+        // } else {
+        //     None
+        // };
 
         // todo cost追踪
 
@@ -338,7 +339,7 @@ pub async fn run(
             ];
 
             // todo mcp tool excluded
-            let response = String::new();
+            let mut response = String::new();
             loop {
                 if let Some(sys_msg) = history.first_mut() && sys_msg.role == "system" {
                     // todo 注入每轮的提示词
@@ -349,6 +350,13 @@ pub async fn run(
 
                 match run_tool_call_loop(
                     ToolLoop {
+
+                        exec: ResolvedAgentExecution::resolve(ResolvedModelAccess{
+                            model_provider: model_provider.as_ref(),
+                            provider_name: &provider_name,
+                            model: &model_name,
+                            temperature: Some(0.7 as f64),
+                        }),
                         history: &mut history,
                         channel_name,
                         channel_reply_target: None,
@@ -373,13 +381,13 @@ pub async fn run(
                                   provider_name, model_name, new_model_provider,new_model
                               )
                           );
-                            let (switch_api_key, switch_uri) = api_key_and_uri_for_provider(&config, &new_model_provider, &new_model);
+                            let (switch_api_key, switch_uri) = api_key_and_uri_for_provider(&config, &new_model_provider, agent_model_provider);
                             model_provider = shadow_providers::create_routed_model_provider_with_options(
                                 &config,
                                 &provider_name,
-                                api_key,
-                                api_uri,
-                                &config.reliaiblity,
+                                api_key.as_deref(),
+                                api_uri.as_deref(),
+                                &config.reliability,
                                 &config.model_routes,
                                 &model_name,
                                 &shadow_providers::options_for_provider_ref(
@@ -390,9 +398,9 @@ pub async fn run(
                             )?;
 
                             provider_name = new_model_provider;
-                            model = new_model;
+                            let model = new_model;
 
-                            clear_model_switch_request();
+                            // clear_model_switch_request();
 
                             // todo obs
                             continue;
@@ -421,7 +429,9 @@ pub async fn run(
 
             // todo 跨轮次历史记录
 
-            vec![ChatMessage::system(&system_prompt)];
+            let mut history = vec![ChatMessage::system(&system_prompt)];
+
+            // vec![ChatMessage::system(&system_prompt)];
 
             loop {
                 print!("> ");
@@ -455,6 +465,13 @@ pub async fn run(
                     _=>{}
                 }
 
+                let context = user_input.clone();
+                history.push(ChatMessage::user(context));
+
+                println!("{:?}", history);
+
+
+
                 let response = loop {
                     if let Some(sys_msg) = history.first_mut() && sys_msg.role == "system" {
                         // todo 注入每轮的提示词
@@ -465,11 +482,19 @@ pub async fn run(
 
                     match run_tool_call_loop(
                         ToolLoop {
+                            exec: ResolvedAgentExecution::resolve(
+                                ResolvedModelAccess {
+                                    model_provider: model_provider.as_ref(),
+                                    provider_name: &provider_name,
+                                    model: &model_name,
+                                    temperature: Some(0.7),
+                                },
+                            ),
                             history: &mut history,
                             channel_name,
                             channel_reply_target: None,
-                            cancellation_token: None,
-                            on_delta: None,
+                            // cancellation_token: None,
+                            // on_delta: None,
                             agent_alias: Some(agent_alias),
                             turn_id: &turn_id,
                         },
@@ -490,13 +515,13 @@ pub async fn run(
                                   provider_name, model_name, new_model_provider,new_model
                               )
                           );
-                                let (switch_api_key, switch_uri) = api_key_and_uri_for_provider(&config, &new_model_provider, &new_model);
+                                let (switch_api_key, switch_uri) = api_key_and_uri_for_provider(&config, &new_model_provider, agent_model_provider);
                                 model_provider = shadow_providers::create_routed_model_provider_with_options(
                                     &config,
                                     &provider_name,
-                                    api_key,
-                                    api_uri,
-                                    &config.reliaiblity,
+                                    api_key.as_deref(),
+                                    api_uri.as_deref(),
+                                    &config.reliability,
                                     &config.model_routes,
                                     &model_name,
                                     &shadow_providers::options_for_provider_ref(
@@ -507,9 +532,9 @@ pub async fn run(
                                 )?;
 
                                 provider_name = new_model_provider;
-                                model = new_model;
+                                let model = new_model;
 
-                                clear_model_switch_request();
+                                // clear_model_switch_request();
 
                                 // todo obs
                                 continue;
@@ -532,7 +557,7 @@ pub async fn run(
 
                 if let Err(e) = Channel::send(
                     &*cli,
-                    SendMessage::new(format!("\n{final_output}\n"), "user")
+                    &SendMessage::new(format!("\n{final_output}\n"), "user")
                 ).await {
                     eprintln!("\nError sending Cli response: {e}\n")
                 }

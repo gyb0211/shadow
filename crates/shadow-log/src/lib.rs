@@ -20,6 +20,7 @@ pub use broadcast::*;
 pub use event::*;
 pub use layer::*;
 pub use writer::*;
+pub use subscriber::*;
 
 pub use ::tracing::Span;
 pub use ::tracing::Instrument;

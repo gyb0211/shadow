@@ -9,7 +9,7 @@ pub(crate) struct ProviderCallOutcome {
     pub chat_result: Result<ChatResponse>,
     pub streamed_live_delta: bool,
     pub streamed_protocol_suppressed: bool,
-    pub streamed_visible_text: bool,
+    pub streamed_visible_text: String,
 }
 // if let Some(tx) = ctx.on_delta {
 // let phase = if iteration == 0 {
@@ -27,9 +27,9 @@ pub async fn call_provider(ctx: &TurnCtx<'_>,
                            tools: Option<&[ToolSpec]>,
                            should_consume_provider_stream: bool,
                            iteration: usize) -> Result<ProviderCallOutcome> {
-    let mut streamed_live_deltas = false;
+    let mut streamed_live_delta = false;
     let mut streamed_protocol_suppressed = false;
-    let mut stream_visible_text = String::new();
+    let mut streamed_visible_text = String::new();
 
     let chat_result = if should_consume_provider_stream {
         Ok(ChatResponse{
