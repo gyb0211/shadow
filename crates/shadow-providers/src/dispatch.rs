@@ -7,7 +7,7 @@
 //! 不能只 `let span = ...; async { }.await` —— 那样 span 创建即销毁, 归因失效.
 
 use anyhow::Result;
-use shadow_core::{ChatRequest, ChatResponse, ModelProvider};
+use shadow_core::{ChatMessage, ChatRequest, ChatResponse, ModelProvider};
 use std::sync::Arc;
 use tracing::Instrument;
 
@@ -104,6 +104,8 @@ impl ProviderDispatchRef<'_> {
     pub async fn simple_chat(&self, message: &str, model: &str, temperature: Option<f64>) -> Result<String> {
         self.inner.simple_chat(message, model, temperature).await
     }
+    
+    pub
 
     /// 列出可用模型 -- 自动包裹归因 span
     pub async fn list_models(&self) -> Result<Vec<String>> {
@@ -116,4 +118,15 @@ impl ProviderDispatchRef<'_> {
         let span = shadow_log::attribution_span!(self.inner);
         self.inner.warmup().instrument(span).await
     }
+
+    pub async fn chat_with_history(
+        &self,
+        messages: &[ChatMessage],
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<String> {
+
+    }
+
+
 }

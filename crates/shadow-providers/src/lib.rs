@@ -25,7 +25,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use reliable::ReliableModelProvider;
-use shadow_config::{Config, ModelProviderConfig, ReliableConfig, ModelRouteConfig};
+use shadow_config::{Config, ModelProviderConfig, ModelRouteConfig, ReliableConfig};
 use shadow_core::ModelProvider;
 
 pub struct ModelProviderInfo {
@@ -368,4 +368,67 @@ pub fn create_model_provider_with_options(
     opts: &ModelProviderRuntimeOptions,
 ) -> anyhow::Result<Box<dyn ModelProvider>> {
     create_model_provider_inner(None, name, "default", api_key, None, opts)
+}
+
+const MAX_API_ERROR_CHARS: usize = 500;
+
+pub fn scrub_secret_patterns(input: &str) -> String {
+    const PREFIXES: [&str; 7] = [
+        "sk-",
+        "xoxb-",
+        "xoxp-",
+        "ghp_",
+        "gho_",
+        "ghu_",
+        "github_pat_",
+    ];
+
+    let mut scrubbed = input.to_string();
+    for prefix in PREFIXES {
+        let mut search_from = 0;
+        while let Some(rel) = scrubbed[search_from..].find(prefix) {
+            let start = search_from + rel;
+            let content_start = start + prefix.len();
+            let end = token_end(&scrubbed, content_start);
+
+            if end == content_start {
+                search_from = content_start;
+                continue;
+            }
+            scrubbed.replace_range(start..end, "[REDACTED]");
+            search_from = start + "[REDACTED]".len();
+        }
+    }
+
+    scrubbed
+}
+
+fn token_end(input: &str, from: usize) -> usize {
+    let mut end = from;
+    for (i, c) in input[from..].char_indices() {
+        if is_secret_char(c) {
+            end = from + i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    end
+}
+
+fn is_secret_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':')
+}
+
+
+pub fn sanitize_api_error(input: &str) -> String {
+    let scrubbed = scrub_secret_patterns(input);
+    if scrubbed.chars().count() <= MAX_API_ERROR_CHARS {
+        return scrubbed;
+    }
+
+    let mut end = MAX_API_ERROR_CHARS;
+    while end > 0 && !scrubbed.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}..." ,&scrubbed[..end])
 }
