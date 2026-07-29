@@ -24,8 +24,6 @@ pub struct ProviderDispatchRef<'a> {
     inner: &'a dyn ModelProvider,
 }
 
-
-
 impl ProviderDispatch {
     #[must_use]
     pub fn new(inner: Arc<dyn ModelProvider>) -> Self {
@@ -47,12 +45,40 @@ impl ProviderDispatch {
     }
 
     /// 同步聊天 -- 返回完整 ChatResponse (含 tool_calls/usage)
-    pub async fn chat(&self, request: ChatRequest<'_>, model: &str, temperature: Option<f64>,) -> Result<ChatResponse> {
-        self.as_ref().chat(request, model, temperature).await
+    pub async fn chat(
+        &self,
+        request: ChatRequest<'_>,
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<ChatResponse> {
+        let span = shadow_log::attribution_span!(&*self.inner);
+        async move {
+            shadow_log::scope!(
+                model: model,
+               =>  self.inner.chat(request, &model, temperature)
+            )
+            .await
+        }
+        .instrument(span)
+        .await
     }
     /// 同步聊天 -- 返回完整 ChatResponse (含 tool_calls/usage)
-    pub async fn simple_chat(&self, message: &str, model: &str, temperature: Option<f64>) -> Result<String> {
-        self.as_ref().simple_chat(message, model, temperature).await
+    pub async fn simple_chat(
+        &self,
+        message: &str,
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<String> {
+        let span = shadow_log::attribution_span!(&*self.inner);
+        async move {
+            shadow_log::scope!(
+                model: model,
+               =>  self.inner.simple_chat(message, model, temperature)
+            )
+            .await
+        }
+        .instrument(span)
+        .await
     }
 
     /// 列出可用模型
@@ -69,14 +95,22 @@ impl ProviderDispatch {
 
 impl ProviderDispatchRef<'_> {
     /// 同步聊天 -- 自动包裹归因 span
-    pub async fn chat(&self, request: ChatRequest<'_>, model: &str, temperature: Option<f64>,) -> Result<ChatResponse> {
-        let span = shadow_log::attribution_span!(&*self.inner);
+    pub async fn chat(
+        &self,
+        request: ChatRequest<'_>,
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<ChatResponse> {
+        let span = shadow_log::attribution_span!(self.inner);
         async move {
             shadow_log::scope!(
                 model: model,
                =>  self.inner.chat(request, &model, temperature)
-            ).await
-        }.instrument(span).await
+            )
+            .await
+        }
+        .instrument(span)
+        .await
     }
 
     /// Wrap the inner provider's `chat_with_system`.
@@ -94,18 +128,54 @@ impl ProviderDispatchRef<'_> {
                 model: model,
                 => self.inner.chat_with_system(system_prompt, message, model, temperature)
             )
-                .await
-        }
-            .instrument(span)
             .await
+        }
+        .instrument(span)
+        .await
     }
 
-
-    pub async fn simple_chat(&self, message: &str, model: &str, temperature: Option<f64>) -> Result<String> {
-        self.inner.simple_chat(message, model, temperature).await
+    pub async fn simple_chat(
+        &self,
+        message: &str,
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<String> {
+        use shadow_log::Instrument;
+        let span = shadow_log::attribution_span!(self.inner);
+        async move {
+            shadow_log::scope!(
+                model: model,
+                => self.inner.simple_chat(
+                    message, model, temperature
+                )
+            )
+            .await
+        }
+        .instrument(span)
+        .await
     }
-    
-    pub
+
+    pub async fn chat_with_tools(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[serde_json::Value],
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<ChatResponse> {
+        use shadow_log::Instrument;
+        let span = shadow_log::attribution_span!(self.inner);
+        async move {
+            shadow_log::scope!(
+                model: model,
+                => self.inner.chat_with_tools(
+                    messages, tools, model, temperature
+                )
+            )
+            .await
+        }
+        .instrument(span)
+        .await
+    }
 
     /// 列出可用模型 -- 自动包裹归因 span
     pub async fn list_models(&self) -> Result<Vec<String>> {
@@ -125,8 +195,18 @@ impl ProviderDispatchRef<'_> {
         model: &str,
         temperature: Option<f64>,
     ) -> Result<String> {
-
+        use shadow_log::Instrument;
+        let span = shadow_log::attribution_span!(self.inner);
+        async move {
+            shadow_log::scope!(
+                model: model,
+                => self.inner.chat_with_history(
+                    messages, model, temperature
+                )
+            )
+            .await
+        }
+        .instrument(span)
+        .await
     }
-
-
 }

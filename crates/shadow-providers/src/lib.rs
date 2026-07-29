@@ -419,7 +419,6 @@ fn is_secret_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':')
 }
 
-
 pub fn sanitize_api_error(input: &str) -> String {
     let scrubbed = scrub_secret_patterns(input);
     if scrubbed.chars().count() <= MAX_API_ERROR_CHARS {
@@ -430,5 +429,13 @@ pub fn sanitize_api_error(input: &str) -> String {
     while end > 0 && !scrubbed.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}..." ,&scrubbed[..end])
+    format!("{}...", &scrubbed[..end])
+}
+
+pub fn non_empty_string_field(value: &serde_json::Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .filter(|f| !f.trim().is_empty())
+        .map(str::to_string)
 }

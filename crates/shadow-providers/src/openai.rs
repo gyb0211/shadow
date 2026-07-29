@@ -8,14 +8,20 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::{Client, Error, RequestBuilder, Response};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
+use serde_json::{Deserializer, Value};
+use shadow_core::kennel::provider::{
+    ChatResponse as ProviderChatResponse, ToolCall as ProviderToolCall,
+};
 use shadow_core::{
     Attributable, AuthStyle, ChatMessage, ChatResponse, ModelProvider, ModelProviderKind,
-    ProviderKind, Role, StreamChunk, TokenUsage,
+    ProviderCapabilities, ProviderKind, Role, StreamChunk, TokenUsage,
 };
+use std::collections::{HashMap, HashSet};
 
+use crate::{models_dev, non_empty_string_field};
+use shadow_config::model_provider;
 use std::sync::{Arc, RwLock};
+use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
 struct Message {
@@ -24,6 +30,7 @@ struct Message {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(untagged)]
 enum MessageContent {
     Text(String),
     Parts(Vec<MessagePart>),
@@ -51,9 +58,13 @@ pub struct OpenAiCompatibleModelProvider {
     native_tool_calling: bool,
     timeout_secs: u64,
 
+    replay_assistant_reasoning: bool,
     reasoning_effort: Option<String>,
     max_tokens: Option<u32>,
     merge_system_into_user: bool,
+
+    model_dev_key: Option<String>,
+    extra_body: Option<Value>,
 }
 
 impl OpenAiCompatibleModelProvider {
@@ -97,9 +108,12 @@ impl OpenAiCompatibleModelProvider {
             supports_vision,
             native_tool_calling: true,
             timeout_secs: 60,
+            replay_assistant_reasoning: false,
             reasoning_effort: None,
             max_tokens: None,
             merge_system_into_user,
+            model_dev_key: None,
+            extra_body: None,
         }
     }
     pub fn without_native_tools(mut self) -> Self {
@@ -181,7 +195,7 @@ impl OpenAiCompatibleModelProvider {
             return messages.to_vec();
         }
 
-        let intermediate = messages.iter().enumerate().find_map(|(idx, msg)| {
+        let intermediate = messages.iter().enumerate().filter_map(|(idx, msg)| {
             // todo 丢弃被标记过的消息
 
             if msg.is_tool() {
@@ -221,13 +235,303 @@ impl OpenAiCompatibleModelProvider {
         coalesced
     }
 
-    fn to_message_content(role: &String, content: &String, merge: bool) -> MessageContent {
-        MessageContent::Text(content.clone())
+    fn assistant_reasoning_value(value: &Value) -> Option<&str> {
+        value
+            .get("reasoning_content")
+            .and_then(Value::as_str)
+            .or_else(|| value.get("reasoning").and_then(Value::as_str))
     }
 
-    fn effective_merge_system(&self, model:&str) -> bool {
+    fn assistant_reasoning_pair_for_replay(
+        &self,
+        value: &Value,
+    ) -> (Option<String>, Option<String>) {
+        if !self.replay_assistant_reasoning {
+            return (None, None);
+        }
+        let reasoning_content = value
+            .get("reasoning_content")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+
+        let reasoning = value
+            .get("reasoning")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+
+        (reasoning_content, reasoning)
+    }
+
+    fn targets_mistral_tool_call_contract(&self) -> bool {
+        if self.name.eq_ignore_ascii_case("mistral") {
+            return true;
+        }
+        reqwest::Url::parse(&self.base_url)
+            .ok()
+            .and_then(|url| url.host_str().map(|h| h.to_ascii_lowercase()))
+            .is_some_and(|h| h == "mistral.ai" || h.ends_with(".mistral.ai"))
+    }
+
+    fn convert_messages_for_native(
+        &self,
+        messages: &[ChatMessage],
+        allow_user_image_parts: bool,
+    ) -> Vec<NativeMessage> {
+        let mistral_tool_call = self.targets_mistral_tool_call_contract();
+        let mut used_tool_call_ids = HashSet::new();
+        let mut tool_call_id_map = HashMap::new();
+        let mut last_assistant_tool_call_ids: Vec<String> = Vec::new();
+        let mut tool_name_map = HashMap::new();
+
+        messages
+            .iter()
+            .map(|m| {
+                if m.is_assistant()
+                    && let Ok(value) = serde_json::from_str::<serde_json::Value>(&m.content)
+                    && let Some(tool_calls_value) = value.get("tool_calls")
+                    && let Ok(parsed_calls) =
+                        serde_json::from_value::<Vec<ProviderToolCall>>(tool_calls_value.clone())
+                {
+                    let tool_calls = parsed_calls
+                        .into_iter()
+                        .map(|tc| {
+                            let tc_id = tc.id.clone();
+                            let tc_name = tc.name.clone();
+                            tool_name_map.insert(tc_id, tc_name);
+                            ToolCall {
+                                id: Some({
+                                    let normalized_id = reserve_tool_call_id_for_contract(
+                                        mistral_tool_call,
+                                        Some(tc.id.clone()),
+                                        &mut used_tool_call_ids,
+                                    );
+                                    tool_call_id_map.insert(tc.id.clone(), normalized_id.clone());
+                                    normalized_id
+                                }),
+                                kind: Some("function".to_string()),
+                                function: Some(Function {
+                                    name: Some(tc.name),
+                                    arguments: Some(tc.arguments),
+                                }),
+                                name: None,
+                                arguments: None,
+                                parameters: None,
+                                extra_content: tc.extra_content,
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    last_assistant_tool_call_ids =
+                        tool_calls.iter().filter_map(|tc| tc.id.clone()).collect();
+
+                    let content =
+                        non_empty_string_field(&value, "content").map(MessageContent::Text);
+
+                    let (reasoning_content, reasoning) =
+                        self.assistant_reasoning_pair_for_replay(&value);
+                    return NativeMessage {
+                        role: "assistant".to_string(),
+                        content,
+                        tool_call_id: None,
+                        tool_calls: Some(tool_calls),
+                        reasoning_content,
+                        reasoning,
+                        name: None,
+                    };
+                }
+
+                if m.is_assistant()
+                    && let Ok(value) = serde_json::from_str::<serde_json::Value>(&m.content)
+                    && value.get("tool_calls").is_none()
+                    && Self::assistant_reasoning_value(&value).is_some()
+                    && matches!(
+                        value.get("content"),
+                        None | Some(serde_json::Value::Null | serde_json::Value::String(_))
+                    )
+                {
+                    let content = value
+                        .get("content")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|v| MessageContent::Text(v.to_string()));
+
+                    let (reasoning_content, reasoning) =
+                        self.assistant_reasoning_pair_for_replay(&value);
+                    return NativeMessage {
+                        role: "assistant".to_string(),
+                        content,
+                        tool_call_id: None,
+                        tool_calls: None,
+                        reasoning_content,
+                        reasoning,
+                        name: None,
+                    };
+                }
+
+                if m.is_tool()
+                    && let Ok(value) = serde_json::from_str::<serde_json::Value>(&m.content)
+                {
+                    let mut tool_call_id = value
+                        .get("tool_call_id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|id| {
+                            tool_call_id_map.get(id).cloned().unwrap_or_else(|| {
+                                let normalized_id = reserve_tool_call_id_for_contract(
+                                    mistral_tool_call,
+                                    Some(id.to_string()),
+                                    &mut used_tool_call_ids,
+                                );
+                                tool_call_id_map.insert(id.to_string(), normalized_id.clone());
+                                normalized_id
+                            })
+                        });
+
+                    if tool_call_id.is_none() && !last_assistant_tool_call_ids.is_empty() {
+                        tool_call_id = last_assistant_tool_call_ids.first().cloned();
+                    }
+
+                    let content = value
+                        .get("content")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|v| {
+                            if allow_user_image_parts {
+                                Self::content_with_image_parts(v)
+                            } else {
+                                MessageContent::Text(v.to_string())
+                            }
+                        })
+                        .or_else(|| Some(MessageContent::Text(m.content.clone())));
+
+                    let tool_name = value
+                        .get("tool_call_id")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|id| tool_name_map.get(id).cloned())
+                        .or_else(|| {
+                            value
+                                .get("name")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_string)
+                        });
+                    return NativeMessage {
+                        role: "tool".to_string(),
+                        content,
+                        tool_call_id,
+                        tool_calls: None,
+                        reasoning_content: None,
+                        reasoning: None,
+                        name: tool_name,
+                    };
+                }
+
+                NativeMessage {
+                    role: m.role.to_string(),
+                    content: Some(Self::to_message_content(
+                        &m,
+                        &m.content,
+                        allow_user_image_parts,
+                    )),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    reasoning_content: None,
+                    reasoning: None,
+                    name: None,
+                }
+            })
+            .collect()
+    }
+
+    fn reasoning_effort_for_model(&self, model: &str) -> Option<String> {
+        let effort = self.reasoning_effort.as_ref()?;
+        let id = model
+            .rsplit('/')
+            .next()
+            .unwrap_or(model)
+            .to_ascii_lowercase();
+
+        let is_gpt5_chat_latest = id.starts_with("gpt-5") && id.ends_with("-chat-latest");
+        let is_openai_reasoning_model = id == "o1"
+            || id.starts_with("o1-")
+            || id == "o3"
+            || id.starts_with("o3-")
+            || id == "o4"
+            || id.starts_with("o4-")
+            || (id.starts_with("gpt-5") && !is_gpt5_chat_latest);
+        let is_likely_codex_supported = id.contains("codex") && id.starts_with("gpt-");
+
+        (is_openai_reasoning_model || is_likely_codex_supported).then(|| effort.clone())
+    }
+
+    fn requires_tool_stream(&self) -> bool {
+        let host_requires_tool_stream = reqwest::Url::parse(&self.base_url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+            .is_some_and(|h| h == "api.z.ai" || h.ends_with(".z.ai"));
+        host_requires_tool_stream || matches!(self.name.as_str(), "zai" | "z.ai")
+    }
+
+    fn tool_stream_for_tools(&self, has_tools: bool) -> Option<bool> {
+        if has_tools && self.requires_tool_stream() {
+            Some(true)
+        } else {
+            None
+        }
+    }
+
+    fn build_native_tool_chat_request(
+        &self,
+        messages: &[ChatMessage],
+        tools: Option<Vec<serde_json::Value>>,
+        model: &str,
+        temperature: Option<f64>,
+        allow_user_image_parts: bool,
+    ) -> NativeChatRequest {
+        let has_tool_entries = tools.as_ref().is_some_and(|t| !t.is_empty());
+        let tool_choice = has_tool_entries.then(|| "auto".to_string());
+        NativeChatRequest {
+            model: model.to_string(),
+            messages: self.convert_messages_for_native(messages, allow_user_image_parts),
+            temperature,
+            stream: Some(false),
+            stream_options: None,
+            reasoning_effort: self.reasoning_effort_for_model(model),
+            tool_stream: self.tool_stream_for_tools(has_tool_entries),
+            tools,
+            tool_choice,
+            max_tokens: self.max_tokens,
+            extra_body: self.extra_body.clone(),
+        }
+    }
+
+    fn to_message_content(m: &ChatMessage, content: &str, merge: bool) -> MessageContent {
+        if !m.is_user() || !merge {
+            return MessageContent::Text(content.to_string());
+        }
+
+        Self::content_with_image_parts(content)
+    }
+
+    fn effective_merge_system(&self, model: &str) -> bool {
         self.merge_system_into_user
-            // || Self::model_requires_system_merge(model)
+        // || Self::model_requires_system_merge(model)
+    }
+
+    fn content_with_image_parts(content: &str) -> MessageContent {
+        let mut parts = Vec::with_capacity(1);
+        parts.push(MessagePart::Text {
+            text: content.to_string(),
+        });
+        MessageContent::Parts(parts)
+    }
+
+    fn reserve_tool_call_id(
+        &self,
+        tool_id: Option<String>,
+        used_ids: &mut HashSet<String>,
+    ) -> String {
+        reserve_tool_call_id_for_contract(
+            self.targets_mistral_tool_call_contract(),
+            tool_id,
+            used_ids,
+        )
     }
 }
 
@@ -270,8 +574,28 @@ impl Attributable for OpenAiCompatibleModelProvider {
 
 #[async_trait]
 impl ModelProvider for OpenAiCompatibleModelProvider {
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            native_tool_calling: self.native_tool_calling,
+            vision: self.supports_vision,
+            prompt_caching: false,
+            extended_thinking: false,
+        }
+    }
+
     fn supports_native_tools(&self) -> bool {
-        true
+        self.native_tool_calling
+    }
+
+    async fn list_models(&self) -> Result<Vec<String>> {
+        if let Some(key) = &self.model_dev_key {
+            match models_dev::list_models_for(key).await {
+                Ok(models) if !models.is_empty() => return Ok(models),
+                Ok(_) => {}
+                Err(e) => {}
+            }
+        }
+        anyhow::bail!("live model listing is not supported for this model_provider")
     }
 
     /// chat_with_system -- OpenAI Chat Completions API 单轮调用
@@ -366,7 +690,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             .iter()
             .map(|m| Message {
                 role: m.role.clone(),
-                content: Self::to_message_content(&m.role, &m.content, !merge),
+                content: Self::to_message_content(&m, &m.content, !merge),
             })
             .collect();
 
@@ -395,7 +719,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             Ok(response) => response,
             Err(err) => return Err(err.into()),
         };
-
+        println!("request: {:?}, response: {:?}", request, response);
         if !response.status().is_success() {
             return Err(anyhow::Error::msg(format!("API error")));
         }
@@ -421,6 +745,106 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
 
                 anyhow::Error::msg(format!("No Response from {}", self.name))
             })
+    }
+
+    async fn chat_with_tools(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[Value],
+        model: &str,
+        temperature: Option<f64>,
+    ) -> Result<ChatResponse> {
+        let normalized = Vec::from(messages);
+        let merge = self.effective_merge_system(model);
+        let eff_msg = Self::flatten_system_messages(&normalized, merge);
+
+        let eff_msg = self.strip_native_tool_messages(&eff_msg);
+
+        let tools = if tools.is_empty() {
+            None
+        } else {
+            Some(tools.to_vec())
+        };
+
+        let request =
+            self.build_native_tool_chat_request(&eff_msg, tools, model, temperature, !merge);
+
+        let url = self.chat_completions_url();
+        let response = match self
+            .apply_auth_header(
+                self.http_client().post(&url).json(&request),
+                self.credential.as_deref(),
+            )
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                shadow_log::record!(
+                    WARN,
+                    shadow_log::Event::new(module_path!(), shadow_log::Action::Note)
+                        .with_outcome(shadow_log::EventOutcome::Unknown),
+                    &format!(
+                        "{} native tool transport failed: {err}; failing back to history path",
+                        self.name
+                    )
+                );
+                let text = self.chat_with_history(messages, model, temperature).await?;
+                return Ok(ProviderChatResponse {
+                    text: Some(text),
+                    tool_calls: vec![],
+                    usage: None,
+                    reasoning_content: None,
+                });
+            }
+        };
+        if !response.status().is_success() {
+            return Err(anyhow::Error::msg(format!("API error")));
+        }
+
+        let body = response.text().await?;
+        let chat_resp = parse_chat_response_body(&self.name, &body)?;
+
+        let usage = chat_resp.usage.map(UsageInfo::into_provider_usage);
+
+        let choice = chat_resp.choices.into_iter().next().ok_or_else(|| {
+            shadow_log::record!(
+                ERROR,
+                shadow_log::Event::new(module_path!(), shadow_log::Action::Fail)
+                    .with_outcome(shadow_log::EventOutcome::Failure)
+                    .with_attrs(serde_json::json!({"model_provider": &self.name})),
+                "compatible: empty choices in response"
+            );
+            anyhow::Error::msg(format!("No response from {}", self.name))
+        })?;
+
+        let text = choice.message.effective_content_optional();
+        let reasoning_content = choice.message.reasoning_content;
+        let mut used_tool_call_ids = HashSet::new();
+        let tool_calls = choice
+            .message
+            .tool_calls
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|tc| {
+                let func = tc.function?;
+                let name = func.name?;
+                let arguments = func.arguments.unwrap_or_else(|| "{}".to_string());
+                Some(ProviderToolCall {
+                    id: self.reserve_tool_call_id(tc.id, &mut used_tool_call_ids),
+                    name,
+                    arguments,
+                    extra_content: tc.extra_content,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        Ok(ProviderChatResponse {
+            text,
+            tool_calls,
+            usage,
+            reasoning_content,
+        })
     }
 }
 
@@ -508,7 +932,7 @@ struct ApiToolSpec {
 #[derive(Deserialize)]
 struct ApiResponse {
     choices: Vec<Choice>,
-    usage: ApiUsage,
+    usage: Option<UsageInfo>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -534,7 +958,7 @@ impl ResponseMessage {
             .unwrap_or_default()
     }
 
-    fn effective_content_options(&self) -> Option<String> {
+    fn effective_content_optional(&self) -> Option<String> {
         self.content
             .as_ref()
             .map(|c| strip_thing_tags(c))
@@ -560,6 +984,88 @@ fn strip_thing_tags(content: &str) -> String {
         }
     }
     result.trim().to_string()
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct UsageInfo {
+    #[serde(default)]
+    prompt_tokens: Option<u64>,
+    #[serde(default)]
+    completion_tokens: Option<u64>,
+    #[serde(default)]
+    prompt_tokens_details: Option<PromptTokensDetails>,
+    #[serde(default, deserialize_with = "deserialize_optional_token_count")]
+    prompt_cache_hit_tokens: Option<u64>,
+}
+
+impl UsageInfo {
+    fn cached_input_tokens(&self) -> Option<u64> {
+        self.prompt_cache_hit_tokens.or_else(|| {
+            self.prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens)
+        })
+    }
+    fn into_provider_usage(self) -> TokenUsage {
+        let cached_input_tokens = self.cached_input_tokens();
+        TokenUsage {
+            input_tokens: self.prompt_tokens,
+            output_tokens: self.completion_tokens,
+            cached_input_tokens,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct PromptTokensDetails {
+    #[serde(default, deserialize_with = "deserialize_optional_token_count")]
+    cached_tokens: Option<u64>,
+}
+
+fn deserialize_optional_token_count<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(normalize_token_count_value))
+}
+
+fn normalize_token_count_value(value: serde_json::Value) -> Option<u64> {
+    match value {
+        Value::Number(num) => {
+            if let Some(value) = num.as_u64() {
+                Some(value)
+            } else if let Some(value) = num.as_i64() {
+                if value < 0 {
+                    return None;
+                } else {
+                    u64::try_from(value).ok()
+                }
+            } else {
+                num.as_f64().and_then(normalize_token_count_float)
+            }
+        }
+        Value::String(v) => v
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .and_then(normalize_token_count_float),
+        _ => None,
+    }
+}
+
+fn normalize_token_count_float(f: f64) -> Option<u64> {
+    if !f.is_finite() || f < 0.0 {
+        return None;
+    }
+    if f < 1.0 {
+        return Some(0);
+    }
+
+    if f > u64::MAX as f64 {
+        return None;
+    }
+    Some(f.floor() as u64)
 }
 
 #[derive(Debug, Deserialize)]
@@ -622,6 +1128,70 @@ fn openai_assistant_content_plaintext(content: Option<OpenAiAssistantContent>) -
     }
 }
 
+fn is_valid_mistral_tool_call_id(id: &str) -> bool {
+    id.len() == 9 && id.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+fn reserve_tool_call_id_for_contract(
+    mistral_tool_call: bool,
+    tool_id: Option<String>,
+    used_ids: &mut HashSet<String>,
+) -> String {
+    if !mistral_tool_call {
+        let id = tool_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        if used_ids.insert(id.clone()) {
+            return id;
+        }
+        loop {
+            let candidate = Uuid::new_v4().to_string();
+            if used_ids.insert(candidate.clone()) {
+                return candidate;
+            }
+        }
+    }
+
+    if let Some(id) = tool_id.as_deref()
+        && is_valid_mistral_tool_call_id(id)
+        && used_ids.insert(id.to_string())
+    {
+        return id.to_string();
+    }
+
+    let mut candidate = tool_id
+        .as_deref()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(9)
+        .collect::<String>();
+
+    if candidate.len() < 9 {
+        candidate.extend(
+            Uuid::new_v4()
+                .as_simple()
+                .to_string()
+                .chars()
+                .take(9 - candidate.len()),
+        );
+    }
+
+    if used_ids.insert(candidate.clone()) {
+        return candidate;
+    }
+
+    loop {
+        let candidate = Uuid::new_v4()
+            .as_simple()
+            .to_string()
+            .chars()
+            .take(9)
+            .collect::<String>();
+        if used_ids.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+}
+
 /// 响应中的工具调用
 #[derive(Debug, Serialize, Deserialize)]
 struct ToolCall {
@@ -643,15 +1213,8 @@ struct ToolCall {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Function {
-    name: String,
-    arguments: String,
-}
-
-#[derive(Deserialize)]
-struct ApiUsage {
-    prompt_tokens: u64,
-    completion_tokens: u64,
-    total_tokens: u64,
+    name: Option<String>,
+    arguments: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -691,3 +1254,44 @@ struct StreamFunctionDelta {
 }
 
 impl StreamToolCallAccumulator {}
+
+#[derive(Debug, Serialize)]
+struct NativeChatRequest {
+    model: String,
+    messages: Vec<NativeMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptionsBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(flatten)]
+    extra_body: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct NativeMessage {
+    role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<MessageContent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "reasoning")]
+    reasoning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+}

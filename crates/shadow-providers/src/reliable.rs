@@ -744,7 +744,13 @@ impl ModelProvider for ReliableModelProvider {
         )
     }
 
-    async fn chat_with_tools(&self, messages: &[ChatMessage], tools: &[Value], model: &str, temperature: Option<f64>) -> anyhow::Result<ChatResponse> {
+    async fn chat_with_tools(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[Value],
+        model: &str,
+        temperature: Option<f64>,
+    ) -> anyhow::Result<ChatResponse> {
         let models = self.model_chain(model);
         let mut failures = Vec::new();
         let mut eff_msgs = messages.to_vec();
@@ -769,7 +775,7 @@ impl ModelProvider for ReliableModelProvider {
                         .await
                     {
                         Ok(resp) => {
-                            if attempt < self.max_retries && resp.trim().is_empty() {
+                            if attempt < self.max_retries && is_empty_completion(&resp) {
                                 self.backoff_after_empty_completion(
                                     &mut failures,
                                     provider_name,
@@ -777,7 +783,7 @@ impl ModelProvider for ReliableModelProvider {
                                     attempt,
                                     &mut backoff_ms,
                                 )
-                                    .await;
+                                .await;
                                 continue;
                             }
 
@@ -785,10 +791,10 @@ impl ModelProvider for ReliableModelProvider {
                                 || *curr_model != model
                                 || context_truncated
                                 || self
-                                .model_providers
-                                .first()
-                                .map(|entry| entry.display_name.as_str())
-                                != Some(provider_name)
+                                    .model_providers
+                                    .first()
+                                    .map(|entry| entry.display_name.as_str())
+                                    != Some(provider_name)
                             {
                                 shadow_log::record!(
                                     INFO,
@@ -1242,6 +1248,15 @@ fn endpoint_from_error_text(text: &str) -> Option<String> {
         .or_else(|_| reqwest::Url::parse(raw.trim_end_matches([':', '.'])))
         .ok()?;
     Some(sanitized_url_endpoint(url))
+}
+
+fn is_empty_completion(resp: &ChatResponse) -> bool {
+    resp.text_or_empty().trim().is_empty()
+        && resp.tool_calls.is_empty()
+        && resp
+            .reasoning_content
+            .as_deref()
+            .is_none_or(|r| r.trim().is_empty())
 }
 
 pub fn is_auth_error(err: &anyhow::Error) -> bool {

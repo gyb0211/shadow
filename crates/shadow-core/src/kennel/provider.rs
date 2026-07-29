@@ -80,20 +80,34 @@ pub struct ChatResponse {
     pub reasoning_content: Option<String>,
 }
 
+impl ChatResponse {
+    
+    pub fn text_or_empty(&self) -> &str {
+        self.text.as_deref().unwrap_or("")
+    }
+    
+    pub fn has_tool_calls(&self) -> bool {
+        !self.tool_calls.is_empty()
+    }
+    
+}
+
 /// 工具调用
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
-    pub arguments: serde_json::Value,
+    pub arguments: String,
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub extra_content: Option<serde_json::Value>,
 }
 
 /// Token 用量
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct TokenUsage {
-    pub prompt_tokens: u64,
-    pub completion_tokens: u64,
-    pub total_tokens: u64,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cached_input_tokens:  Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

@@ -4,19 +4,27 @@
 //! - NativeToolDispatcher: 原生 API 工具调用 (OpenAI/Anthropic)
 //! - XmlToolDispatcher: XML 文本协议 (<tool_call> 标签)
 
+use serde_json::Value;
 use shadow_core::{ChatMessage, ChatResponse, ToolCall, ToolResult};
 
 /// 工具协议分发器 -- 隔离不同 LLM provider 的工具调用格式差异
 pub trait ToolDispatcher: Send + Sync {
     /// 解析 LLM 响应, 提取工具调用
     /// 返回 (文本内容, 工具调用列表)
-    fn parse_response(&self, response: &ChatResponse) -> (String, Vec<ToolCall>);
+    fn parse_response(&self, response: &ChatResponse) -> (String, Vec<ParsedToolCall>);
 
     /// 格式化工具结果为消息
     fn format_results(&self, results: &[ToolResult]) -> ChatMessage;
 
     /// 是否在 API 请求中发送工具规格
     fn should_send_tool_specs(&self) -> bool;
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedToolCall {
+    pub name: String,
+    pub arguments: Value,
+    pub tool_call_id: Option<String>,
 }
 
 /// 原生工具分发器 -- 用于支持原生 API 工具调用的 provider (OpenAI/Anthropic)
@@ -26,8 +34,20 @@ pub trait ToolDispatcher: Send + Sync {
 pub struct NativeToolDispatcher;
 
 impl ToolDispatcher for NativeToolDispatcher {
-    fn parse_response(&self, response: &ChatResponse) -> (String, Vec<ToolCall>) {
-        (response.text.clone().unwrap_or_default(), response.tool_calls.clone())
+    fn parse_response(&self, response: &ChatResponse) -> (String, Vec<ParsedToolCall>) {
+        (
+            response.text.clone().unwrap_or_default(),
+            response
+                .tool_calls
+                .iter()
+                .map(|tc| ParsedToolCall {
+                    name: tc.name.clone(),
+                    arguments: serde_json::from_str(&tc.arguments)
+                        .unwrap_or_else(|e| Value::Object(serde_json::Map::new())),
+                    tool_call_id: Some(tc.id.clone()),
+                })
+                .collect(),
+        )
     }
 
     fn format_results(&self, results: &[ToolResult]) -> ChatMessage {
@@ -65,7 +85,7 @@ pub struct XmlToolDispatcher;
 
 impl XmlToolDispatcher {
     /// 从文本中解析所有 <tool_call>JSON</tool_call> 标签
-    fn parse_tool_calls(text: &str) -> Vec<ToolCall> {
+    fn parse_tool_calls(text: &str) -> Vec<ParsedToolCall> {
         let mut calls = Vec::new();
         let mut remaining = text;
 
@@ -91,13 +111,13 @@ impl XmlToolDispatcher {
                 let arguments = val
                     .get("arguments")
                     .cloned()
-                    .unwrap_or(serde_json::Value::Null);
+                    .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
                 // XML 协议无 id, 用序号生成
                 let id = format!("xml-{}", calls.len());
-                calls.push(ToolCall {
-                    id,
+                calls.push(ParsedToolCall {
                     name,
                     arguments,
+                    tool_call_id: None,
                 });
             }
 
@@ -124,7 +144,7 @@ impl XmlToolDispatcher {
 }
 
 impl ToolDispatcher for XmlToolDispatcher {
-    fn parse_response(&self, response: &ChatResponse) -> (String, Vec<ToolCall>) {
+    fn parse_response(&self, response: &ChatResponse) -> (String, Vec<ParsedToolCall>) {
         let text = response.text.clone().unwrap_or_default();
         let tool_calls = Self::parse_tool_calls(&text);
         let content = Self::strip_tool_calls(&text);
