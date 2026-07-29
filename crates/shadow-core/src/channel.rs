@@ -19,12 +19,18 @@ pub struct ChannelMessage {
 pub struct SendMessage {
     pub content: String,
     pub recipient: String,
+    pub thread_ts: Option<String>,
 }
 
 impl SendMessage {
     pub fn new(content: impl Into<String>, recipient: impl Into<String>) -> Self{
-        Self{ content: content.into(), recipient: recipient.into() }
+        Self{ content: content.into(), recipient: recipient.into(), thread_ts: None }
         
+    }
+
+    pub fn in_thread(mut self, thread_ts: Option<String>) -> Self{
+        self.thread_ts = thread_ts;
+        self
     }
 }
 

@@ -16,6 +16,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
+use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
 use tracing::{Instrument, info_span};
 use crate::agent::execution::{ResolvedAgentExecution, ResolvedModelAccess};
 use crate::agent::system_prompt::build_system_prompt_with_mode_and_autonomy;
@@ -421,6 +423,8 @@ pub async fn run(
             // todo 尝试改进skill
 
         } else {
+            let mut rl = DefaultEditor::new().expect("failed to init readline");
+
             println!("Shadow Interactive Mode");
             println!("Type /help for commands.\n");
             let cli = CLI_CHANNEL_FN.get().expect(
@@ -434,26 +438,40 @@ pub async fn run(
             // vec![ChatMessage::system(&system_prompt)];
 
             loop {
-                print!("> ");
-                let _ = std::io::stdout().flush();
-                let input = {
-                    let stdin = std::io::stdin().lock();
-                    match read_capped_line(stdin, MAX_INTERACTIVE_INPUT_BYTES) {
-                        Ok(CappedLine::Eof) => break,
-                        Ok(CappedLine::Line(s)) => s,
-                        Ok(CappedLine::Truncated) => {
-                            eprintln!(
-                                "\nWarning: input line exceeds {} bytes and was discarded.",
-                                MAX_INTERACTIVE_INPUT_BYTES
-                            );
-                            continue;
-                        }
-                        Err(e) => {
-                            eprintln!("\nError reading input: {e}\n");
-                            break;
-                        }
-                    }
+                // print!("> ");
+                // let _ = std::io::stdout().flush();
+                let input = match rl.readline("> "){
+
+                    Ok(line) => line,
+                    Err(ReadlineError::Interrupted) => continue, // ctrl + c
+                    Err(ReadlineError::Eof) => break, // ctrl + d
+                    Err(e) => {
+                        eprintln!("\nError reading input: {e}\n");
+                        break;
+                    }, // ctrl + d
+
+
+                    // let stdin = std::io::stdin().lock();
+                    // match read_capped_line(stdin, MAX_INTERACTIVE_INPUT_BYTES) {
+                    //     Ok(CappedLine::Eof) => break,
+                    //     Ok(CappedLine::Line(s)) => s,
+                    //     Ok(CappedLine::Truncated) => {
+                    //         eprintln!(
+                    //             "\nWarning: input line exceeds {} bytes and was discarded.",
+                    //             MAX_INTERACTIVE_INPUT_BYTES
+                    //         );
+                    //         continue;
+                    //     }
+                    //     Err(e) => {
+                    //         eprintln!("\nError reading input: {e}\n");
+                    //         break;
+                    //     }
+                    // }
+
                 };
+
+                let _ = rl.add_history_entry(&input);
+
 
                 let user_input = input.trim().to_string();
                 if user_input.is_empty() {

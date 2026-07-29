@@ -25,6 +25,7 @@
 
 mod schedule;
 pub mod types;
+pub mod scheduler;
 
 use crate::tools::cron::add::{JobType, Schedule};
 use anyhow::{bail, Context, Result};

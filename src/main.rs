@@ -256,6 +256,18 @@ async fn main() -> Result<()> {
     }
 
     // todo delivery 投递相关
+    shadow_runtime::cron::scheduler::registry_delivery_fn(
+        Box::new(
+            |config, channel, target, thread_id, output| {
+                Box::pin(
+                    async move {
+            
+                    }
+                )
+            },
+        )
+    );
+
 
     #[cfg(feature = "runtime")]
     match cli.command {

@@ -27,7 +27,7 @@ regex.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "multipart"] }
 url.workspace = true
 urlencoding.workspace = true
-
+rustyline = "17"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 chrono-tz = "0.10"
 
