@@ -38,6 +38,13 @@ const FEISHU_WS_BASE_URL: &str = "https://open.feishu.cn";
 const LARK_BASE_URL: &str = "https://open.larksuite.com/open-apis";
 const LARK_WS_BASE_URL: &str = "https://open.larksuite.com";
 impl LarkPlatform {
+
+    fn proxy_service_key(self) -> &'static str {
+        match self {
+            Self::Lark => "channel.lark",
+            Self::Feishu => "channel.feishu",
+        }
+    }
     fn channel_name(self) -> &'static str {
         match self {
             LarkPlatform::Lark => "lark",
@@ -360,6 +367,71 @@ impl LarkChannel {
             .map(str::to_string)
             .ok_or_else(|| anyhow::Error::msg("Lark/Feishu file upload returned no file_key"))
     }
+
+    async fn send_text_once(
+        &self,
+        url: &str,
+        token: &str,
+        body: &serde_json::Value,
+    ) -> anyhow::Result<(reqwest::StatusCode, serde_json::Value)> {
+        let resp = self
+            .http_client()
+            .post(url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json; charset=utf-8")
+            .json(body)
+            .send()
+            .await?;
+        let status = resp.status();
+        let raw = resp.text().await.unwrap_or_default();
+        let parsed = serde_json::from_str::<serde_json::Value>(&raw)
+            .unwrap_or_else(|_| serde_json::json!({ "raw": raw }));
+        Ok((status, parsed))
+    }
+    async fn send_json_with_token_refresh(
+        &self,
+        url: &str,
+        token: &mut String,
+        body: &serde_json::Value,
+        context: &str,
+    ) -> anyhow::Result<()> {
+        let (status, response) = self.send_text_once(url, token, body).await?;
+
+        if should_refresh_lark_tenant_token(status, &response) {
+            self.invalidate_token().await;
+            *token = self.get_tenant_access_token().await?;
+            let (retry_status, retry_response) = self.send_text_once(url, token, body).await?;
+
+            if should_refresh_lark_tenant_token(retry_status, &retry_response) {
+                anyhow::bail!(
+                    "send failed after token refresh: status={retry_status}, body={retry_response}"
+                );
+            }
+
+            ensure_lark_send_success(retry_status, &retry_response, context)?;
+        } else {
+            ensure_lark_send_success(status, &response, context)?;
+        }
+
+        Ok(())
+    }
+
+    async fn send_lark_media_message(
+        &self,
+        token: &mut String,
+        recipient: &str,
+        media: &LarkPreparedMediaMessage,
+    ) -> anyhow::Result<()> {
+        let body = serde_json::json!({
+            "receive_id": recipient,
+            "msg_type": media.msg_type,
+            "content": media.content.to_string(),
+        });
+        let url = self.send_message_url();
+        self.send_json_with_token_refresh(&url, token, &body, "media send")
+            .await
+    }
+
 }
 
 struct LarkPreparedMediaMessage {
@@ -411,7 +483,7 @@ impl Channel for LarkChannel {
         }
 
         for media in &prepared_media {
-            self.send_larg_media_message(&token, &message.recipient, media)
+            self.send_lark_media_message(&mut token, &message.recipient, media)
                 .await?;
         }
 
@@ -422,7 +494,77 @@ impl Channel for LarkChannel {
         todo!()
     }
 }
+const LARK_CARD_MARKDOWN_MAX_BYTES: usize = 28_000;
 
+/// Build the full message body for sending an interactive card message.
+fn build_interactive_card_body(recipient: &str, markdown: &str) -> serde_json::Value {
+    serde_json::json!({
+        "receive_id": recipient,
+        "msg_type": "interactive",
+        "content": build_card_content(markdown),
+    })
+}
+
+fn build_card_content(markdown: &str) -> String {
+    serde_json::json!({
+        "schema": "2.0",
+        "body": {
+            "elements": [{
+                "tag": "markdown",
+                "content": markdown
+            }]
+        }
+    })
+        .to_string()
+}
+
+
+/// Split markdown content into chunks that fit within the card size limit.
+/// Splits on line boundaries to avoid breaking markdown syntax.
+fn split_markdown_chunks(text: &str, max_bytes: usize) -> Vec<&str> {
+    if text.len() <= max_bytes {
+        return vec![text];
+    }
+
+    let mut chunks = Vec::new();
+    let mut start = 0;
+
+    while start < text.len() {
+        if start + max_bytes >= text.len() {
+            chunks.push(&text[start..]);
+            break;
+        }
+
+        let end = start + max_bytes;
+        let search_region = &text[start..end];
+        let split_at = search_region
+            .rfind('\n')
+            .map(|pos| start + pos + 1)
+            .unwrap_or(end);
+
+        let split_at = if text.is_char_boundary(split_at) {
+            split_at
+        } else {
+            (start..split_at)
+                .rev()
+                .find(|&i| text.is_char_boundary(i))
+                .unwrap_or(start)
+        };
+
+        if split_at <= start {
+            let forced = (end..=text.len())
+                .find(|&i| text.is_char_boundary(i))
+                .unwrap_or(text.len());
+            chunks.push(&text[start..forced]);
+            start = forced;
+        } else {
+            chunks.push(&text[start..split_at]);
+            start = split_at;
+        }
+    }
+
+    chunks
+}
 fn lark_outgoing_media_from_marker(
     kind: String,
     target: String,
@@ -495,7 +637,7 @@ fn validate_lark_marker_target(
                 .with_attrs(serde_json::json!({"reason": "no_workspace_dir"})),
             "lark: marker target has no workspace_dir"
         );
-        anyhow::bail!("Lark/Feishu channel was started without a workspace_dir");
+        anyhow::Error::msg("Lark/Feishu channel was started without a workspace_dir")
     })?;
 
     let workspace = std::fs::canonicalize(workspace).map_err(|err| {
@@ -647,3 +789,11 @@ fn extract_lark_token_ttl_seconds(body: &serde_json::Value) -> u64 {
 }
 
 const LARK_DEFAULT_TOKEN_TTL: Duration = Duration::from_secs(7200);
+const LARK_TOKEN_REFRESH_SKEW: Duration = Duration::from_secs(120);
+fn next_token_refresh_deadline(now: Instant, ttl_seconds: u64) -> Instant {
+    let ttl = Duration::from_secs(ttl_seconds.max(1));
+    let refresh_in = ttl
+        .checked_sub(LARK_TOKEN_REFRESH_SKEW)
+        .unwrap_or(Duration::from_secs(1));
+    now + refresh_in
+}

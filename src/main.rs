@@ -261,7 +261,9 @@ async fn main() -> Result<()> {
             |config, channel, target, thread_id, output| {
                 Box::pin(
                     async move {
-            
+                        shadow_channels::orchestrator::deliver_announcement(
+                            &config, &channel, &target, thread_id, &output
+                        ).await
                     }
                 )
             },
