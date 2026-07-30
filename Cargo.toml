@@ -45,6 +45,8 @@ regex = "1"
 url = "2"
 urlencoding = "2"
 jsonschema = "0.46"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream","multipart"] }
+
 
 [package]
 name = "shadow"

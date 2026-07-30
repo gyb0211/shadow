@@ -2180,6 +2180,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "reqwest 0.12.28",
+ "serde_json",
  "shadow-config",
  "shadow-core",
  "shadow-log",

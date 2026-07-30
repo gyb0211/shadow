@@ -80,6 +80,7 @@ pub enum ChannelKind {
     AcpChannel,
     Plugin,
     Cli,
+    Lark,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntoStaticStr)]

@@ -8,17 +8,19 @@ pub use crate::multi::skill_bundle::SkillBundleConfig;
 pub use crate::model_provider::*;
 
 use crate::ReliableConfig;
+use crate::channel::{LarkReceiveMode, StreamMode};
 use crate::multi::alias_agent::MemoryBackendKind;
 use crate::observability::ObservabilityBackend;
 use crate::providers::{ModelProviderRef, ModelProviders, Providers};
 use anyhow::Context;
 use directories::UserDirs;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::future::poll_fn;
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use crate::peer_group::PeerGroupConfig;
 
 /// 顶层配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +76,84 @@ pub struct Config {
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub embedding_routes: Vec<EmbeddingRouteConfig>,
+
+    #[serde(default, alias = "channels_config")]
+    pub channels: ChannelsConfig,
+
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub peer_groups: HashMap<String, PeerGroupConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelsConfig {
+    #[serde(default = "default_true")]
+    pub cli: bool,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub lark: HashMap<String, LarkConfig>,
+}
+
+impl Default for ChannelsConfig {
+    fn default() -> Self {
+        Self {
+            cli: true,
+            lark: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LarkConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    pub app_id: String,
+    pub app_secret: String,
+    #[serde(default)]
+    pub encrypt_key: Option<String>,
+    #[serde(default)]
+    pub verification_token: Option<String>,
+    #[serde(default)]
+    pub mention_only: bool,
+    #[serde(default)]
+    pub use_feishu: bool,
+    #[serde(default)]
+    pub receive_mode: LarkReceiveMode,
+
+    #[serde(default)]
+    pub port: Option<u16>,
+
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+
+    #[serde(default = "default_channel_approval_timeout_secs")]
+    pub approval_timeout_secs: u64,
+
+    #[serde(default)]
+    pub per_user_session: bool,
+
+    #[serde(default)]
+    pub ack_reactions: Option<bool>,
+
+    #[serde(default)]
+    pub stream_mode: StreamMode,
+
+    #[serde(default = "default_draft_update_interval_ms")]
+    pub draft_update_interval_ms: u64,
+}
+
+fn default_draft_update_interval_ms() -> u64 {
+    1000
+}
+
+fn default_multi_message_delay_ms() -> u64 {
+    800
+}
+
+fn default_channel_approval_timeout_secs() -> u64 {
+    300
+}
+
+fn default_matrix_draft_update_interval_ms() -> u64 {
+    1500
 }
 
 fn default_memory_backend() -> String {
@@ -138,6 +218,8 @@ impl Default for Config {
             storage: Default::default(),
             observability: Default::default(),
             embedding_routes: vec![],
+            channels: ChannelsConfig::default(),
+            peer_groups: Default::default(),
         }
     }
 }
@@ -297,6 +379,29 @@ fn expand_tilde_path(path: &str) -> PathBuf {
 }
 
 impl Config {
+    pub fn channel_external_peers(&self, channel_type: &str, alias: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        for group in self.peer_groups.values() {
+            let group_matches = match group.channel.split_once('.') {
+                Some((ty, al)) => ty == channel_type && al == alias,
+                None => group.channel == channel_type,
+            };
+
+            if !group_matches {
+                continue;
+            }
+
+            for peer in &group.external_peers {
+                let username = peer.as_str().to_string();
+                if seen.insert(username.clone()) {
+                    out.push(username)
+                }
+            }
+        }
+        out
+    }
+
     pub fn agent(&self, agent_alias: &str) -> Option<&AliasedAgentConfig> {
         self.agents.get(agent_alias)
     }

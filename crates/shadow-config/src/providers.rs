@@ -93,6 +93,7 @@ macro_rules! define_provider_ref {
 define_provider_ref!(ModelProviderRef, "providers.models");
 define_provider_ref!(RiskProfileRef, "risk_profiles");
 define_provider_ref!(RuntimeProfileRef, "runtime_profiles");
+define_provider_ref!(ChannelRef, "channels");
 
 #[macro_export]
 macro_rules! for_each_model_provider_slot {

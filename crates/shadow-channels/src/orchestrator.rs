@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 use std::sync::atomic::AtomicBool;
 use shadow_config::Config;
 use shadow_core::{Channel, Observer};
+use crate::lark::LarkChannel;
 
 type CronChannelRegistry = Arc<HashMap<String, Arc<dyn Channel>>>;
 
@@ -72,6 +73,12 @@ pub async fn deliver_announcement(
                     &format!(
                         "[channels.lark.<alias>] not configured (cron channel \"{channel_type}.{alias}\")"
                     )
+                );
+
+                anyhow::Error::msg(
+                    format!(
+                        "[channels.lark.<alias>] not configured (cron channel \"{channel_type}.{alias}\")"
+                    )
                 )
             })?;
 
@@ -94,10 +101,12 @@ pub async fn deliver_announcement(
             let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> = Arc::new(move || peers.clone());
 
             let ch = LarkChannel::from_config(lk, alias, peer_resolver);
-            
+
             shadow_core::channel::Channel::send(&ch, &make_msg(&safe_output)).await?;
         }
 
         other => anyhow::bail!("unsupported delivery channel: {other}, please check build feature or valid channel_type")
     }
+    
+    Ok(())
 }

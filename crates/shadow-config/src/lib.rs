@@ -45,6 +45,7 @@ pub mod proxy_client;
 pub mod observability;
 pub mod platform;
 pub mod policy;
+pub mod channel;
 
 use std::path::Path;
 pub use model_provider::*;
