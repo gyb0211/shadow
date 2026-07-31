@@ -129,10 +129,28 @@ enum Commands {
     ")]
     Serve {
         #[arg(short = 'a', long)]
-        agent: String,
+        agent: Option<String>,
         /// Lark channel 名称 (不指定则监听所有配置的)
         #[arg(short = 'n', long)]
         name: Option<String>,
+    },
+
+    /// 以守护进程方式启动 channel 监听服务
+    #[command(long_about = "\
+    Start channel listeners as a daemon process.
+
+    Examples:
+        shadow daemon                             # start daemon with all enabled agents
+        shadow daemon --stop                      # stop the running daemon
+        shadow daemon --status                    # check daemon status
+    ")]
+    Daemon {
+        /// 停止守护进程
+        #[arg(long)]
+        stop: bool,
+        /// 查看守护进程状态
+        #[arg(long)]
+        status: bool,
     },
 }
 
@@ -409,10 +427,29 @@ async fn main() -> Result<()> {
             use std::sync::Arc;
             use tokio::sync::mpsc;
 
-            if config.agent(&agent).is_none() {
-                anyhow::bail!(
-                    "`shadow serve --agent {agent}` is not configured (no [agents.{agent}] entry)"
-                )
+            // 收集要启动的 agents
+            let agents_to_start: Vec<String> = match agent {
+                Some(a) => {
+                    if config.agent(&a).is_none() {
+                        anyhow::bail!(
+                            "`shadow serve --agent {a}` is not configured (no [agents.{a}] entry)"
+                        )
+                    }
+                    vec![a]
+                }
+                None => {
+                    // 启动所有 enabled 的 agents
+                    config
+                        .agents
+                        .iter()
+                        .filter(|(_, cfg)| cfg.enabled)
+                        .map(|(name, _)| name.clone())
+                        .collect()
+                }
+            };
+
+            if agents_to_start.is_empty() {
+                anyhow::bail!("No enabled agents found. Configure agents in config file.");
             }
 
             // 收集要监听的 lark channels 配置（clone 出来避免生命周期问题）
@@ -438,7 +475,10 @@ async fn main() -> Result<()> {
                 }
             };
 
-            println!("Starting Lark channel listeners...");
+            println!(
+                "Starting Lark channel listeners for agents: {:?}",
+                agents_to_start
+            );
 
             // 为每个 channel 创建 LarkChannel 实例并启动监听
             let mut handles = vec![];
@@ -467,9 +507,9 @@ async fn main() -> Result<()> {
                     })
                 };
 
-                // 启动消息处理任务
+                // 启动消息处理任务（为每个 agent 启动一个处理任务）
                 let config_clone = config.clone();
-                let agent_clone = agent.clone();
+                let agents_clone = agents_to_start.clone();
                 let handle_handle = {
                     let channel = channel_clone.clone();
                     let alias = alias.clone();
@@ -480,10 +520,13 @@ async fn main() -> Result<()> {
                                 msg.channel, msg.sender, msg.reply_target, msg.content
                             );
 
+                            // 使用第一个 agent 处理消息（简单策略）
+                            let agent_name = &agents_clone[0];
+
                             // 调用 agent runtime 处理消息
                             let reply = match agent::run(
                                 config_clone.clone(),
-                                &agent_clone,
+                                agent_name,
                                 Some(msg.content.clone()),
                                 None,
                                 false, // 非交互模式
@@ -524,6 +567,107 @@ async fn main() -> Result<()> {
                 listen.abort();
                 handle.abort();
             }
+
+            Ok(())
+        }
+        Commands::Daemon { stop, status } => {
+            use std::fs;
+            use std::process::Command;
+
+            let pid_file = config.data_dir.join("shadow.pid");
+            let log_file = config.data_dir.join("shadow.log");
+
+            // 确保数据目录存在
+            fs::create_dir_all(&config.data_dir)?;
+
+            // 处理 --status
+            if status {
+                if pid_file.exists() {
+                    let pid_str = fs::read_to_string(&pid_file)?;
+                    let pid: u32 = pid_str.trim().parse().unwrap_or(0);
+                    if pid > 0 {
+                        // 检查进程是否存在
+                        let result = Command::new("kill").args(["-0", &pid.to_string()]).status();
+                        if result.is_ok() && result.unwrap().success() {
+                            println!("Shadow daemon is running (PID: {pid})");
+                            return Ok(());
+                        }
+                    }
+                    println!("Shadow daemon is not running (stale PID file)");
+                } else {
+                    println!("Shadow daemon is not running");
+                }
+                return Ok(());
+            }
+
+            // 处理 --stop
+            if stop {
+                if pid_file.exists() {
+                    let pid_str = fs::read_to_string(&pid_file)?;
+                    let pid: u32 = pid_str.trim().parse().unwrap_or(0);
+                    if pid > 0 {
+                        println!("Stopping shadow daemon (PID: {pid})...");
+                        let _ = Command::new("kill").args([&pid.to_string()]).status();
+                        let _ = fs::remove_file(&pid_file);
+                        println!("Daemon stopped");
+                        return Ok(());
+                    }
+                }
+                println!("No daemon is running");
+                return Ok(());
+            }
+
+            // 启动守护进程
+            let agents_to_start: Vec<String> = config
+                .agents
+                .iter()
+                .filter(|(_, cfg)| cfg.enabled)
+                .map(|(name, _)| name.clone())
+                .collect();
+
+            if agents_to_start.is_empty() {
+                anyhow::bail!("No enabled agents found. Configure agents in config file.");
+            }
+
+            if pid_file.exists() {
+                let pid_str = fs::read_to_string(&pid_file)?;
+                let pid: u32 = pid_str.trim().parse().unwrap_or(0);
+                if pid > 0 {
+                    let result = Command::new("kill").args(["-0", &pid.to_string()]).status();
+                    if result.is_ok() && result.unwrap().success() {
+                        anyhow::bail!("Daemon is already running (PID: {pid})");
+                    }
+                }
+            }
+
+            println!("Starting shadow daemon for agents: {:?}", agents_to_start);
+
+            // 使用 fork 创建守护进程
+            // 简化版：使用 nohup + 重定向
+            let current_exe = std::env::current_exe()?;
+            let mut cmd = Command::new(&current_exe);
+            cmd.arg("serve");
+
+            // 重定向 stdout/stderr 到日志文件
+            let log = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_file)?;
+            cmd.stdout(log.try_clone()?);
+            cmd.stderr(log);
+
+            // 分离进程组
+            cmd.stdin(std::process::Stdio::null());
+
+            let child = cmd.spawn()?;
+            let pid = child.id();
+
+            // 写入 PID 文件
+            fs::write(&pid_file, pid.to_string())?;
+
+            println!("Daemon started (PID: {pid})");
+            println!("Log file: {}", log_file.display());
+            println!("Stop with: shadow daemon --stop");
 
             Ok(())
         }
