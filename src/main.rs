@@ -118,6 +118,22 @@ enum Commands {
         #[arg(short = 'a', long)]
         agent: Option<String>,
     },
+
+    /// 启动 channel 监听服务（飞书/Lark）
+    #[command(long_about = "\
+    Start channel listeners for Lark/Feishu.
+
+    Examples:
+        shadow serve -a assistant                   # listen all configured lark channels
+        shadow serve -a assistant -n moqi           # listen specific lark channel
+    ")]
+    Serve {
+        #[arg(short = 'a', long)]
+        agent: String,
+        /// Lark channel 名称 (不指定则监听所有配置的)
+        #[arg(short = 'n', long)]
+        name: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -144,6 +160,9 @@ enum MemoryAction {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // 安装 rustls crypto provider (WebSocket TLS 需要)
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let cli = Cli::parse();
     //
     // // Workspace -- 集中所有路径布局 (替代散落的 config_dir() 调用)
@@ -382,6 +401,130 @@ async fn main() -> Result<()> {
         }
         Commands::Quickstart { agent } => {
             shadow::quickstart::run(&mut config, agent.as_deref()).await?;
+            Ok(())
+        }
+        Commands::Serve { agent, name } => {
+            use shadow_channels::lark::LarkChannel;
+            use shadow_core::Channel;
+            use std::sync::Arc;
+            use tokio::sync::mpsc;
+
+            if config.agent(&agent).is_none() {
+                anyhow::bail!(
+                    "`shadow serve --agent {agent}` is not configured (no [agents.{agent}] entry)"
+                )
+            }
+
+            // 收集要监听的 lark channels 配置（clone 出来避免生命周期问题）
+            let lark_entries: Vec<(String, shadow_config::LarkConfig)> = match name.as_deref() {
+                Some(n) => {
+                    let cfg = config.channels.lark.get(n).ok_or_else(|| {
+                        anyhow::Error::msg(format!(
+                            "Lark config '{n}' not found in [channels.lark.{n}]"
+                        ))
+                    })?;
+                    vec![(n.to_string(), cfg.clone())]
+                }
+                None => {
+                    if config.channels.lark.is_empty() {
+                        anyhow::bail!("No Lark config found. Configure with:\n  shadow quickstart");
+                    }
+                    config
+                        .channels
+                        .lark
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect()
+                }
+            };
+
+            println!("Starting Lark channel listeners...");
+
+            // 为每个 channel 创建 LarkChannel 实例并启动监听
+            let mut handles = vec![];
+
+            for (alias, lark_config) in lark_entries {
+                let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> =
+                    Arc::new(move || {
+                        // 允许所有用户（后续可以从 config 里获取 peer group）
+                        vec!["*".to_string()]
+                    });
+
+                let channel =
+                    LarkChannel::from_config(&lark_config, alias.clone(), peer_resolver.clone());
+
+                let (tx, mut rx) = mpsc::channel::<shadow_core::ChannelMessage>(32);
+
+                // 启动 listen 任务
+                let channel_clone = Arc::new(channel);
+                let listen_handle = {
+                    let channel = channel_clone.clone();
+                    let alias = alias.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = channel.listen(tx).await {
+                            eprintln!("Lark channel '{alias}' listen error: {e}");
+                        }
+                    })
+                };
+
+                // 启动消息处理任务
+                let config_clone = config.clone();
+                let agent_clone = agent.clone();
+                let handle_handle = {
+                    let channel = channel_clone.clone();
+                    let alias = alias.clone();
+                    tokio::spawn(async move {
+                        while let Some(msg) = rx.recv().await {
+                            println!(
+                                "[{}] {} -> {}: {}",
+                                msg.channel, msg.sender, msg.reply_target, msg.content
+                            );
+
+                            // 调用 agent runtime 处理消息
+                            let reply = match agent::run(
+                                config_clone.clone(),
+                                &agent_clone,
+                                Some(msg.content.clone()),
+                                None,
+                                false, // 非交互模式
+                                None,
+                                None,
+                                AgentRuntimeOverrides::default(),
+                            )
+                            .await
+                            {
+                                Ok(reply) => reply,
+                                Err(e) => {
+                                    eprintln!("Agent runtime error: {e}");
+                                    format!("Error: {e}")
+                                }
+                            };
+
+                            // 发送回复
+                            let send_msg = shadow_core::SendMessage::new(reply, &msg.reply_target);
+                            if let Err(e) = channel.send(&send_msg).await {
+                                eprintln!("Failed to send reply: {e}");
+                            }
+                        }
+                    })
+                };
+
+                handles.push((listen_handle, handle_handle));
+                println!("  ✓ Listening on Lark channel '{alias}'");
+            }
+
+            println!("\nPress Ctrl+C to stop.\n");
+
+            // 等待所有任务
+            tokio::signal::ctrl_c().await?;
+            println!("\nShutting down...");
+
+            // 取消所有任务
+            for (listen, handle) in handles {
+                listen.abort();
+                handle.abort();
+            }
+
             Ok(())
         }
     }

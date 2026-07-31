@@ -1,8 +1,8 @@
+use anyhow::{Context, Result};
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
-use serde::{Deserialize, Serialize};
-use anyhow::{Context, Result};
 use tokio_rustls::rustls;
 
 pub fn build_runtime_proxy_client_with_timeouts(
@@ -167,7 +167,6 @@ fn clear_runtime_proxy_client_cache() {
     }
 }
 
-
 /// Combined async IO trait for boxed WebSocket transport streams.
 trait AsyncReadWrite: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
 impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> AsyncReadWrite for T {}
@@ -216,7 +215,7 @@ impl tokio::io::AsyncWrite for BoxedIo {
 }
 
 impl Unpin for BoxedIo {}
-pub type ProxiedWsStream  = tokio_tungstenite::WebSocketStream<BoxedIo>;
+pub type ProxiedWsStream = tokio_tungstenite::WebSocketStream<BoxedIo>;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyConfig {
     /// Enable proxy support for selected scope.
@@ -242,9 +241,7 @@ pub struct ProxyConfig {
     pub services: Vec<String>,
 }
 
-#[derive(
-    Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq,
-)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProxyScope {
     /// Use system environment proxy variables only.
@@ -260,7 +257,6 @@ static RUNTIME_PROXY_CONFIG: OnceLock<RwLock<ProxyConfig>> = OnceLock::new();
 fn runtime_proxy_state() -> &'static RwLock<ProxyConfig> {
     RUNTIME_PROXY_CONFIG.get_or_init(|| RwLock::new(ProxyConfig::default()))
 }
-
 
 impl Default for ProxyConfig {
     fn default() -> Self {
@@ -413,8 +409,7 @@ impl ProxyConfig {
                 Ok(proxy) => {
                     builder = builder.proxy(apply_no_proxy(proxy, no_proxy.clone()));
                 }
-                Err(error) => {
-                }
+                Err(error) => {}
             }
         }
 
@@ -423,8 +418,7 @@ impl ProxyConfig {
                 Ok(proxy) => {
                     builder = builder.proxy(apply_no_proxy(proxy, no_proxy.clone()));
                 }
-                Err(error) => {
-                }
+                Err(error) => {}
             }
         }
 
@@ -433,8 +427,7 @@ impl ProxyConfig {
                 Ok(proxy) => {
                     builder = builder.proxy(apply_no_proxy(proxy, no_proxy));
                 }
-                Err(error) => {
-                }
+                Err(error) => {}
             }
         }
 
@@ -476,8 +469,8 @@ fn service_selector_matches(selector: &str, service_key: &str) -> bool {
     if let Some(prefix) = selector.strip_suffix(".*") {
         return service_key.starts_with(prefix)
             && service_key
-            .strip_prefix(prefix)
-            .is_some_and(|suffix| suffix.starts_with('.'));
+                .strip_prefix(prefix)
+                .is_some_and(|suffix| suffix.starts_with('.'));
     }
 
     false
@@ -715,7 +708,6 @@ fn validate_proxy_url(field: &str, url: &str) -> Result<()> {
     Ok(())
 }
 
-
 fn is_supported_proxy_service_selector(selector: &str) -> bool {
     if SUPPORTED_PROXY_SERVICE_KEYS
         .iter()
@@ -731,7 +723,6 @@ fn is_supported_proxy_service_selector(selector: &str) -> bool {
 fn apply_no_proxy(proxy: reqwest::Proxy, no_proxy: Option<reqwest::NoProxy>) -> reqwest::Proxy {
     proxy.no_proxy(no_proxy)
 }
-
 
 async fn ws_connect_via_proxy(
     ws_url: &str,
@@ -785,8 +776,8 @@ async fn ws_connect_via_proxy(
                     proxy.username(),
                     password,
                 )
-                    .await
-                    .with_context(|| format!("SOCKS5 auth connect to {target_addr} via {proxy_addr}"))?
+                .await
+                .with_context(|| format!("SOCKS5 auth connect to {target_addr} via {proxy_addr}"))?
             };
             let tcp: TcpStream = socks_stream.into_inner();
             BoxedIo(Box::new(tcp))

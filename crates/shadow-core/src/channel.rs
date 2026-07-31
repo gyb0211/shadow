@@ -24,7 +24,6 @@ pub struct ChannelMessage {
     pub passive_context: bool,
     pub explicitly_addressed: bool,
     pub conversation_scope: ChannelConversationScope,
-
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -132,14 +131,12 @@ impl MediaAttachment {
     }
 }
 
-
 /// 出站消息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendMessage {
     pub content: String,
     pub recipient: String,
     pub thread_ts: Option<String>,
-
 }
 
 impl SendMessage {
