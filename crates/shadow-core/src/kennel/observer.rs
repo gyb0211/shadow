@@ -149,7 +149,7 @@ pub enum ObserverEvent {
         cache_type: String,
     },
     /// 错误
-    Error {component: String,  message: String },
+    Error { component: String, message: String },
 
     /// 一次发布开始
     DeploymentStart { deploy_id: String },

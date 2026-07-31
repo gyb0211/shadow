@@ -44,7 +44,9 @@ impl ChatError {
     pub fn from_status(status: reqwest::StatusCode, body: String) -> Self {
         let code = status.as_u16();
         let class = match code {
-            429 => RetryClass::RateLimit { retry_after_secs: None },
+            429 => RetryClass::RateLimit {
+                retry_after_secs: None,
+            },
             401 | 403 => RetryClass::Auth,
             400 | 404 | 405..=428 | 430..=499 => RetryClass::Permanent,
             500..=599 => RetryClass::Transient,
@@ -95,7 +97,11 @@ impl ChatError {
 impl fmt::Display for ChatError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.status {
-            Some(code) => write!(f, "ChatError({:?}, status={}, msg={})", self.class, code, self.message),
+            Some(code) => write!(
+                f,
+                "ChatError({:?}, status={}, msg={})",
+                self.class, code, self.message
+            ),
             None => write!(f, "ChatError({:?}, msg={})", self.class, self.message),
         }
     }
@@ -112,4 +118,3 @@ impl fmt::Debug for ChatError {
 }
 
 impl std::error::Error for ChatError {}
-

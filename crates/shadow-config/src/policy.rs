@@ -1,4 +1,6 @@
 use crate::autonomy::{AutonomyLevel, DelegationPolicy};
+use crate::multi::alias_agent::AccessMode;
+use anyhow::Context;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::error::Error;
@@ -7,9 +9,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Child;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use anyhow::Context;
 use tokio::io::split;
-use crate::multi::alias_agent::AccessMode;
 
 #[derive(Debug)]
 pub struct ActionTracker {
@@ -596,9 +596,9 @@ fn skip_env_assignments(s: &str) -> &str {
         // 环境变量赋值: 包含 '=' 且以字母或下划线开头
         if word.contains('=')
             && word
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         {
             // 跳过这个单词
             rest = rest[word.len()..].trim_start();
@@ -904,7 +904,7 @@ fn contains_unsafe_output_redirect(command: &str) -> bool {
             r"\d*>[ ]?/dev/({})(\s|[;&|)]|$)",
             safe_device_redirect_names_pattern()
         ))
-            .unwrap()
+        .unwrap()
     });
 
     let safe = re.replace_all(command, "$2").to_string();
@@ -1321,7 +1321,6 @@ impl SecurityPolicy {
         })
     }
 
-
     pub fn is_command_allowed(&self, command: &str) -> bool {
         if self.autonomy == AutonomyLevel::ReadOnly {
             return false;
@@ -1403,41 +1402,31 @@ impl SecurityPolicy {
         let base = base.to_ascii_lowercase();
         match base.as_str() {
             "find" => !args.iter().any(|a| a == "-exec" || a == "-ok"),
-            "git" =>
+            "git" => {
                 !args_cased.iter().any(|arg| arg == "-c")
                     && !args.iter().any(|arg| {
-                    arg == "config"
-                        || arg.starts_with("config.")
-                        || arg == "alias"
-                        || arg.starts_with("alias.")
-                }),
-            "python" | "python3" => {
-                !args
-                    .iter()
-                    .any(|arg| arg.starts_with("-c") || arg.starts_with("-m"))
+                        arg == "config"
+                            || arg.starts_with("config.")
+                            || arg == "alias"
+                            || arg.starts_with("alias.")
+                    })
             }
-            "node" => {
-                !args.iter().any(|arg| {
-                    arg.starts_with("-e")
-                        || arg.starts_with("--eval")
-                        || arg.starts_with("-p")
-                        || arg.starts_with("--print")
-                })
-            }
-            "pip" | "pip3" => {
-                !args.iter().any(|arg| arg == "install" || arg == "download")
-            }
-            "npm" => {
-                !args.iter().any(|arg| {
-                    arg == "exec" || arg == "install" || arg == "i" || arg == "add" || arg == "ci"
-                })
-            }
-            "cargo" => {
-                !args.iter().any(|arg| arg == "install")
-            }
+            "python" | "python3" => !args
+                .iter()
+                .any(|arg| arg.starts_with("-c") || arg.starts_with("-m")),
+            "node" => !args.iter().any(|arg| {
+                arg.starts_with("-e")
+                    || arg.starts_with("--eval")
+                    || arg.starts_with("-p")
+                    || arg.starts_with("--print")
+            }),
+            "pip" | "pip3" => !args.iter().any(|arg| arg == "install" || arg == "download"),
+            "npm" => !args.iter().any(|arg| {
+                arg == "exec" || arg == "install" || arg == "i" || arg == "add" || arg == "ci"
+            }),
+            "cargo" => !args.iter().any(|arg| arg == "install"),
             _ => true,
         }
-
     }
 
     pub fn forbidden_path_argument(&self, command: &str) -> Option<String> {
@@ -1557,8 +1546,6 @@ impl SecurityPolicy {
         }
 
         None
-
-
     }
 
     pub fn is_path_allowed(&self, path: &str) -> bool {
@@ -2341,5 +2328,4 @@ impl SecurityPolicy {
 
         out
     }
-
 }

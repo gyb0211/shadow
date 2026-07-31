@@ -52,8 +52,6 @@ impl ChatMessage {
     pub fn is_tool(&self) -> bool {
         self.role == "tool"
     }
-    
-    
 }
 
 /// 聊天请求
@@ -81,15 +79,13 @@ pub struct ChatResponse {
 }
 
 impl ChatResponse {
-    
     pub fn text_or_empty(&self) -> &str {
         self.text.as_deref().unwrap_or("")
     }
-    
+
     pub fn has_tool_calls(&self) -> bool {
         !self.tool_calls.is_empty()
     }
-    
 }
 
 /// 工具调用
@@ -98,7 +94,7 @@ pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: String,
-    #[serde(default, skip_serializing_if="Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_content: Option<serde_json::Value>,
 }
 
@@ -107,7 +103,7 @@ pub struct ToolCall {
 pub struct TokenUsage {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    pub cached_input_tokens:  Option<u64>,
+    pub cached_input_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

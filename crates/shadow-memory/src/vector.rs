@@ -144,4 +144,3 @@ pub fn hybrid_merge(
     results.truncate(limit);
     results
 }
-

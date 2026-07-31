@@ -20,12 +20,12 @@
 //! wrapper only ever sees same-backend sibling UUIDs in its
 //! `allowed_agent_ids` set.
 
+use anyhow::Result;
+use async_trait::async_trait;
+use shadow_core::kennel::attribution::MemoryKind;
 use shadow_core::{
     Attributable, ExportFilter, Memory, MemoryCategory, MemoryEntry, ProceduralMessage, Role,
 };
-use shadow_core::kennel::attribution::MemoryKind;
-use anyhow::Result;
-use async_trait::async_trait;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -282,11 +282,7 @@ impl Memory for AgentScopedMemory {
             .await
     }
 
-    async fn purge_session_for_agent(
-        &self,
-        session_id: &str,
-        agent_id: &str,
-    ) -> Result<usize> {
+    async fn purge_session_for_agent(&self, session_id: &str, agent_id: &str) -> Result<usize> {
         if agent_id != self.agent_id && !self.allowed_agent_ids.iter().any(|a| a == agent_id) {
             return Ok(0);
         }

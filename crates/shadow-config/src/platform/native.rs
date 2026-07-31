@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
 use shadow_core::platform::is_android;
 use shadow_core::runtime::RuntimePlatformAdapter;
+use std::path::{Path, PathBuf};
 
 /// Command-line argument passed after `cmd.exe /C`.
 ///

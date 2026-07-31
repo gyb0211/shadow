@@ -5,10 +5,10 @@
 //! `vector_search`: 向量余弦相似度检索
 //! `embedder_dimensions`: embedder 维度查询
 
-use crate::sqlite::util::{decode_kind, fts5_term_query, str_to_category};
 use crate::sqlite::SqliteMemory;
+use crate::sqlite::util::{decode_kind, fts5_term_query, str_to_category};
 use crate::vector;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use shadow_core::kennel::memory::MemoryEntry;
 use std::fmt::Write as _;
 

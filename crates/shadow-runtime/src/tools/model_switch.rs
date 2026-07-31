@@ -8,9 +8,9 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 #[cfg(test)]
 type ModelCatalogResolver = Arc<
-    dyn Fn(String) -> std::pin::Pin<Box<dyn Future<Output=anyhow::Result<Vec<String>>> + Send>>
-    + Send
-    + Sync,
+    dyn Fn(String) -> std::pin::Pin<Box<dyn Future<Output = anyhow::Result<Vec<String>>> + Send>>
+        + Send
+        + Sync,
 >;
 
 pub struct ModelSwitchTool {
@@ -290,14 +290,12 @@ impl ModelSwitchTool {
         })
     }
 
-
-    async fn resolve_catalog(&self, family: &str) -> anyhow::Result<Vec<String>>{
+    async fn resolve_catalog(&self, family: &str) -> anyhow::Result<Vec<String>> {
         #[cfg(test)]
         if let Some(resolver) = &self.catalog_resolver {
             return resolver(family.to_string()).await;
         }
         shadow_providers::catalog::list_models_for_family(family).await
-
     }
 }
 
@@ -324,31 +322,28 @@ fn resolve_model_provider_profile_ref(config: &Config, raw: &str) -> Result<Stri
     if family.is_empty() || alias.is_empty() {
         return Err(format!(
             "model_provider must be a dotted '<type>.<alias> provider profile reference, get `{raw}`"
-        ))
+        ));
     }
 
-    if config.providers.models.find(family, alias).is_none(){
+    if config.providers.models.find(family, alias).is_none() {
         let available = configured_model_provider_profiles(config);
-        let available = if available.is_empty(){
+        let available = if available.is_empty() {
             "no configured provider profiles".to_string()
-        }else{
+        } else {
             available.join(", ")
         };
 
         return Err(format!(
             "model_provider `{raw} is not a configured provider profile. Add a [providers.models.{family}.{alias}] entry or use one of:{available} `"
-        ))
+        ));
     }
 
     Ok(format!("{family}.{alias}"))
-
-
 }
-
 
 fn hardcoded_models_for(provider_family: &str) -> Vec<String> {
     let models: Vec<&'static str> = match provider_family {
-        _ => vec![]
+        _ => vec![],
     };
     models.into_iter().map(String::from).collect()
 }

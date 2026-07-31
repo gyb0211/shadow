@@ -226,4 +226,3 @@ pub fn create_embedding_provider(
         _ => Box::new(NoopEmbedding),
     }
 }
-

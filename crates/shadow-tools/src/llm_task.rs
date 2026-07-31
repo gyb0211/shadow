@@ -130,7 +130,9 @@ impl Tool for LlmTaskTool {
         ) {
             Ok(p) => p,
             Err(error) => {
-                return Ok(ToolResult::err(format!("Failed to create model_provider: {error}")));
+                return Ok(ToolResult::err(format!(
+                    "Failed to create model_provider: {error}"
+                )));
             }
         };
 

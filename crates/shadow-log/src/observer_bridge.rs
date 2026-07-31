@@ -29,7 +29,7 @@
 //! - 让 TUI/Prometheus 等后端消费同一份事件流
 //! - 无 observer 绑定时 no-op
 
-use crate::event::{LogEvent};
+use crate::event::LogEvent;
 use parking_lot::RwLock;
 use shadow_core::kennel::observer::TurnTokenUsage;
 use shadow_core::{Observer, ObserverEvent};
@@ -118,7 +118,6 @@ fn project(event: &LogEvent) -> Option<ObserverEvent> {
         .map(Duration::from_millis)
         .unwrap_or_default();
     let success = matches!(event.event.outcome.as_str(), "success");
-
 
     let agent_alias = attribution
         .get("agent_alias")

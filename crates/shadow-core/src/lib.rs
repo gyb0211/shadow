@@ -13,13 +13,13 @@
 //!   - [`SessionStore`]   会话持久化 (新)
 //!   - [`Attributable`]   归因系统
 
+pub mod agent;
 pub mod channel;
 pub mod kennel;
 pub mod platform;
 pub mod runtime;
 pub mod session_store;
 pub mod workspace;
-pub mod agent;
 
 pub use crate::kennel::provider::NativeThinkingParams;
 pub use channel::{Channel, ChannelMessage, SendMessage};

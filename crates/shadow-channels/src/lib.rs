@@ -4,8 +4,9 @@
 //! 参见 GAP.md 了解差距分析。
 
 // TODO: 实现模块
+pub mod allowlist;
 pub mod cli;
+pub mod lark;
 pub mod orchestrator;
-mod lark;
 mod transcription;
 mod utils;

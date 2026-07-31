@@ -1,6 +1,6 @@
 use shadow_core::ModelProvider;
 
-pub struct ResolvedModelAccess<'a>{
+pub struct ResolvedModelAccess<'a> {
     pub model_provider: &'a dyn ModelProvider,
     pub provider_name: &'a str,
     pub model: &'a str,
@@ -11,10 +11,8 @@ pub struct ResolvedAgentExecution<'a> {
     pub model_access: ResolvedModelAccess<'a>,
 }
 
-impl <'a> ResolvedAgentExecution<'a>{
-    pub fn resolve(
-        model_access: ResolvedModelAccess<'a>
-    ) -> Self{
-        Self{model_access}
+impl<'a> ResolvedAgentExecution<'a> {
+    pub fn resolve(model_access: ResolvedModelAccess<'a>) -> Self {
+        Self { model_access }
     }
 }

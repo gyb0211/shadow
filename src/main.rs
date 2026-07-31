@@ -104,6 +104,20 @@ enum Commands {
         #[arg(short, long)]
         temperature: Option<f64>,
     },
+
+    /// 飞书/Lark 用户认证 (二维码 + 链接)
+    LarkAuth {
+        /// 配置中的 Lark 实例名称 (默认使用第一个)
+        #[arg(long)]
+        name: Option<String>,
+    },
+
+    /// 交互式配置引导
+    Quickstart {
+        /// agent 名称 (不指定则交互选择/创建)
+        #[arg(short = 'a', long)]
+        agent: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -248,28 +262,56 @@ async fn main() -> Result<()> {
 
             return Ok(());
         }
+        Commands::LarkAuth { name } => {
+            let lark_config = pick_lark_config(&config, name.as_deref())?;
+            let domain = if lark_config.use_feishu {
+                "feishu"
+            } else {
+                "lark"
+            };
+            println!("正在验证飞书 / Lark 凭证...");
+            match shadow_channels::lark::probe_bot(
+                &lark_config.app_id,
+                &lark_config.app_secret,
+                domain,
+            )
+            .await
+            {
+                Ok(Some(bot_info)) => {
+                    let bot_name = bot_info
+                        .get("bot_name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("(未命名)");
+                    println!("  ✓ 凭证验证成功, 机器人: {bot_name}");
+                }
+                _ => {
+                    anyhow::bail!("凭证验证失败, 请检查 app_id / app_secret");
+                }
+            }
+            return Ok(());
+        }
+        Commands::Quickstart { agent } => {
+            shadow::quickstart::run(&mut config, agent.as_deref()).await?;
+            return Ok(());
+        }
         _ => {
             anyhow::bail!(
                 "This command requires the full runtime. Rebuild with default features:\n  cargo build --release"
-            );
+            )
         }
     }
 
     // todo delivery 投递相关
-    shadow_runtime::cron::scheduler::registry_delivery_fn(
-        Box::new(
-            |config, channel, target, thread_id, output| {
-                Box::pin(
-                    async move {
-                        shadow_channels::orchestrator::deliver_announcement(
-                            &config, &channel, &target, thread_id, &output
-                        ).await
-                    }
+    shadow_runtime::cron::scheduler::registry_delivery_fn(Box::new(
+        |config, channel, target, thread_id, output| {
+            Box::pin(async move {
+                shadow_channels::orchestrator::deliver_announcement(
+                    &config, &channel, &target, thread_id, &output,
                 )
-            },
-        )
-    );
-
+                .await
+            })
+        },
+    ));
 
     #[cfg(feature = "runtime")]
     match cli.command {
@@ -309,6 +351,65 @@ async fn main() -> Result<()> {
             ))
             .await
             .map(|_| ())
+        }
+        Commands::LarkAuth { name } => {
+            let lark_config = pick_lark_config(&config, name.as_deref())?;
+            let domain = if lark_config.use_feishu {
+                "feishu"
+            } else {
+                "lark"
+            };
+            println!("正在验证飞书 / Lark 凭证...");
+            match shadow_channels::lark::probe_bot(
+                &lark_config.app_id,
+                &lark_config.app_secret,
+                domain,
+            )
+            .await
+            {
+                Ok(Some(bot_info)) => {
+                    let bot_name = bot_info
+                        .get("bot_name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("(未命名)");
+                    println!("  ✓ 凭证验证成功, 机器人: {bot_name}");
+                }
+                _ => {
+                    anyhow::bail!("凭证验证失败, 请检查 app_id / app_secret");
+                }
+            }
+            Ok(())
+        }
+        Commands::Quickstart { agent } => {
+            shadow::quickstart::run(&mut config, agent.as_deref()).await?;
+            Ok(())
+        }
+    }
+}
+
+/// 从配置中获取 LarkConfig (按名称或取第一个)
+fn pick_lark_config<'a>(
+    config: &'a Config,
+    name: Option<&str>,
+) -> anyhow::Result<&'a shadow_config::LarkConfig> {
+    match name {
+        Some(n) => config.channels.lark.get(n).ok_or_else(|| {
+            anyhow::Error::msg(format!(
+                "Lark config '{n}' not found in [channels.lark.{n}]"
+            ))
+        }),
+        None => {
+            if config.channels.lark.is_empty() {
+                anyhow::bail!(
+                    "No Lark config found. Configure with:\n  shadow config set channels.lark.default.app_id <id>\n  shadow config set channels.lark.default.app_secret <secret>"
+                );
+            }
+            config
+                .channels
+                .lark
+                .values()
+                .next()
+                .ok_or_else(|| anyhow::Error::msg("Lark config map is non-empty but returned None"))
         }
     }
 }

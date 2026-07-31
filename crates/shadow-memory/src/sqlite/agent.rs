@@ -4,7 +4,7 @@
 //! SQLite migration's default-agent backfill and by the `ensure_agent_uuid`
 //! trait impl on the memory backend (alias resolution at agent-loop entry).
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 pub fn sqlite_ensure_default_agent_uuid(conn: &Connection) -> anyhow::Result<String> {
     sqlite_ensure_agent_uuid(conn, "default")

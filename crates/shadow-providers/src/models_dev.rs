@@ -1,33 +1,31 @@
-
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use serde::Deserialize;
 use tokio::sync::OnceCell;
 
 const CATALOG_URL: &str = "https://models.dev/api.json";
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct ProviderEntry{
+pub(crate) struct ProviderEntry {
     models: HashMap<String, ModelEntry>,
 }
 
 #[derive(Debug, Deserialize)]
-struct ModelEntry{
+struct ModelEntry {
     id: String,
     #[serde(default)]
     cost: Option<ModelCost>,
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, Default)]
-struct ModelCost{
+struct ModelCost {
     #[serde(default)]
     input: Option<f64>,
     #[serde(default)]
     output: Option<f64>,
     #[serde(default)]
     cache_read: Option<f64>,
-
 }
 
 pub(crate) type Catalog = HashMap<String, ProviderEntry>;
@@ -45,10 +43,11 @@ pub async fn list_models_for(provider_key: &str) -> anyhow::Result<Vec<String>> 
     )
     .await
 }
-pub(crate) async fn fetch_catalog() -> anyhow::Result<Arc<Catalog>>{
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(10))
+pub(crate) async fn fetch_catalog() -> anyhow::Result<Arc<Catalog>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
         .build()?;
-    let response  =client.get(CATALOG_URL).send().await?.error_for_status()?;
+    let response = client.get(CATALOG_URL).send().await?.error_for_status()?;
     let bytes = response.bytes().await?;
     Ok(Arc::new(parse_catalog(&bytes)?))
 }

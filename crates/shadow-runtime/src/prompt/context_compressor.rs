@@ -78,4 +78,3 @@ pub fn prune_to_fit(messages: &mut Vec<ChatMessage>, max_tokens: usize) -> usize
     }
     pruned
 }
-

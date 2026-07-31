@@ -490,4 +490,3 @@ pub fn normalize_recent_recall_query(query: &str) -> &str {
         query
     }
 }
-

@@ -6,10 +6,8 @@
 //! 所有测试使用 tempfile 隔离工作目录, NoopEmbedding (dim=0) →
 //! recall 退化为 FTS5 + LIKE 回退路径。
 
-use shadow_core::kennel::memory::{
-    ExportFilter, MemoryCategory, MemoryKind, StoreOptions,
-};
 use shadow_core::Memory;
+use shadow_core::kennel::memory::{ExportFilter, MemoryCategory, MemoryKind, StoreOptions};
 use shadow_memory::sqlite::SqliteMemory;
 use tempfile::TempDir;
 
@@ -183,10 +181,7 @@ async fn count_in_scope_namespace_category() {
     .await
     .expect("s");
 
-    assert_eq!(
-        mem.count_in_scope(Some("ns1"), None).await.expect("c"),
-        2
-    );
+    assert_eq!(mem.count_in_scope(Some("ns1"), None).await.expect("c"), 2);
     assert_eq!(
         mem.count_in_scope(Some("ns1"), Some(&MemoryCategory::Core))
             .await
@@ -206,12 +201,22 @@ async fn count_in_scope_namespace_category() {
 #[tokio::test]
 async fn recall_by_keyword_fts5() {
     let (mem, _d) = make();
-    mem.store("rust", "how to open a file in rust", MemoryCategory::Core, None)
-        .await
-        .expect("s");
-    mem.store("python", "how to read a file in python", MemoryCategory::Core, None)
-        .await
-        .expect("s");
+    mem.store(
+        "rust",
+        "how to open a file in rust",
+        MemoryCategory::Core,
+        None,
+    )
+    .await
+    .expect("s");
+    mem.store(
+        "python",
+        "how to read a file in python",
+        MemoryCategory::Core,
+        None,
+    )
+    .await
+    .expect("s");
 
     let hits = mem
         .recall("rust file", 10, None, None, None)
@@ -326,7 +331,9 @@ async fn supersede_marks_old_entries() {
     let old = mem.get("old").await.expect("g").expect("present");
     let new = mem.get("new").await.expect("g").expect("present");
 
-    mem.supersede(&[old.id.clone()], &new.id).await.expect("supersede");
+    mem.supersede(&[old.id.clone()], &new.id)
+        .await
+        .expect("supersede");
 
     // superseded entry should be filtered from list
     let listed: Vec<_> = mem
@@ -336,7 +343,10 @@ async fn supersede_marks_old_entries() {
         .into_iter()
         .filter(|e| e.key == "old")
         .collect();
-    assert!(listed.is_empty(), "superseded entry should not appear in list");
+    assert!(
+        listed.is_empty(),
+        "superseded entry should not appear in list"
+    );
 
     // but get() by key still returns it (get does not filter superseded_by)
     let direct = mem.get("old").await.expect("g").expect("present");
@@ -532,10 +542,17 @@ async fn get_for_agent_scopes_by_agent_id() {
     .await
     .expect("s");
 
-    let alice_only = mem.get_for_agent("shared_key", &alice).await.expect("g").expect("present");
+    let alice_only = mem
+        .get_for_agent("shared_key", &alice)
+        .await
+        .expect("g")
+        .expect("present");
     assert_eq!(alice_only.content, "alice's version");
 
-    let bob_only = mem.get_for_agent("shared_key", &bob).await.expect("g").expect("present");
+    let bob_only = mem
+        .get_for_agent("shared_key", &bob)
+        .await
+        .expect("g")
+        .expect("present");
     assert_eq!(bob_only.content, "bob's version");
 }
-

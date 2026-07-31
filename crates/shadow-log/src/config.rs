@@ -17,7 +17,7 @@ pub struct LogConfig {
 
 impl Default for LogConfig {
     fn default() -> Self {
-        Self{
+        Self {
             persistence: "rolling".to_string(),
             persistence_path: String::new(),
             persistence_max_entries: 10_000,
@@ -30,7 +30,6 @@ impl Default for LogConfig {
             tool_io_denylist: Vec::new(),
             llm_request_payload: "off".to_string(),
         }
-
     }
 }
 
@@ -51,7 +50,7 @@ impl StoragePolicy {
             _ => Self::None,
         }
     }
-    
+
     pub fn is_enabled(&self) -> bool {
         !matches!(self, Self::None)
     }
@@ -73,7 +72,9 @@ impl ToolIoPolicy {
         }
     }
 
-    pub fn captures_io(self) -> bool {!matches!(self, Self::Off)}
+    pub fn captures_io(self) -> bool {
+        !matches!(self, Self::Off)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

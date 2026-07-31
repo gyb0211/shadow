@@ -9,10 +9,10 @@
 //!
 //! 跳过的 zeroclaw 特性:`enc:` XOR 遗留迁移、`op://` 1Password CLI 集成、Windows ACL。
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chacha20poly1305::{
-    aead::{Aead, KeyInit},
     ChaCha20Poly1305, Key, Nonce,
+    aead::{Aead, KeyInit},
 };
 use rand::TryRngCore;
 use std::path::Path;

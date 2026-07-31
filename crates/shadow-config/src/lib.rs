@@ -34,28 +34,31 @@
 //! backend = "none"
 //! ```
 
-pub mod migration;
-pub mod providers;
-pub mod schema;
-pub mod secrets;
-pub mod multi;
 pub mod autonomy;
+pub mod channel;
+pub mod migration;
 pub mod model_provider;
-pub mod proxy_client;
+pub mod multi;
 pub mod observability;
 pub mod platform;
 pub mod policy;
-pub mod channel;
+pub mod providers;
+pub mod proxy_client;
+pub mod schema;
+pub mod secrets;
 
-use std::path::Path;
 pub use model_provider::*;
 pub use proxy_client::*;
+use std::path::Path;
 
-pub use migration::{migrate_str, CURRENT_SCHEMA_VERSION};
-pub use providers::{default_base_url, list_providers, resolve_provider, ProviderEntry, ProviderRef, ResolvedProvider};
+pub use migration::{CURRENT_SCHEMA_VERSION, migrate_str};
+pub use multi::*;
+pub use providers::{
+    ChannelRef, ModelProviderRef, ProviderEntry, ProviderRef, ResolvedProvider, RiskProfileRef,
+    RuntimeProfileRef, default_base_url, list_providers, resolve_provider,
+};
 pub use providers::{ReliableConfig, RouteEntry, RouterConfig};
 pub use schema::*;
-pub use secrets::{is_encrypted, SecretStore};
-pub use multi::*;
+pub use secrets::{SecretStore, is_encrypted};
 
 pub const UNSET_DISPLAY: &str = "<unset>";

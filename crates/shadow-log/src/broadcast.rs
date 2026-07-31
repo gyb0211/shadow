@@ -33,16 +33,14 @@ pub fn subscribe() -> Option<broadcast::Receiver<Value>> {
     slot().read().as_ref().map(|s: &LogSender| s.subscribe())
 }
 
-
-pub fn subscribe_or_install() -> broadcast::Receiver<Value>{
+pub fn subscribe_or_install() -> broadcast::Receiver<Value> {
     {
         let read = slot().read();
         if let Some(sender) = read.as_ref() {
             return sender.subscribe();
         }
     }
-    let (tx,rx) = broadcast::channel((65536));
+    let (tx, rx) = broadcast::channel((65536));
     set_broadcast_hook(tx);
     rx
-
 }

@@ -3,18 +3,20 @@
 //! trait 方法自带实现体, 不做 `_inner` 委托拆分。
 //! 仅 store 路径委托到 [`store::store_row_with_metadata`] (合理的 API 分层)。
 
-use crate::embedding::{create_embedding_provider, EmbeddingProvider};
+use crate::embedding::{EmbeddingProvider, create_embedding_provider};
+use crate::sqlite::SqliteMemory;
 use crate::sqlite::agent::sqlite_ensure_agent_uuid;
 use crate::sqlite::util::{
     category_to_str, decode_kind, is_prefix_wildcard_term, like_fallback_matches,
     like_search_pattern, str_to_category,
 };
-use crate::sqlite::SqliteMemory;
 use crate::vector;
 use async_trait::async_trait;
 use rusqlite::params;
 use shadow_config::schema::SearchMode;
-use shadow_core::kennel::memory::{is_recent_recall_query, ExportFilter, MemoryStats, StoreOptions};
+use shadow_core::kennel::memory::{
+    ExportFilter, MemoryStats, StoreOptions, is_recent_recall_query,
+};
 use shadow_core::{Memory, MemoryCategory, MemoryEntry};
 use std::collections::HashSet;
 use std::fmt::Write as _;

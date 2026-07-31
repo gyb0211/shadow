@@ -65,7 +65,7 @@ impl ScopedAssembled {
             // }
         }
 
-        ScopedAssembled{
+        ScopedAssembled {
             registry: ScopedToolRegistry(tool_registry),
         }
     }

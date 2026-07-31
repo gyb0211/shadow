@@ -95,7 +95,7 @@ fn create_selected_sandbox(
                 docker::DockerSandbox::probe()
             };
             result.map(|sd| Arc::new(sd) as Arc<dyn Sandbox>).ok()
-        },
+        }
         SelectedSandboxBackend::SandboxExec => {
             #[cfg(target_os = "macos")]
             {

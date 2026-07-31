@@ -17,15 +17,27 @@ impl ToolIoCapture {
     }
 }
 
-pub fn capture_tool_input(policy: &ResolvedPolicy, tool: &str, redacted: &str) -> Option<ToolIoCapture> {
+pub fn capture_tool_input(
+    policy: &ResolvedPolicy,
+    tool: &str,
+    redacted: &str,
+) -> Option<ToolIoCapture> {
     capture_with_policy(policy, tool, redacted)
 }
 
-pub fn capture_tool_output(policy: &ResolvedPolicy, tool: &str, redacted: &str) -> Option<ToolIoCapture> {
+pub fn capture_tool_output(
+    policy: &ResolvedPolicy,
+    tool: &str,
+    redacted: &str,
+) -> Option<ToolIoCapture> {
     capture_with_policy(policy, tool, redacted)
 }
 
-fn capture_with_policy(policy: &ResolvedPolicy, tool: &str, redacted: &str) -> Option<ToolIoCapture> {
+fn capture_with_policy(
+    policy: &ResolvedPolicy,
+    tool: &str,
+    redacted: &str,
+) -> Option<ToolIoCapture> {
     if !policy.tool_io.captures_io() {
         return None;
     }
@@ -40,7 +52,7 @@ fn capture_with_policy(policy: &ResolvedPolicy, tool: &str, redacted: &str) -> O
             text: redacted.to_string(),
             original_bytes,
             truncated: false,
-        })
+        }),
     }
 }
 pub fn capture_llm_request(
@@ -55,7 +67,7 @@ pub fn capture_llm_request(
             text: redacted.to_string(),
             original_bytes: redacted.len(),
             truncated: false,
-        })
+        }),
     }
 }
 fn truncated_to_cap(redacted: &str, cap: usize) -> ToolIoCapture {

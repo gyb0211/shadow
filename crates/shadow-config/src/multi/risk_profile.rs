@@ -80,9 +80,14 @@ pub struct SandboxConfig {
 
 impl RiskProfileConfig {
     pub fn sandbox_config(&self) -> SandboxConfig {
-        let backend = self.sandbox_backend.as_deref().map(str::trim).filter(|s| !s.is_empty())
-            .map(parse_sandbox_backend).unwrap_or_default();
-        SandboxConfig{
+        let backend = self
+            .sandbox_backend
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(parse_sandbox_backend)
+            .unwrap_or_default();
+        SandboxConfig {
             enabled: self.sandbox_enabled,
             backend,
             firejail_args: self.firejail_args.clone(),
@@ -90,9 +95,8 @@ impl RiskProfileConfig {
     }
 }
 
-
 fn parse_sandbox_backend(name: &str) -> SandboxBackend {
-    match name { 
+    match name {
         "auto" => SandboxBackend::Auto,
         "landlock" => SandboxBackend::Landlock,
         "firejail" => SandboxBackend::Firejail,

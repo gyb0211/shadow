@@ -10,7 +10,7 @@
 // //!
 // //! 流式重试: 只重试 pre-stream 错误 (建立连接失败). 一旦 Ok(BoxStream) 返回, mid-stream
 // //! 错误视为 terminal, 不再重试 (避免重复 chunk).
-// 
+//
 // use crate::error::ChatError;
 // use crate::rate_limit::TokenBucket;
 // use anyhow::Result;
@@ -22,7 +22,7 @@
 // use std::sync::Arc;
 // use std::time::Duration;
 // use tracing::{debug, info, warn};
-// 
+//
 // /// 可切换 key 的 provider trait -- OpenAiProvider 等具体 provider 实现
 // ///
 // /// Reliable 层通过此 trait 在调用前注入当前轮换的 key. 不强制所有 provider 实现,
@@ -30,7 +30,7 @@
 // pub trait KeyRotator: Send + Sync {
 //     fn set_key(&self, key: Option<&str>);
 // }
-// 
+//
 // /// 重试策略 -- 指数退避 + jitter
 // #[derive(Debug, Clone, Copy)]
 // pub struct RetryPolicy {
@@ -43,7 +43,7 @@
 //     /// jitter 百分比 (0-100, 加随机偏移防雪崩)
 //     pub jitter_pct: u8,
 // }
-// 
+//
 // impl Default for RetryPolicy {
 //     fn default() -> Self {
 //         Self {
@@ -54,7 +54,7 @@
 //         }
 //     }
 // }
-// 
+//
 // impl RetryPolicy {
 //     /// 计算第 `attempt` 次重试的退避时长 (含 jitter)
 //     ///
@@ -87,7 +87,7 @@
 //         Duration::from_millis(actual_ms.min(self.max_backoff_ms))
 //     }
 // }
-// 
+//
 // /// Reliable 包装层 -- 在 inner provider 之上加重试 / 退避 / key 轮换 / 限流 / fallback_models
 // pub struct ReliableModelProvider {
 //     alias: String,
@@ -104,7 +104,7 @@
 //     /// 模型级 fallback (同 provider 失败时换模型重试). 优先级在 retry 之后, 跨 provider fallback 之前.
 //     fallback_models: Vec<String>,
 // }
-// 
+//
 // impl ReliableModelProvider {
 //     /// 构造 -- 简单形态 (仅重试, 无 key 轮换/限流/fallback)
 //     #[must_use]
@@ -120,7 +120,7 @@
 //             fallback_models: Vec::new(),
 //         }
 //     }
-// 
+//
 //     /// Builder: 注入 key 轮换池 + rotator
 //     #[must_use]
 //     pub fn with_key_rotation(
@@ -132,32 +132,32 @@
 //         self.rotator = Some(rotator);
 //         self
 //     }
-// 
+//
 //     /// Builder: 注入限流器
 //     #[must_use]
 //     pub fn with_rate_limiter(mut self, bucket: Arc<TokenBucket>) -> Self {
 //         self.rate_limiter = Some(bucket);
 //         self
 //     }
-// 
+//
 //     /// Builder: 注入模型级 fallback
 //     #[must_use]
 //     pub fn with_fallback_models(mut self, models: Vec<String>) -> Self {
 //         self.fallback_models = models;
 //         self
 //     }
-// 
+//
 //     /// 借用 inner -- 测试 / Router 内省用
 //     #[must_use]
 //     pub fn inner(&self) -> &dyn ModelProvider {
 //         self.inner.as_ref()
 //     }
-// 
+//
 //     /// 提取 ChatError 分类; 非 ChatError 返回 None
 //     fn classify_error(err: &anyhow::Error) -> Option<&ChatError> {
 //         err.downcast_ref::<ChatError>()
 //     }
-// 
+//
 //     /// 在 inner.chat() 调用前应用 pre-call 副作用:
 //     /// - 限流等待
 //     /// - key 轮换注入
@@ -172,7 +172,7 @@
 //             rotator.set_key(Some(key));
 //         }
 //     }
-// 
+//
 //     /// 取当前轮换 key (round-robin). 无 keys 时返回 None.
 //     fn pick_current_key(&self) -> Option<&str> {
 //         if self.keys.is_empty() {
@@ -181,27 +181,27 @@
 //         let idx = self.key_idx.load(Ordering::SeqCst) % self.keys.len();
 //         Some(self.keys[idx].as_str())
 //     }
-// 
+//
 //     /// 推进 key 索引到下一个 -- Auth 错误时调用
 //     fn advance_key(&self) {
 //         if !self.keys.is_empty() {
 //             self.key_idx.fetch_add(1, Ordering::SeqCst);
 //         }
 //     }
-// 
+//
 //     /// 同步 chat 重试循环 -- 支持 key 轮换 + fallback_models
 //     async fn chat_with_retry(&self, request: ChatRequest<'_>) -> Result<ChatResponse> {
 //         // 模型列表: 原始 model + fallback_models
 //         let mut models_to_try: Vec<String> = vec![request.model.clone()];
 //         models_to_try.extend(self.fallback_models.iter().cloned());
-// 
+//
 //         let mut last_err: Option<anyhow::Error> = None;
 //         'outer: for (model_idx, model) in models_to_try.iter().enumerate() {
 //             if model_idx > 0 {
 //                 info!(new_model = %model, "切换到 fallback 模型");
 //             }
 //             let temperature = request.temperature;
-// 
+//
 //             let mut keys_tried_this_model = 0usize;
 //             for attempt in 0..=self.policy.max_retries {
 //                 if attempt > 0 {
@@ -220,7 +220,7 @@
 //                         let is_auth = class_opt
 //                             .map(|e| e.is_auth_error())
 //                             .unwrap_or(false);
-// 
+//
 //                         // Auth 错误: 推进 key 立即重试 (无 backoff)
 //                         if is_auth && !self.keys.is_empty() {
 //                             keys_tried_this_model += 1;
@@ -251,7 +251,7 @@
 //         Err(last_err.unwrap_or_else(|| anyhow::anyhow!("重试耗尽但无错误")))
 //     }
 // }
-// 
+//
 // impl Attributable for ReliableModelProvider {
 //     fn role(&self) -> Role {
 //         Role::Provider
@@ -260,7 +260,7 @@
 //         &self.alias
 //     }
 // }
-// 
+//
 // #[async_trait]
 // impl ModelProvider for ReliableModelProvider {
 //     /// chat_with_system -- 带重试/key 轮换/fallback 的单轮调用
@@ -292,17 +292,17 @@
 //         let resp = self.chat_with_retry(request).await?;
 //         Ok(resp.text.unwrap_or_default())
 //     }
-// 
+//
 //     async fn list_models(&self) -> Result<Vec<String>> {
 //         self.inner.list_models().await
 //     }
-// 
+//
 //     fn supports_native_tools(&self) -> bool {
 //         self.inner.supports_native_tools()
 //     }
-// 
+//
 //     fn default_temperature(&self) -> f64 {
 //         self.inner.default_temperature()
 //     }
 // }
-// 
+//

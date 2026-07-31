@@ -1,12 +1,20 @@
 use crate::agent::AgentAttribution;
+use crate::agent::execution::{ResolvedAgentExecution, ResolvedModelAccess};
+use crate::agent::system_prompt::build_system_prompt_with_mode_and_autonomy;
+use crate::agent::turn::turn::{
+    ToolLoop, is_model_switch_requested, is_tool_loop_cancelled, run_tool_call_loop,
+};
 use crate::tools::outcome::ModelSwitchCallback;
+use crate::tools::scoped::ScopedAssembly;
 use crate::{observability, tools};
 use anyhow::Context;
+use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
 use shadow_config::multi::alias_agent::MemoryBackendKind;
 use shadow_config::observability::ObservabilityBackend;
 use shadow_config::policy::SecurityPolicy;
 use shadow_config::schema::AliasedAgentConfig;
-use shadow_config::{Config, ModelProviderConfig, platform, RiskProfileConfig};
+use shadow_config::{Config, ModelProviderConfig, RiskProfileConfig, platform};
 use shadow_core::runtime::RuntimePlatformAdapter;
 use shadow_core::{Channel, ChatMessage, Memory, ModelProvider, Observer, SendMessage, Tool};
 use shadow_log::{Action, Event, attribution_span};
@@ -16,13 +24,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
-use rustyline::DefaultEditor;
-use rustyline::error::ReadlineError;
 use tracing::{Instrument, info_span};
-use crate::agent::execution::{ResolvedAgentExecution, ResolvedModelAccess};
-use crate::agent::system_prompt::build_system_prompt_with_mode_and_autonomy;
-use crate::agent::turn::turn::{run_tool_call_loop, is_model_switch_requested, ToolLoop, is_tool_loop_cancelled};
-use crate::tools::scoped::ScopedAssembly;
 //Global Model Switch request state
 
 static MODEL_SWITCH_REQUEST: LazyLock<Arc<Mutex<Option<(String, String)>>>> =
@@ -48,17 +50,19 @@ fn build_system_prompt_for_turn(
     show_tool_calls: bool,
     thinking_prefix: Option<&str>,
 ) -> anyhow::Result<String> {
-
     let native_tools = model_provider.supports_native_tools();
     // todo
 
     let sys_prompt = build_system_prompt_with_mode_and_autonomy(
-        agent_workspace, model_name, tool_descs,Some(risk_profile), show_tool_calls
+        agent_workspace,
+        model_name,
+        tool_descs,
+        Some(risk_profile),
+        show_tool_calls,
     );
 
     Ok(sys_prompt)
 }
-
 
 pub async fn run(
     config: Config,
@@ -73,13 +77,15 @@ pub async fn run(
     let agent: AliasedAgentConfig = resolve_agent_for_turn(&config, agent_alias)?;
 
     let risk_profile = config
-        .risk_profile_for_agent(agent_alias).unwrap_or(&RiskProfileConfig::default()).clone();
-        // .with_context(|| {
-        //     format!(
-        //         "agents.{agent_alias}.risk_profile does not name a configured risk_profiles entry."
-        //     )
-        // })?
-        // .clone();
+        .risk_profile_for_agent(agent_alias)
+        .unwrap_or(&RiskProfileConfig::default())
+        .clone();
+    // .with_context(|| {
+    //     format!(
+    //         "agents.{agent_alias}.risk_profile does not name a configured risk_profiles entry."
+    //     )
+    // })?
+    // .clone();
 
     let memory_composite = {
         match agent.memory.backend {
@@ -177,7 +183,7 @@ pub async fn run(
                     agent_alias,
                     agent_model_provider.and_then(|e| e.api_key.as_deref()),
                 )
-                    .await?
+                .await?
             }
         };
 
@@ -208,17 +214,17 @@ pub async fn run(
 
         // todo skill
 
-        let tools::scoped::ScopedAssembled {
-            registry
-        } = tools::scoped::ScopedAssembled::assemble(ScopedAssembly{
-            config: &config,
-            agent_alias,
-            security: &security,
-            built: all_tools_result,
-            runtime,
-            caller_allowed: None,
-            exclude_memory: false,
-        }).await;
+        let tools::scoped::ScopedAssembled { registry } =
+            tools::scoped::ScopedAssembled::assemble(ScopedAssembly {
+                config: &config,
+                agent_alias,
+                security: &security,
+                built: all_tools_result,
+                runtime,
+                caller_allowed: None,
+                exclude_memory: false,
+            })
+            .await;
 
         let tool_registry = registry.into_inner();
 
@@ -304,7 +310,6 @@ pub async fn run(
         let mut final_output = String::new();
         let base_system_prompt = system_prompt.clone();
 
-
         if let Some(msg) = message {
             // todo 从message中解析 思考等级
 
@@ -324,7 +329,8 @@ pub async fn run(
                 None,
             )?;
             // todo 过滤掉运行时的mcp能力
-            let runtime_capability_names = tool_registry.iter().map(|t| t.name()).collect::<Vec<_>>();
+            let runtime_capability_names =
+                tool_registry.iter().map(|t| t.name()).collect::<Vec<_>>();
 
             // todo skill 安装建议
 
@@ -334,70 +340,75 @@ pub async fn run(
 
             // todo rag limit
 
-
-            let mut history = vec![
-                ChatMessage::system(&system_prompt),
-                ChatMessage::user(&msg)
-            ];
+            let mut history = vec![ChatMessage::system(&system_prompt), ChatMessage::user(&msg)];
 
             // todo mcp tool excluded
             let mut response = String::new();
             loop {
-                if let Some(sys_msg) = history.first_mut() && sys_msg.role == "system" {
+                if let Some(sys_msg) = history.first_mut()
+                    && sys_msg.role == "system"
+                {
                     // todo 注入每轮的提示词
                 }
 
                 // todo 思考覆盖 循环成本追踪
 
-
-                match run_tool_call_loop(
-                    ToolLoop {
-
-                        exec: ResolvedAgentExecution::resolve(ResolvedModelAccess{
-                            model_provider: model_provider.as_ref(),
-                            provider_name: &provider_name,
-                            model: &model_name,
-                            temperature: Some(0.7 as f64),
-                        }),
-                        history: &mut history,
-                        channel_name,
-                        channel_reply_target: None,
-                        // cancellation_token: None,
-                        // on_delta: None,
-                        agent_alias: Some(agent_alias),
-                        turn_id: &turn_id,
-                    },
-                ).await {
+                match run_tool_call_loop(ToolLoop {
+                    exec: ResolvedAgentExecution::resolve(ResolvedModelAccess {
+                        model_provider: model_provider.as_ref(),
+                        provider_name: &provider_name,
+                        model: &model_name,
+                        temperature: Some(0.7 as f64),
+                    }),
+                    history: &mut history,
+                    channel_name,
+                    channel_reply_target: None,
+                    // cancellation_token: None,
+                    // on_delta: None,
+                    agent_alias: Some(agent_alias),
+                    turn_id: &turn_id,
+                })
+                .await
+                {
                     Ok(resp) => {
                         response = resp;
                         break;
                     }
                     Err(e) => {
-                        if let Some((new_model_provider, new_model)) = is_model_switch_requested(&e) {
+                        if let Some((new_model_provider, new_model)) = is_model_switch_requested(&e)
+                        {
                             shadow_log::record!(
-                              INFO,
-                              shadow_log::Event::new(module_path!(), shadow_log::Action::Migrate)
-                              .with_category(shadow_log::EventCategory::Provider),
-                              &format!(
-                                  "Model switch requested, switching from {}.{} to  {}.{}",
-                                  provider_name, model_name, new_model_provider,new_model
-                              )
-                          );
-                            let (switch_api_key, switch_uri) = api_key_and_uri_for_provider(&config, &new_model_provider, agent_model_provider);
-                            model_provider = shadow_providers::create_routed_model_provider_with_options(
+                                INFO,
+                                shadow_log::Event::new(module_path!(), shadow_log::Action::Migrate)
+                                    .with_category(shadow_log::EventCategory::Provider),
+                                &format!(
+                                    "Model switch requested, switching from {}.{} to  {}.{}",
+                                    provider_name, model_name, new_model_provider, new_model
+                                )
+                            );
+                            let (switch_api_key, switch_uri) = api_key_and_uri_for_provider(
                                 &config,
-                                &provider_name,
-                                api_key.as_deref(),
-                                api_uri.as_deref(),
-                                &config.reliability,
-                                &config.model_routes,
-                                &model_name,
-                                &shadow_providers::options_for_provider_ref(
-                                    &config, &new_model_provider, &shadow_providers::provider_runtime_options_for_agent(
-                                        &config, agent_alias,
+                                &new_model_provider,
+                                agent_model_provider,
+                            );
+                            model_provider =
+                                shadow_providers::create_routed_model_provider_with_options(
+                                    &config,
+                                    &provider_name,
+                                    api_key.as_deref(),
+                                    api_uri.as_deref(),
+                                    &config.reliability,
+                                    &config.model_routes,
+                                    &model_name,
+                                    &shadow_providers::options_for_provider_ref(
+                                        &config,
+                                        &new_model_provider,
+                                        &shadow_providers::provider_runtime_options_for_agent(
+                                            &config,
+                                            agent_alias,
+                                        ),
                                     ),
-                                ),
-                            )?;
+                                )?;
 
                             provider_name = new_model_provider;
                             let model = new_model;
@@ -407,7 +418,6 @@ pub async fn run(
                             // todo obs
                             continue;
                         }
-
 
                         return Err(e);
                     }
@@ -421,14 +431,13 @@ pub async fn run(
             // todo obs
 
             // todo 尝试改进skill
-
         } else {
             let mut rl = DefaultEditor::new().expect("failed to init readline");
 
             println!("Shadow Interactive Mode");
             println!("Type /help for commands.\n");
             let cli = CLI_CHANNEL_FN.get().expect(
-                "CLI channel factory not registered - call register_cli_channel_fn at startup"
+                "CLI channel factory not registered - call register_cli_channel_fn at startup",
             )();
 
             // todo 跨轮次历史记录
@@ -440,38 +449,34 @@ pub async fn run(
             loop {
                 // print!("> ");
                 // let _ = std::io::stdout().flush();
-                let input = match rl.readline("> "){
-
+                let input = match rl.readline("> ") {
                     Ok(line) => line,
                     Err(ReadlineError::Interrupted) => continue, // ctrl + c
-                    Err(ReadlineError::Eof) => break, // ctrl + d
+                    Err(ReadlineError::Eof) => break,            // ctrl + d
                     Err(e) => {
                         eprintln!("\nError reading input: {e}\n");
                         break;
-                    }, // ctrl + d
+                    } // ctrl + d
 
-
-                    // let stdin = std::io::stdin().lock();
-                    // match read_capped_line(stdin, MAX_INTERACTIVE_INPUT_BYTES) {
-                    //     Ok(CappedLine::Eof) => break,
-                    //     Ok(CappedLine::Line(s)) => s,
-                    //     Ok(CappedLine::Truncated) => {
-                    //         eprintln!(
-                    //             "\nWarning: input line exceeds {} bytes and was discarded.",
-                    //             MAX_INTERACTIVE_INPUT_BYTES
-                    //         );
-                    //         continue;
-                    //     }
-                    //     Err(e) => {
-                    //         eprintln!("\nError reading input: {e}\n");
-                    //         break;
-                    //     }
-                    // }
-
+                                                                  // let stdin = std::io::stdin().lock();
+                                                                  // match read_capped_line(stdin, MAX_INTERACTIVE_INPUT_BYTES) {
+                                                                  //     Ok(CappedLine::Eof) => break,
+                                                                  //     Ok(CappedLine::Line(s)) => s,
+                                                                  //     Ok(CappedLine::Truncated) => {
+                                                                  //         eprintln!(
+                                                                  //             "\nWarning: input line exceeds {} bytes and was discarded.",
+                                                                  //             MAX_INTERACTIVE_INPUT_BYTES
+                                                                  //         );
+                                                                  //         continue;
+                                                                  //     }
+                                                                  //     Err(e) => {
+                                                                  //         eprintln!("\nError reading input: {e}\n");
+                                                                  //         break;
+                                                                  //     }
+                                                                  // }
                 };
 
                 let _ = rl.add_history_entry(&input);
-
 
                 let user_input = input.trim().to_string();
                 if user_input.is_empty() {
@@ -480,7 +485,7 @@ pub async fn run(
 
                 match user_input.as_str() {
                     "/quit" | "/exit" => break,
-                    _=>{}
+                    _ => {}
                 }
 
                 let context = user_input.clone();
@@ -488,66 +493,76 @@ pub async fn run(
 
                 println!("{:?}", history);
 
-
-
                 let response = loop {
-                    if let Some(sys_msg) = history.first_mut() && sys_msg.role == "system" {
+                    if let Some(sys_msg) = history.first_mut()
+                        && sys_msg.role == "system"
+                    {
                         // todo 注入每轮的提示词
                     }
 
                     // todo 思考覆盖 循环成本追踪
 
-
-                    match run_tool_call_loop(
-                        ToolLoop {
-                            exec: ResolvedAgentExecution::resolve(
-                                ResolvedModelAccess {
-                                    model_provider: model_provider.as_ref(),
-                                    provider_name: &provider_name,
-                                    model: &model_name,
-                                    temperature: Some(0.7),
-                                },
-                            ),
-                            history: &mut history,
-                            channel_name,
-                            channel_reply_target: None,
-                            // cancellation_token: None,
-                            // on_delta: None,
-                            agent_alias: Some(agent_alias),
-                            turn_id: &turn_id,
-                        },
-                    ).await {
+                    match run_tool_call_loop(ToolLoop {
+                        exec: ResolvedAgentExecution::resolve(ResolvedModelAccess {
+                            model_provider: model_provider.as_ref(),
+                            provider_name: &provider_name,
+                            model: &model_name,
+                            temperature: Some(0.7),
+                        }),
+                        history: &mut history,
+                        channel_name,
+                        channel_reply_target: None,
+                        // cancellation_token: None,
+                        // on_delta: None,
+                        agent_alias: Some(agent_alias),
+                        turn_id: &turn_id,
+                    })
+                    .await
+                    {
                         Ok(resp) => break resp,
                         Err(e) => {
                             if is_tool_loop_cancelled(&e) {
                                 eprintln!("\n\x1b[2m(cancelled)\x1b[0m");
                                 break String::new();
                             }
-                            if let Some((new_model_provider, new_model)) = is_model_switch_requested(&e) {
+                            if let Some((new_model_provider, new_model)) =
+                                is_model_switch_requested(&e)
+                            {
                                 shadow_log::record!(
-                              INFO,
-                              shadow_log::Event::new(module_path!(), shadow_log::Action::Migrate)
-                              .with_category(shadow_log::EventCategory::Provider),
-                              &format!(
-                                  "Model switch requested, switching from {}.{} to  {}.{}",
-                                  provider_name, model_name, new_model_provider,new_model
-                              )
-                          );
-                                let (switch_api_key, switch_uri) = api_key_and_uri_for_provider(&config, &new_model_provider, agent_model_provider);
-                                model_provider = shadow_providers::create_routed_model_provider_with_options(
+                                    INFO,
+                                    shadow_log::Event::new(
+                                        module_path!(),
+                                        shadow_log::Action::Migrate
+                                    )
+                                    .with_category(shadow_log::EventCategory::Provider),
+                                    &format!(
+                                        "Model switch requested, switching from {}.{} to  {}.{}",
+                                        provider_name, model_name, new_model_provider, new_model
+                                    )
+                                );
+                                let (switch_api_key, switch_uri) = api_key_and_uri_for_provider(
                                     &config,
-                                    &provider_name,
-                                    api_key.as_deref(),
-                                    api_uri.as_deref(),
-                                    &config.reliability,
-                                    &config.model_routes,
-                                    &model_name,
-                                    &shadow_providers::options_for_provider_ref(
-                                        &config, &new_model_provider, &shadow_providers::provider_runtime_options_for_agent(
-                                            &config, agent_alias,
+                                    &new_model_provider,
+                                    agent_model_provider,
+                                );
+                                model_provider =
+                                    shadow_providers::create_routed_model_provider_with_options(
+                                        &config,
+                                        &provider_name,
+                                        api_key.as_deref(),
+                                        api_uri.as_deref(),
+                                        &config.reliability,
+                                        &config.model_routes,
+                                        &model_name,
+                                        &shadow_providers::options_for_provider_ref(
+                                            &config,
+                                            &new_model_provider,
+                                            &shadow_providers::provider_runtime_options_for_agent(
+                                                &config,
+                                                agent_alias,
+                                            ),
                                         ),
-                                    ),
-                                )?;
+                                    )?;
 
                                 provider_name = new_model_provider;
                                 let model = new_model;
@@ -572,11 +587,12 @@ pub async fn run(
 
                 // todo stream load
 
-
                 if let Err(e) = Channel::send(
                     &*cli,
-                    &SendMessage::new(format!("\n{final_output}\n"), "user")
-                ).await {
+                    &SendMessage::new(format!("\n{final_output}\n"), "user"),
+                )
+                .await
+                {
                     eprintln!("\nError sending Cli response: {e}\n")
                 }
 
@@ -586,13 +602,13 @@ pub async fn run(
 
                 // todo 裁剪历史消息
 
-                if let Some(sys_msg) = history.first_mut() && sys_msg.role == "system"{
+                if let Some(sys_msg) = history.first_mut()
+                    && sys_msg.role == "system"
+                {
                     sys_msg.content.clone_from(&base_system_prompt);
                 }
 
                 // todo save session file
-
-
             }
         }
 
@@ -656,9 +672,8 @@ fn discard_until_newline<R: std::io::BufRead>(reader: &mut R) -> std::io::Result
     }
 }
 
-pub static CLI_CHANNEL_FN: std::sync::OnceLock<
-    Box<dyn Fn() -> Box<dyn Channel> + Send + Sync>,
-> = std::sync::OnceLock::new();
+pub static CLI_CHANNEL_FN: std::sync::OnceLock<Box<dyn Fn() -> Box<dyn Channel> + Send + Sync>> =
+    std::sync::OnceLock::new();
 fn api_key_and_uri_for_provider(
     config: &Config,
     provider_name: &str,

@@ -9,14 +9,14 @@ use crate::sqlite::util::{category_to_str, content_hash};
 use crate::vector;
 use chrono::Local;
 use parking_lot::Mutex;
-use rusqlite::{params, Connection};
-use shadow_core::kennel::memory::StoreOptions;
+use rusqlite::{Connection, params};
 use shadow_core::MemoryCategory;
+use shadow_core::kennel::memory::StoreOptions;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::sqlite::SqliteMemory;
 use crate::embedding::EmbeddingProvider;
+use crate::sqlite::SqliteMemory;
 
 impl SqliteMemory {
     pub(super) async fn store_row_with_metadata(
@@ -89,8 +89,20 @@ impl SqliteMemory {
                     pinned = excluded.pinned,
                     tenant_id = excluded.tenant_id",
                 params![
-                    id, key, content, cat, embedding_bytes, now, now,
-                    sid, ns, imp, aid, kind, pinned, tenant_id
+                    id,
+                    key,
+                    content,
+                    cat,
+                    embedding_bytes,
+                    now,
+                    now,
+                    sid,
+                    ns,
+                    imp,
+                    aid,
+                    kind,
+                    pinned,
+                    tenant_id
                 ],
             )?;
             Ok(())
@@ -98,10 +110,7 @@ impl SqliteMemory {
         .await?
     }
 
-    pub async fn get_or_compute_embedding(
-        &self,
-        query: &str,
-    ) -> anyhow::Result<Option<Vec<f32>>> {
+    pub async fn get_or_compute_embedding(&self, query: &str) -> anyhow::Result<Option<Vec<f32>>> {
         let embedder = self.embedder.read().clone();
 
         if embedder.dimensions() == 0 {

@@ -24,30 +24,25 @@
 //! - `"0 0 9 * * 1-5"` -- 工作日每天上午 9 点执行
 
 mod schedule;
-pub mod types;
 pub mod scheduler;
+pub mod types;
 
+use crate::cron::schedule::{next_run_for_schedule, validate_delivery_config, validate_schedule};
+use crate::cron::types::DeliveryConfig;
 use crate::tools::cron::add::{JobType, Schedule};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use rusqlite::{Connection, params};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Error, Value};
+use shadow_config::Config;
 use shadow_log::Action;
 use std::path::Path;
 use uuid::Uuid;
-use shadow_config::Config;
-use crate::cron::schedule::{next_run_for_schedule, validate_delivery_config, validate_schedule};
-use crate::cron::types::DeliveryConfig;
 
-pub(crate) const CRON_DELIVERY_SCHEMA_CHANNELS: &[&str] = &[
-    "feishu"
-];
-
-
-
+pub(crate) const CRON_DELIVERY_SCHEMA_CHANNELS: &[&str] = &["feishu"];
 
 pub fn add_shell_job_with_approval(
     config: &Config,
@@ -83,13 +78,14 @@ pub fn add_agent_job(
     let schedule_json = serde_json::to_string(&schedule)?;
     let delivery = delivery.unwrap_or_default();
     let agent_alias = agent_alias.trim();
-    if agent_alias.is_empty() {anyhow::bail!("agent_alias is required; cron jobs must name an owning agent");}
+    if agent_alias.is_empty() {
+        anyhow::bail!("agent_alias is required; cron jobs must name an owning agent");
+    }
 
     // with_initialized_connection(config, |conn|{
     //     conn.execute()
     // });
     bail!("delivery.to is required for announce mode");
-
 }
 
 /// 如果收到是 Value 可以直接转成 T 就直接转

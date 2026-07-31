@@ -1,11 +1,11 @@
-pub mod native;
 pub mod docker;
+pub mod native;
 
-use shadow_core::platform;
-use shadow_core::runtime::RuntimePlatformAdapter;
-use crate::{RuntimeConfig, RuntimeKind};
 use crate::platform::docker::DockerRuntime;
 use crate::platform::native::NativeRuntime;
+use crate::{RuntimeConfig, RuntimeKind};
+use shadow_core::platform;
+use shadow_core::runtime::RuntimePlatformAdapter;
 
 pub fn create_runtime(config: &RuntimeConfig) -> anyhow::Result<Box<dyn RuntimePlatformAdapter>> {
     match config.kind {

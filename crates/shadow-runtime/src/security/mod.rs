@@ -10,9 +10,8 @@
 //! 3. `filter_env()` 过滤环境变量 -- 只保留白名单中的变量
 
 pub mod detect;
-mod seatbelt;
 mod docker;
-
+mod seatbelt;
 
 pub use detect::create_sandbox;
 
@@ -103,7 +102,6 @@ pub trait Sandbox: Send + Sync {
     fn name(&self) -> &str;
 
     fn description(&self) -> &str;
-
 }
 
 /// 无沙箱 -- 直通执行, 不做任何隔离
@@ -129,5 +127,3 @@ impl Sandbox for NoopSandbox {
         "Cannot use sandbox"
     }
 }
-
-

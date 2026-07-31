@@ -81,4 +81,3 @@ fn add_cache_marker(msg: &mut Value, marker: &Value) {
         }
     }
 }
-

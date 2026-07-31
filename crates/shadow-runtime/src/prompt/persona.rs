@@ -58,12 +58,17 @@ pub fn load_personas(config_personas: &HashMap<String, String>) -> Vec<Persona> 
     // 2. 配置覆盖/新增
     for (name, prompt) in config_personas {
         let existing = result.get(name);
-        let description = existing.map(|p| p.description.clone()).unwrap_or_else(|| "自定义".to_string());
-        result.insert(name.clone(), Persona {
-            name: name.clone(),
-            description,
-            system_prompt: prompt.clone(),
-        });
+        let description = existing
+            .map(|p| p.description.clone())
+            .unwrap_or_else(|| "自定义".to_string());
+        result.insert(
+            name.clone(),
+            Persona {
+                name: name.clone(),
+                description,
+                system_prompt: prompt.clone(),
+            },
+        );
     }
 
     // 3. 排序: 内置在前 (按 builtin 顺序), 自定义在后 (按字母序)
@@ -90,8 +95,14 @@ pub fn get_persona(name: &str, config_personas: &HashMap<String, String>) -> Opt
     // 配置优先
     if let Some(prompt) = config_personas.get(name) {
         let builtin = builtin_personas().into_iter().find(|p| p.name == name);
-        let description = builtin.map(|p| p.description).unwrap_or_else(|| "自定义".to_string());
-        return Some(Persona { name: name.to_string(), description, system_prompt: prompt.clone() });
+        let description = builtin
+            .map(|p| p.description)
+            .unwrap_or_else(|| "自定义".to_string());
+        return Some(Persona {
+            name: name.to_string(),
+            description,
+            system_prompt: prompt.clone(),
+        });
     }
     // 内置 fallback
     builtin_personas().into_iter().find(|p| p.name == name)
@@ -99,7 +110,10 @@ pub fn get_persona(name: &str, config_personas: &HashMap<String, String>) -> Opt
 
 /// 列出所有 persona 名称
 pub fn list_personas(config_personas: &HashMap<String, String>) -> Vec<String> {
-    load_personas(config_personas).into_iter().map(|p| p.name).collect()
+    load_personas(config_personas)
+        .into_iter()
+        .map(|p| p.name)
+        .collect()
 }
 
 /// 默认 persona
@@ -135,10 +149,12 @@ impl PromptSection for PersonaSection {
         "persona"
     }
     fn render(&self, _ctx: &PromptContext) -> String {
-        format!("[人格模式: {}]\n{}", self.persona.name, self.persona.system_prompt)
+        format!(
+            "[人格模式: {}]\n{}",
+            self.persona.name, self.persona.system_prompt
+        )
     }
     fn priority(&self) -> i32 {
         99
     }
 }
-

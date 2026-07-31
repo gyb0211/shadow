@@ -8,13 +8,13 @@
 //! 注意: `cron` crate 的类型也叫 `Schedule`, 本文中以 `cron::Schedule` 全限定书写,
 //! 避免与 [`crate::tools::cron::add::Schedule`] 混淆.
 
-use std::str::FromStr;
+use crate::cron::types::DeliveryConfig;
 use crate::tools::cron::add::Schedule;
-use cron::Schedule as CronExprSchedule;
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use chrono_tz::Tz as ChronoTz;
-use crate::cron::types::DeliveryConfig;
+use cron::Schedule as CronExprSchedule;
+use std::str::FromStr;
 
 /// 校验调度配置是否合法.
 ///
@@ -77,9 +77,7 @@ fn normalize_expression(expr: &str) -> anyhow::Result<String> {
         }
         // 6 位 (含秒) 或 7 位 (含秒+年): 原样保留
         6 | 7 => fields,
-        n => anyhow::bail!(
-            "无效的 cron 表达式: 字段数 {n} 不合法 (期望 5/6/7): {expr}"
-        ),
+        n => anyhow::bail!("无效的 cron 表达式: 字段数 {n} 不合法 (期望 5/6/7): {expr}"),
     };
     Ok(normalized.join(" "))
 }
@@ -112,9 +110,7 @@ pub fn next_run_for_schedule(
                     .with_context(|| format!("无效的时区: {tz_str}"))?;
                 // 将基准时间转到目标时区, cron 字段按当地墙上时间解释
                 let now_tz = now.with_timezone(&tz);
-                let next = cron
-                    .after(&now_tz)
-                    .next().ok_or_else(|| {
+                let next = cron.after(&now_tz).next().ok_or_else(|| {
                     anyhow::Error::msg(format!("expr: {expr} 没有未来可触发的时间"))
                 })?;
                 // 统一转回 UTC 便于存储与比较
@@ -142,8 +138,6 @@ pub fn next_run_for_schedule(
         }
     }
 }
-
-
 
 pub fn validate_delivery_config(delivery: Option<&DeliveryConfig>) -> anyhow::Result<()> {
     let Some(delivery) = delivery else {

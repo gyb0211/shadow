@@ -1,21 +1,19 @@
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
-use std::sync::atomic::AtomicBool;
+use crate::lark::LarkChannel;
 use shadow_config::Config;
 use shadow_core::{Channel, Observer};
-use crate::lark::LarkChannel;
+use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, RwLock};
 
 type CronChannelRegistry = Arc<HashMap<String, Arc<dyn Channel>>>;
 
-static CRON_CHANNEL_REGISTRY: RwLock<Option<CronChannelRegistry>> =
-    RwLock::new(None);
+static CRON_CHANNEL_REGISTRY: RwLock<Option<CronChannelRegistry>> = RwLock::new(None);
 
 struct ChannelNotifyObserver {
     inner: Arc<dyn Observer>,
     tx: tokio::sync::mpsc::Sender<String>,
     tool_used: AtomicBool,
 }
-
 
 pub async fn deliver_announcement(
     config: &Config,
@@ -29,16 +27,18 @@ pub async fn deliver_announcement(
 
     // todo 交付前扫描密钥泄漏
 
-
     let safe_output = output.to_string();
 
     let make_msg = |s: &str| SendMessage::new(s, target).in_thread(thread_id.clone());
 
     let registry_snapshot = CRON_CHANNEL_REGISTRY
-        .read().unwrap_or_else(|c| c.into_inner()).clone();
+        .read()
+        .unwrap_or_else(|c| c.into_inner())
+        .clone();
 
     if let Some(registry) = registry_snapshot
-        && let Some(ch) = registry.get(channel.to_ascii_lowercase().as_str()) {
+        && let Some(ch) = registry.get(channel.to_ascii_lowercase().as_str())
+    {
         return ch.send(&make_msg(&safe_output)).await;
     }
 
@@ -53,10 +53,8 @@ pub async fn deliver_announcement(
     let not_configured = || {
         shadow_log::record!(
             ERROR,
-            shadow_log::Event::new(
-                module_path!(),
-                shadow_log::Action::Fail
-            ).with_outcome(shadow_log::EventOutcome::Failure),
+            shadow_log::Event::new(module_path!(), shadow_log::Action::Fail)
+                .with_outcome(shadow_log::EventOutcome::Failure),
             &format!("[channels.{channel_type}.{alias}] not configured")
         )
     };
@@ -82,13 +80,11 @@ pub async fn deliver_announcement(
                 )
             })?;
 
-
             if channel_type == "lark" && lk.use_feishu {
                 shadow_log::record!(
                     WARN,
-                    shadow_log::Event::new(module_path!(),
-                    shadow_log::Action::Note)
-                    .with_outcome(shadow_log::EventOutcome::Unknown),
+                    shadow_log::Event::new(module_path!(), shadow_log::Action::Note)
+                        .with_outcome(shadow_log::EventOutcome::Unknown),
                     &format!(
                         "cron channel=\"lark.{alias}\" with [channels.lark.<alias>] use_feishu=true \
                         fallback to one-shot channel construction; perfer channel=\"feishu.{alias}\" \
@@ -98,15 +94,18 @@ pub async fn deliver_announcement(
             }
 
             let peers = config.channel_external_peers("lark", alias);
-            let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> = Arc::new(move || peers.clone());
+            let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> =
+                Arc::new(move || peers.clone());
 
             let ch = LarkChannel::from_config(lk, alias, peer_resolver);
 
             shadow_core::channel::Channel::send(&ch, &make_msg(&safe_output)).await?;
         }
 
-        other => anyhow::bail!("unsupported delivery channel: {other}, please check build feature or valid channel_type")
+        other => anyhow::bail!(
+            "unsupported delivery channel: {other}, please check build feature or valid channel_type"
+        ),
     }
-    
+
     Ok(())
 }

@@ -2,10 +2,8 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use shadow_core::{
-    Attributable, Memory, MemoryCategory, MemoryEntry, Role,
-};
 use shadow_core::kennel::attribution::MemoryKind;
+use shadow_core::{Attributable, Memory, MemoryCategory, MemoryEntry, Role};
 
 #[derive(Debug, Default, Clone)]
 pub struct NoneMemory {

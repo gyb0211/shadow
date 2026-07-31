@@ -76,4 +76,3 @@ pub fn scan_context_content(content: &str, filename: &str) -> ScanResult {
         }
     }
 }
-

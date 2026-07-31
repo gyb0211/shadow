@@ -1,4 +1,3 @@
-
 #[macro_export]
 macro_rules! record {
     // 基本形式: record!(level, action, msg)
@@ -20,7 +19,6 @@ macro_rules! record {
         );
     }};
 }
-
 
 #[macro_export]
 macro_rules! scope {

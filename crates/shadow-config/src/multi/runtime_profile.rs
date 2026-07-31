@@ -2,11 +2,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct RuntimeProfileConfig{
+pub struct RuntimeProfileConfig {
     /// 是否启动自主代理模式（多轮对话+工具调用循环）
     pub agentic: bool,
     /// 最大tool-call循环次数
-    pub max_tool_iterations:usize,
+    pub max_tool_iterations: usize,
     /// 每小时允许的最大操作数
     pub max_actions_per_hour: u32,
     /// 每日最高使用成本
@@ -14,7 +14,7 @@ pub struct RuntimeProfileConfig{
     /// shell子进程命令超时时间 0 继承全局配置
     pub shell_timeout_secs: u64,
     /// 最大递归调用深度
-    pub max_delegation_depth:u32,
+    pub max_delegation_depth: u32,
     /// 委托调用超时时间
     pub delegation_timeout_secs: Option<u64>,
     /// 代理委托运行超时时间
@@ -41,7 +41,6 @@ pub struct RuntimeProfileConfig{
     pub memory_recall_limit: Option<usize>,
     /// 是否启动严格工具解析
     pub strict_tool_parsing: bool,
-
     // todo!()
     // pub thinking: bool,
     // pub history_pruning: bool,
@@ -52,12 +51,12 @@ pub struct RuntimeProfileConfig{
     // pub tool_filter_groups: bool,
 }
 
-impl Default for RuntimeProfileConfig{
+impl Default for RuntimeProfileConfig {
     fn default() -> Self {
-        Self{
+        Self {
             agentic: false,
             max_tool_iterations: 0,
-            max_actions_per_hour:30,
+            max_actions_per_hour: 30,
             max_cost_per_day_cents: 500,
             shell_timeout_secs: 60,
             max_delegation_depth: 0,

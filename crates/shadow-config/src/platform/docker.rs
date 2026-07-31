@@ -1,7 +1,7 @@
 use crate::schema::DockerRuntimeConfig;
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
 use shadow_core::runtime::RuntimePlatformAdapter;
+use std::path::{Path, PathBuf};
 
 /// Docker runtime with lightweight container isolation.
 #[derive(Debug, Clone)]
@@ -136,4 +136,3 @@ impl RuntimePlatformAdapter for DockerRuntime {
         Ok(process)
     }
 }
-

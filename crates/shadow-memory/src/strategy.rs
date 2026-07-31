@@ -2,9 +2,9 @@
 //!
 //! Trait 定义在 `shadow_core::MemoryStrategy`.
 
-use shadow_core::{Memory, MemoryCategory, MemoryEntry, MemoryStrategy};
 use anyhow::Result;
 use async_trait::async_trait;
+use shadow_core::{Memory, MemoryCategory, MemoryEntry, MemoryStrategy};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -106,7 +106,11 @@ impl MemoryStrategy for DefaultMemoryStrategy {
         if !is_important_turn(user_message, assistant_response) {
             return Ok(());
         }
-        let key = format!("turn_{}_{}", chrono::Utc::now().timestamp(), session_id.unwrap_or("default"));
+        let key = format!(
+            "turn_{}_{}",
+            chrono::Utc::now().timestamp(),
+            session_id.unwrap_or("default")
+        );
         self.memory
             .store(&key, user_message, MemoryCategory::Conversation, session_id)
             .await

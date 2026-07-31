@@ -5,9 +5,9 @@
 //!
 //! 新增 Tool 时在此文件追加一行即可, 无需在工具源码里写 impl Attributable.
 
-use shadow_core::{tool_attribution, ToolKind};
 use crate::tools::cron::add::CronAddTool;
 use crate::tools::model_switch::ModelSwitchTool;
+use shadow_core::{ToolKind, tool_attribution};
 
 // tool_attribution!(CronAddTool, ToolKind::Plugin);
 tool_attribution!(ModelSwitchTool, ToolKind::Plugin);

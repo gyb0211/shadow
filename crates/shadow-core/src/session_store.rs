@@ -138,10 +138,7 @@ impl JsonlSessionStore {
                 (Some((prev_time, _)), Some(m)) if &m <= prev_time => {}
                 (Some(_), None) => {}
                 _ => {
-                    latest = Some((
-                        modified.unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-                        id,
-                    ));
+                    latest = Some((modified.unwrap_or(std::time::SystemTime::UNIX_EPOCH), id));
                 }
             }
         }
@@ -370,4 +367,3 @@ impl SessionStore for JsonlSessionStore {
         Ok(out.into_iter().map(|(_, m)| m).collect())
     }
 }
-

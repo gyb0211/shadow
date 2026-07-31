@@ -223,7 +223,6 @@ fn add_memories_column_if_missing(
     match execute_batch_retry(conn, alter_sql) {
         Ok(()) => Ok(()),
         Err(e) if is_duplicate_column_error(&e) => Ok(()),
-        Err(e) => Err(e)
-            .with_context(|| format!("SQLite migration failed adding memories.{name}")),
+        Err(e) => Err(e).with_context(|| format!("SQLite migration failed adding memories.{name}")),
     }
 }

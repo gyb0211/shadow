@@ -1,15 +1,14 @@
-use serde::{Deserialize, Serialize};
 use crate::alias_agent::AgentAlias;
 use crate::define_provider_ref;
 use crate::providers::ChannelRef;
-
+use serde::{Deserialize, Serialize};
 
 define_provider_ref!(PeerGroupName, "peer_groups");
 define_provider_ref!(PeerUsername, "channels.peers");
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all="snake_case")]
-pub enum OutputModality{
+#[serde(rename_all = "snake_case")]
+pub enum OutputModality {
     #[default]
     Mirror,
     Voice,

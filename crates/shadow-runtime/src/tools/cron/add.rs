@@ -1,16 +1,18 @@
-use std::str::FromStr;
+use crate::cron::types::DeliveryConfig;
+use crate::cron::{CRON_DELIVERY_SCHEMA_CHANNELS, add_agent_job, add_shell_job_with_approval};
+use crate::tools::cron::common::{
+    AT_DESCRIPTION, CRON_TZ_DESCRIPTION, cron_add_output, deserialize_schedule_arg,
+};
+use crate::tools::cron::types::SessionTarget;
+use async_trait::async_trait;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Error, Value};
+use serde_json::{Error, Value, json};
 use shadow_config::Config;
-use std::sync::Arc;
-use async_trait::async_trait;
 use shadow_config::policy::SecurityPolicy;
 use shadow_core::{Tool, ToolResult};
-use crate::cron::{add_agent_job, add_shell_job_with_approval, CRON_DELIVERY_SCHEMA_CHANNELS};
-use crate::cron::types::DeliveryConfig;
-use crate::tools::cron::common::{cron_add_output, deserialize_schedule_arg, AT_DESCRIPTION, CRON_TZ_DESCRIPTION};
-use crate::tools::cron::types::{ SessionTarget};
+use std::str::FromStr;
+use std::sync::Arc;
 
 enum Arg {
     Schedule(Schedule),
@@ -33,9 +35,8 @@ pub enum Schedule {
     },
 }
 
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename="lowercase")]
+#[serde(rename = "lowercase")]
 pub enum JobType {
     #[default]
     Shell,
@@ -55,13 +56,13 @@ impl TryFrom<&str> for JobType {
     type Error = String;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-
         match value.to_lowercase().as_str() {
             "shell" => Ok(JobType::Shell),
             "agent" => Ok(JobType::Agent),
             _ => Err(format!(
-                "Invalid job type '{}'. expected one of 'shell', 'agent'.", value
-            ))
+                "Invalid job type '{}'. expected one of 'shell', 'agent'.",
+                value
+            )),
         }
     }
 }
@@ -132,17 +133,23 @@ impl CronAddTool {
         deserialize_schedule_arg(value).map(Arg::Schedule)
     }
 
-    fn enforce_mutation_allowed(&self, action: &str) -> Option<ToolResult>{
-        if !self.security.can_act(){
-            return Some(ToolResult::err(format!("Security policy: read-only mode, cannot perform '{action}'")));
+    fn enforce_mutation_allowed(&self, action: &str) -> Option<ToolResult> {
+        if !self.security.can_act() {
+            return Some(ToolResult::err(format!(
+                "Security policy: read-only mode, cannot perform '{action}'"
+            )));
         }
 
         if self.security.is_rate_limited() {
-            return Some(ToolResult::err("Rate limit exceed: too many actions in the last hour."));
+            return Some(ToolResult::err(
+                "Rate limit exceed: too many actions in the last hour.",
+            ));
         }
 
         if !self.security.record_action() {
-            return Some(ToolResult::err("Rate limit exceed: action budget exhausted."));
+            return Some(ToolResult::err(
+                "Rate limit exceed: action budget exhausted.",
+            ));
         }
         None
     }
@@ -180,7 +187,7 @@ fn normalize_schedule_arg(value: &Value) -> Result<Option<Value>, String> {
 }
 
 #[async_trait]
-impl Tool for CronAddTool{
+impl Tool for CronAddTool {
     fn name(&self) -> &str {
         "cron_add"
     }
@@ -323,53 +330,57 @@ impl Tool for CronAddTool{
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         if !self.config.scheduler.enabled {
-            return Ok(ToolResult::err("cron is disabled by config(scheduler.enabled=false)"));
+            return Ok(ToolResult::err(
+                "cron is disabled by config(scheduler.enabled=false)",
+            ));
         }
 
         let schedule_arg = match args.get("schedule") {
-
             Some(v @ serde_json::Value::String(raw)) => {
                 if let Some(error) = Self::plain_schedule_error(raw) {
                     return Ok(ToolResult::err(error));
                 }
                 match Self::deserialize_arg(v) {
-                    Ok(schedule) =>schedule,
+                    Ok(schedule) => schedule,
                     Err(error) => return Ok(ToolResult::err(error)),
                 }
             }
 
-            Some(v)  =>  match Self::deserialize_arg(v) {
-                Ok(schedule) =>schedule,
+            Some(v) => match Self::deserialize_arg(v) {
+                Ok(schedule) => schedule,
                 Err(error) => return Ok(ToolResult::err(error)),
-            }
-            None => return Ok(ToolResult::err("Missing 'schedule' parameter"))
+            },
+            None => return Ok(ToolResult::err("Missing 'schedule' parameter")),
         };
-
 
         let name = args.get("name").and_then(Value::as_str).map(str::to_string);
         let job_type = match args.get("job_type").and_then(Value::as_str) {
             Some("agent") => JobType::Agent,
             Some("shell") => JobType::Shell,
-            Some(other) =>  return Ok(ToolResult::err(format!("Invalid job_type: {other}"))),
+            Some(other) => return Ok(ToolResult::err(format!("Invalid job_type: {other}"))),
             None => {
                 if args.get("prompt").is_some() {
                     JobType::Agent
-                }else{
+                } else {
                     JobType::Shell
                 }
             }
-
         };
 
-        let del_after_run = args.get("delete_after_run").and_then(Value::as_bool).unwrap_or(schedule_arg.default_delete_after_run());
-        let approved = args.get("approved").and_then(Value::as_bool).unwrap_or(false);
+        let del_after_run = args
+            .get("delete_after_run")
+            .and_then(Value::as_bool)
+            .unwrap_or(schedule_arg.default_delete_after_run());
+        let approved = args
+            .get("approved")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let delivery = match args.get("delivery") {
             Some(v) => match serde_json::from_value::<DeliveryConfig>(v.clone()) {
-                Ok(cfg)=> Some(cfg),
+                Ok(cfg) => Some(cfg),
                 Err(err) => return Ok(ToolResult::err(format!("Invalid delivery config: {err}"))),
             },
-            None => None
-
+            None => None,
         };
 
         let result = match job_type {
@@ -379,10 +390,9 @@ impl Tool for CronAddTool{
                     _ => return Ok(ToolResult::err("Missing 'command' for shell job.")),
                 };
 
-                if let Err(reason) = self.security.validate_command_execution(command, approved){}
+                if let Err(reason) = self.security.validate_command_execution(command, approved) {}
 
-                if let Some(blocked) = self.enforce_mutation_allowed("cron_add")
-                {
+                if let Some(blocked) = self.enforce_mutation_allowed("cron_add") {
                     return Ok(blocked);
                 }
 
@@ -398,35 +408,44 @@ impl Tool for CronAddTool{
                     schedule,
                     command,
                     delivery,
-                    approved
+                    approved,
                 )
             }
             JobType::Agent => {
                 let prompt = match args.get("prompt").and_then(Value::as_str) {
                     Some(prompt) if !prompt.trim().is_empty() => prompt,
                     _ => return Ok(ToolResult::err("Agent job missing 'prompt'")),
-
                 };
 
                 let session_target = match args.get("session_target") {
                     Some(v) => match serde_json::from_value::<SessionTarget>(v.clone()) {
                         Ok(target) => target,
-                        Err(e) => return Ok(ToolResult::err(format!("Invalid session_target: {e}"))),
-                    }
-                    None => SessionTarget::Isolated
-
+                        Err(e) => {
+                            return Ok(ToolResult::err(format!("Invalid session_target: {e}")));
+                        }
+                    },
+                    None => SessionTarget::Isolated,
                 };
 
-                let model = args.get("model").and_then(Value::as_str).map(str::to_string);
+                let model = args
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
 
-                let allowed_tools = match args.get("allowed_tools"){
+                let allowed_tools = match args.get("allowed_tools") {
                     Some(tools) => match serde_json::from_value::<Vec<String>>(tools.clone()) {
                         Ok(als) => {
-                            if als.is_empty() {None} else{Some(als)}
+                            if als.is_empty() {
+                                None
+                            } else {
+                                Some(als)
+                            }
                         }
-                        Err(err) => return Ok(ToolResult::err(format!("Invalid allowed_tools: {err}"))),
-                    }
-                    None => None
+                        Err(err) => {
+                            return Ok(ToolResult::err(format!("Invalid allowed_tools: {err}")));
+                        }
+                    },
+                    None => None,
                 };
 
                 if let Some(blocked) = self.enforce_mutation_allowed("cron_add") {
@@ -438,23 +457,25 @@ impl Tool for CronAddTool{
                     Err(error) => return Ok(ToolResult::err(error)),
                 };
 
-                add_agent_job( &self.config,
-                               &self.agent_alias,
-                               name,
-                               schedule,
-                               prompt,
-                               session_target,
-                               model,
-                               delivery,
-                               del_after_run,
-                               allowed_tools,)
+                add_agent_job(
+                    &self.config,
+                    &self.agent_alias,
+                    name,
+                    schedule,
+                    prompt,
+                    session_target,
+                    model,
+                    delivery,
+                    del_after_run,
+                    allowed_tools,
+                )
             }
-
-
         };
 
         match result {
-            Ok(job) => Ok(ToolResult::ok(serde_json::to_string_pretty(&cron_add_output(&job))?)),
+            Ok(job) => Ok(ToolResult::ok(serde_json::to_string_pretty(
+                &cron_add_output(&job),
+            )?)),
             Err(e) => Ok(ToolResult::err("")),
         }
     }

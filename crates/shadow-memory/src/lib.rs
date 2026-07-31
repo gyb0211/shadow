@@ -9,18 +9,19 @@
 pub mod markdown;
 pub mod none;
 // pub mod sqlite;
+pub mod agent_scoped;
 pub mod agent_scoped_markdown;
+pub mod conflict;
 pub mod embedding;
 pub mod sqlite;
 pub mod strategy;
 pub mod vector;
-pub mod agent_scoped;
-pub mod conflict;
 
 use std::fmt::{Debug, Formatter};
 use std::path::Path;
 pub use strategy::{DefaultMemoryStrategy, format_entries};
 
+use crate::agent_scoped::AgentScopedMemory;
 use crate::agent_scoped_markdown::{AgentScopedMarkdownMemory, MarkdownPeer};
 use crate::markdown::MarkdownMemory;
 use crate::none::NoneMemory;
@@ -28,44 +29,57 @@ use crate::sqlite::SqliteMemory;
 use anyhow::{Context, Result};
 use embedding::EmbeddingProvider;
 use serde::{Deserialize, Serialize};
-use shadow_config::{resolve_provider, Config};
 use shadow_config::multi::alias_agent::MemoryBackendKind;
 use shadow_config::providers::ModelProviders;
 use shadow_config::schema::{ActiveStorage, EmbeddingRouteConfig, MemoryConfig};
+use shadow_config::{Config, resolve_provider};
 use shadow_core::Memory;
 use std::sync::Arc;
-use crate::agent_scoped::AgentScopedMemory;
 
-fn resolve_provider_ref(model_provider: String,
-                        model: String, dimensions: usize, explicit_api_key: Option<String>,
-                        inherited_api_key: Option<String>, providers: Option<&ModelProviders>) -> ResolvedEmbeddingConfig {
+fn resolve_provider_ref(
+    model_provider: String,
+    model: String,
+    dimensions: usize,
+    explicit_api_key: Option<String>,
+    inherited_api_key: Option<String>,
+    providers: Option<&ModelProviders>,
+) -> ResolvedEmbeddingConfig {
     let trimmed = model_provider.trim();
-    let is_dotted_ref = !trimmed.is_empty()
-        && !trimmed.starts_with("custom")
-        && trimmed.contains('.');
+    let is_dotted_ref =
+        !trimmed.is_empty() && !trimmed.starts_with("custom") && trimmed.contains('.');
     if !is_dotted_ref {
         return ResolvedEmbeddingConfig {
             model_provider,
-            model,dimensions,
+            model,
+            dimensions,
             api_key: explicit_api_key.or(inherited_api_key),
         };
     }
     let reference = trimmed.to_string();
     let Some((kind, _alias, provider_cfg)) =
-    providers.and_then(|pros| pros.find_by_name(&reference))
+        providers.and_then(|pros| pros.find_by_name(&reference))
     else {
         // todo record
         return ResolvedEmbeddingConfig {
-            model_provider, model, dimensions,
-            api_key: explicit_api_key.or(inherited_api_key)
+            model_provider,
+            model,
+            dimensions,
+            api_key: explicit_api_key.or(inherited_api_key),
         };
     };
 
-    let provider_key = provider_cfg.api_key.as_deref()
-        .map(str::trim).filter(|value| !value.is_empty())
+    let provider_key = provider_cfg
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map(str::to_string);
 
-    let concrete_provider = match provider_cfg.uri.as_deref().map(str::trim).filter(|value| !value.is_empty())
+    let concrete_provider = match provider_cfg
+        .uri
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
     {
         Some(uri) => Some(format!("custom:{uri}")),
         None if matches!(kind, "openai" | "openrouter") => Some(kind.to_string()),
@@ -74,16 +88,19 @@ fn resolve_provider_ref(model_provider: String,
 
     let Some(concrete_provider) = concrete_provider else {
         return ResolvedEmbeddingConfig {
-            model_provider, model, dimensions,
-            api_key: explicit_api_key.or(inherited_api_key)
+            model_provider,
+            model,
+            dimensions,
+            api_key: explicit_api_key.or(inherited_api_key),
         };
     };
 
     ResolvedEmbeddingConfig {
-        model_provider, model, dimensions,
-        api_key: explicit_api_key.or(provider_key).or(inherited_api_key)
+        model_provider,
+        model,
+        dimensions,
+        api_key: explicit_api_key.or(provider_key).or(inherited_api_key),
     }
-
 }
 pub async fn create_memory_for_agent(
     config: &Config,
@@ -186,22 +203,17 @@ pub fn create_memory_with_storage_and_routes(
         Ok(mem)
     }
 
-    let sqlite_open_secs = match active_storage{
-
+    let sqlite_open_secs = match active_storage {
         ActiveStorage::Sqlite(sqlite) => sqlite.open_timeout_secs,
         _ => None,
     };
 
-
     create_memory_with_builders(
-        &backend_name, workspace_dir,|| {
-            build_sqlite_memory(
-                config,
-                sqlite_open_secs,workspace_dir, &resolved_embedding
-            )
-        } ,""
+        &backend_name,
+        workspace_dir,
+        || build_sqlite_memory(config, sqlite_open_secs, workspace_dir, &resolved_embedding),
+        "",
     )
-
 }
 
 fn create_memory_with_builders<F>(
@@ -234,9 +246,7 @@ where
         //     Ok(Box::new(MarkdownMemory::new("markdown", workspace_dir)))
         // }
         MemoryBackendKind::None => Ok(Box::new(NoneMemory::new("none"))),
-        _ => {
-            Ok(Box::new(MarkdownMemory::new("markdown", workspace_dir)))
-        }
+        _ => Ok(Box::new(MarkdownMemory::new("markdown", workspace_dir))),
     }
 }
 
@@ -252,8 +262,10 @@ pub fn resolve_embedding_config(
         .map(str::to_string);
 
     let configured_api_key = config
-        .embedding_api_key.as_deref()
-        .map(str::trim).filter(|value| !value.is_empty())
+        .embedding_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map(str::to_string);
 
     let fallback = || {
@@ -263,16 +275,21 @@ pub fn resolve_embedding_config(
             config.embedding_dimensions,
             configured_api_key.clone(),
             inherited_api_key.clone(),
-            providers
+            providers,
         )
     };
 
-    let Some(hint) = config.embedding_model.strip_prefix("hint:").map(str::trim)
-        .filter(|value| !value.is_empty()) else {
+    let Some(hint) = config
+        .embedding_model
+        .strip_prefix("hint:")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return fallback();
     };
 
-    let Some(route) = embedding_routes.iter()
+    let Some(route) = embedding_routes
+        .iter()
         .find(|route| route.hint.trim() == hint)
     else {
         return fallback();
@@ -282,12 +299,15 @@ pub fn resolve_embedding_config(
     let model = route.model.as_str();
     let dimensions = route.dimensions.unwrap_or(config.embedding_dimensions);
 
-    if model_provider.is_empty() || model.is_empty() || dimensions==0 {
+    if model_provider.is_empty() || model.is_empty() || dimensions == 0 {
         // todo  log
         return fallback();
     }
 
-    let routed_api_key =route.api_key.as_deref()   .map(str::trim)
+    let routed_api_key = route
+        .api_key
+        .as_deref()
+        .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
 
@@ -297,11 +317,8 @@ pub fn resolve_embedding_config(
         dimensions,
         routed_api_key.or(configured_api_key),
         inherited_api_key,
-        providers
+        providers,
     )
-
-
-
 }
 
 pub fn backend_kind_from_dotted(memory_backend: &String) -> String {

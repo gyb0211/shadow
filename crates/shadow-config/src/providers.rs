@@ -253,8 +253,6 @@ pub struct ProviderEntry {
     /// 备选模型列表 (主模型失败时依次尝试)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fallback_models: Vec<String>,
-
-
 }
 
 impl ProviderEntry {
@@ -321,7 +319,6 @@ impl<'de> Deserialize<'de> for ProviderEntry {
             max_tokens: h.max_tokens,
             timeout_secs: h.timeout_secs,
             fallback_models: h.fallback_models,
-
         })
     }
 }
@@ -347,7 +344,6 @@ pub struct ReliableConfig {
     pub provider_backoff_ms: u64,
     #[serde(default)]
     pub api_keys: Vec<String>,
-
 }
 
 fn default_provider_retries() -> u32 {
@@ -356,7 +352,6 @@ fn default_provider_retries() -> u32 {
 fn default_provider_backoff_ms() -> u64 {
     1000
 }
-
 
 impl Default for ReliableConfig {
     fn default() -> Self {
@@ -367,7 +362,6 @@ impl Default for ReliableConfig {
         }
     }
 }
-
 
 /// Router 配置段 -- 跨 provider 路由与 fallback
 ///

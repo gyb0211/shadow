@@ -13,7 +13,9 @@ pub struct SkillBundleConfig {
 
 impl SkillBundleConfig {
     pub fn admits_skill(&self, name: &str) -> bool {
-        if !self.include.is_empty() && !self.include.contains(&name.to_string()) {  return false;}
+        if !self.include.is_empty() && !self.include.contains(&name.to_string()) {
+            return false;
+        }
         !self.exclude.contains(&name.to_string())
     }
 }

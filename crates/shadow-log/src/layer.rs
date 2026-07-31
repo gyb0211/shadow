@@ -30,14 +30,16 @@
 //! - 从 visit 中提取 action, message, shadow_attrs (归因字段)
 //! - 组装 LogEvent 后调 record_event
 
-use std::fmt::Write;
 use crate::EventOutcome;
-use crate::event::{ Attribution, EventCategory, LogEvent, Severity, ATTRIBUTION_FIELDS, COMPOSITE_PREFIXES};
+use crate::event::{
+    ATTRIBUTION_FIELDS, Attribution, COMPOSITE_PREFIXES, EventCategory, LogEvent, Severity,
+};
 use crate::writer::record_event;
 use serde_json::Value;
 use serde_json::map::Map as JsonMap;
 use std::error::Error;
 use std::fmt::Debug;
+use std::fmt::Write;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Record};
 use tracing::{Event, Id, Subscriber};
@@ -419,7 +421,6 @@ impl ScopeSpanCollector {
         }
     }
 
-
     fn put(&mut self, name: &str, value: Value) {
         if name == "category" {
             if let Value::String(v) = value {
@@ -429,7 +430,9 @@ impl ScopeSpanCollector {
         }
 
         for prefix in COMPOSITE_PREFIXES {
-            if name == *prefix && let Value::String(v) = &value {
+            if name == *prefix
+                && let Value::String(v) = &value
+            {
                 if v.contains(".") {
                     self.attribution.set_composite(prefix, v);
                 } else {
@@ -439,9 +442,11 @@ impl ScopeSpanCollector {
             }
         }
 
-        if ATTRIBUTION_FIELDS.contains(&name) && let Value::String(v) = value {
+        if ATTRIBUTION_FIELDS.contains(&name)
+            && let Value::String(v) = value
+        {
             self.attribution.set(name, v);
-            return;;
+            return;
         }
         self.extra.insert(name.to_string(), value);
     }
@@ -449,7 +454,12 @@ impl ScopeSpanCollector {
 
 impl Visit for ScopeSpanCollector {
     fn record_f64(&mut self, field: &Field, value: f64) {
-      self.put(field.name(), serde_json::Number::from_f64(value).map(Value::Number).unwrap_or(Value::Null));
+        self.put(
+            field.name(),
+            serde_json::Number::from_f64(value)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
+        );
     }
 
     fn record_i64(&mut self, field: &Field, value: i64) {
@@ -457,7 +467,6 @@ impl Visit for ScopeSpanCollector {
     }
 
     fn record_u64(&mut self, field: &Field, value: u64) {
-
         if field.name() == "duration_ms" {
             self.attribution.duration_ms = Some(value);
             return;
@@ -465,7 +474,6 @@ impl Visit for ScopeSpanCollector {
 
         self.put(field.name(), Value::from(value))
     }
-
 
     fn record_bool(&mut self, field: &Field, value: bool) {
         self.put(field.name(), Value::Bool(value))

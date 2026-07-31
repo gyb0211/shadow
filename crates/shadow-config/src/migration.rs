@@ -40,7 +40,10 @@ fn migrate_v1_to_v2(mut value: toml::Value) -> Result<toml::Value> {
         Some(t) => t,
         None => return Ok(value),
     };
-    let providers = match table.get_mut("providers").and_then(toml::Value::as_table_mut) {
+    let providers = match table
+        .get_mut("providers")
+        .and_then(toml::Value::as_table_mut)
+    {
         Some(t) => t,
         None => return Ok(value), // 无 providers 段, 无需迁移
     };
@@ -118,4 +121,3 @@ pub fn migrate_str(input: &str) -> Result<Option<String>> {
     }
     Ok(Some(toml::to_string_pretty(&value)?))
 }
-

@@ -11,6 +11,7 @@ use crate::ReliableConfig;
 use crate::channel::{LarkReceiveMode, StreamMode};
 use crate::multi::alias_agent::MemoryBackendKind;
 use crate::observability::ObservabilityBackend;
+use crate::peer_group::PeerGroupConfig;
 use crate::providers::{ModelProviderRef, ModelProviders, Providers};
 use anyhow::Context;
 use directories::UserDirs;
@@ -20,7 +21,6 @@ use std::ffi::OsStr;
 use std::future::poll_fn;
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use crate::peer_group::PeerGroupConfig;
 
 /// 顶层配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,7 +30,9 @@ pub struct Config {
     #[serde(default)]
     pub schema_version: u32,
 
+    #[serde(skip)]
     pub config_path: PathBuf,
+    #[serde(skip)]
     pub data_dir: PathBuf,
 
     /// Aliased agents  [agents.<alias>]
@@ -304,7 +306,7 @@ async fn resolve_runtime_config_dirs(
     }
 
     Ok((
-        default_data_dir.to_path_buf(),
+        default_shadow_dir.to_path_buf(),
         default_data_dir.to_path_buf(),
         ConfigResolutionSource::DefaultConfigDir,
     ))
@@ -495,7 +497,26 @@ impl Config {
             let contents = fs::read_to_string(&config_path)
                 .await
                 .context("Failed to read config file")?;
-            let mut config = serde_json::from_str::<Config>(&contents).unwrap_or(Config::default());
+
+            // 先运行 migration 链 (v1→v2 ...), 若发生迁移则回写文件
+            let contents = match crate::migration::migrate_str(&contents) {
+                Ok(Some(migrated)) => {
+                    fs::write(&config_path, &migrated).await?;
+                    migrated
+                }
+                Ok(None) => contents,
+                Err(e) => {
+                    tracing::warn!("Config migration failed, using raw content: {e}");
+                    contents
+                }
+            };
+
+            let mut config: Config = toml::from_str(&contents).unwrap_or_else(|e| {
+                tracing::error!(
+                    "Failed to parse config.toml as TOML: {e}, falling back to default"
+                );
+                Config::default()
+            });
 
             if let Some(default_profile) = config.risk_profiles.get_mut("default") {
                 // default_profile.ensure_default_auto_approve();
@@ -514,8 +535,23 @@ impl Config {
 
             Ok(config)
         } else {
-            Ok(Config::default())
+            // 首次运行：确保目录存在并设置 config_path/data_dir，
+            // 否则后续 save() 会因为 config_path 为空而失败。
+            let mut config = Config::default();
+            config.config_path = config_path.clone();
+            config.data_dir = workspace_dir;
+            Ok(config)
         }
+    }
+
+    /// 将当前配置序列化为 TOML 并写回 config_path.
+    ///
+    /// `config_path` 和 `data_dir` 不会写入文件 (serde skip).
+    /// 调用前需通过 `load_or_init` 或 Default 设置 `config_path`.
+    pub async fn save(&self) -> anyhow::Result<()> {
+        let toml_str = toml::to_string_pretty(self)?;
+        fs::write(&self.config_path, toml_str).await?;
+        Ok(())
     }
 
     pub fn resolve_active_storage(&self) -> ActiveStorage<'_> {
@@ -920,4 +956,51 @@ macro_rules! impl_default_family_endpoint {
 }
 impl_default_family_endpoint! {
 CustomModelProviderConfig,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tom_roundtrip_minimal() {
+        // Providers 有 models 字段, 所以 TOML 路径是 [providers.models.custom.<alias>]
+        let toml_str = r#"
+schema_version = 2
+
+[providers.models.custom.default]
+api_key = "sk-test"
+model = "gpt-4o-mini"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.schema_version, 2);
+        let entry = config.providers.models.custom.get("default").unwrap();
+        assert_eq!(entry.base.api_key.as_deref(), Some("sk-test"));
+        assert_eq!(entry.base.model.as_deref(), Some("gpt-4o-mini"));
+    }
+
+    #[test]
+    fn tom_lark_channel() {
+        let toml_str = r#"
+schema_version = 2
+
+[channels.lark.mybot]
+app_id = "cli_xxx"
+app_secret = "secret"
+use_feishu = true
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let lark = config.channels.lark.get("mybot").unwrap();
+        assert_eq!(lark.app_id, "cli_xxx");
+        assert_eq!(lark.app_secret, "secret");
+        assert!(lark.use_feishu);
+    }
+
+    #[test]
+    fn tom_serialize_skips_runtime_paths() {
+        let config = Config::default();
+        let toml_str = toml::to_string(&config).unwrap();
+        assert!(!toml_str.contains("config_path"));
+        assert!(!toml_str.contains("data_dir"));
+    }
 }

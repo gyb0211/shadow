@@ -1,23 +1,23 @@
 use crate::security::create_sandbox;
 use crate::tools::cron::add::CronAddTool;
+use crate::tools::model_switch::ModelSwitchTool;
 use crate::tools::registry::ToolRegistry;
 use async_trait::async_trait;
 use serde_json::Value;
+use shadow_config::platform::native::NativeRuntime;
 use shadow_config::policy::SecurityPolicy;
 use shadow_config::{AliasedAgentConfig, Config, RiskProfileConfig};
 use shadow_core::runtime::RuntimePlatformAdapter;
 use shadow_core::{Attributable, Memory, Role, Tool, ToolResult};
+use shadow_tools::llm_task::LlmTaskTool;
 use std::collections::HashMap;
 use std::sync::Arc;
-use shadow_config::platform::native::NativeRuntime;
-use shadow_tools::llm_task::LlmTaskTool;
-use crate::tools::model_switch::ModelSwitchTool;
 
 pub mod attribution;
 pub mod cron;
-pub mod registry;
 mod model_switch;
 pub mod outcome;
+pub mod registry;
 pub(crate) mod scoped;
 
 pub struct AllToolsResult {
@@ -205,19 +205,21 @@ impl Tool for ArcDelegationTool {
     }
 }
 
-fn boxed_registry_from_arcs(tools: Vec<Arc<dyn Tool>>) -> Vec<Box<dyn Tool>>{
+fn boxed_registry_from_arcs(tools: Vec<Arc<dyn Tool>>) -> Vec<Box<dyn Tool>> {
     tools.into_iter().map(ArcDelegationTool::boxed).collect()
     // tools.iter().map(|t| ArcDelegationTool::boxed((*t).clone())).collect()
 }
 
-pub fn default_tools(security: Arc<SecurityPolicy>)-> Vec<Box<dyn Tool>>{
+pub fn default_tools(security: Arc<SecurityPolicy>) -> Vec<Box<dyn Tool>> {
     default_tools_with_runtime(security, Arc::new(NativeRuntime::new()))
 }
 
-pub fn default_tools_with_runtime(security: Arc<SecurityPolicy>, runtime: Arc<dyn RuntimePlatformAdapter>)-> Vec<Box<dyn Tool>>{
+pub fn default_tools_with_runtime(
+    security: Arc<SecurityPolicy>,
+    runtime: Arc<dyn RuntimePlatformAdapter>,
+) -> Vec<Box<dyn Tool>> {
     let persist_writes = runtime.has_filesystem_access();
     vec![
         // todo 最基本的几个tool shell file_read file_write file_edit global_search content_search
     ]
 }
-

@@ -30,7 +30,6 @@ impl DelegationPolicy {
     }
 }
 
-
 fn default_approver_timeout_secs() -> u64 {
     600
 }
@@ -38,7 +37,7 @@ fn default_approver_timeout_secs() -> u64 {
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
-pub enum OnNoApprover{
+pub enum OnNoApprover {
     ///
     #[default]
     Deny,
@@ -54,6 +53,6 @@ pub struct ApprovalRoute {
     #[serde(default)]
     pub no_on_approver: OnNoApprover,
     /// 超时自动拒绝
-    #[serde(default="default_approver_timeout_secs")]
-    pub timeout_secs:u64,
+    #[serde(default = "default_approver_timeout_secs")]
+    pub timeout_secs: u64,
 }

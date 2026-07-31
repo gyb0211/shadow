@@ -57,6 +57,20 @@ impl Channel for CliChannel {
                 sender: "user".to_string(),
                 content: line.to_string(),
                 reply_target: "user".to_string(),
+                channel: "cli".to_string(),
+                channel_alias: None,
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                thread_ts: None,
+                interruption_scope_id: None,
+                attachments: vec![],
+                subject: None,
+                internal_sop_event: None,
+                passive_context: false,
+                explicitly_addressed: false,
+                conversation_scope: shadow_core::channel::ChannelConversationScope::default(),
             };
 
             if tx.send(message).await.is_err() {

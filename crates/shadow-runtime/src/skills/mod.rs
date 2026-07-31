@@ -34,13 +34,12 @@
 //! 这是技能的说明文档, 会作为附加提示使用...
 //! ```
 
-
 // ── 数据结构 ──────────────────────────────────────────────────────────
 
-use std::path::Path;
-use serde::{Deserialize, Serialize};
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use shadow_core::Tool;
+use std::path::Path;
 
 /// 技能工具定义 -- 从 SKILL.md frontmatter 解析
 ///

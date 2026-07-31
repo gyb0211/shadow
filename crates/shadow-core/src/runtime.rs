@@ -1,7 +1,7 @@
 //! AgentRuntime trait -- Agent 主循环抽象
 
-use std::path::{Path, PathBuf};
 use anyhow::Result;
+use std::path::{Path, PathBuf};
 
 pub trait RuntimePlatformAdapter: Send + Sync {
     /// 运行时所在的环境
@@ -25,10 +25,14 @@ pub trait RuntimePlatformAdapter: Send + Sync {
     /// 当前运行时预计最大可以使用的内存
     /// 默认0。无限制
     /// 嵌入式 serverless 应返回可用的内存容量
-    fn memory_budget(&self) -> u64{
+    fn memory_budget(&self) -> u64 {
         0
     }
 
     /// 为当前运行时构建一个shell命令进程
-    fn build_shell_command(&self, command:&str, workspace_dir: &Path) -> Result<tokio::process::Command>;
+    fn build_shell_command(
+        &self,
+        command: &str,
+        workspace_dir: &Path,
+    ) -> Result<tokio::process::Command>;
 }

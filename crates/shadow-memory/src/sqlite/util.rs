@@ -46,9 +46,11 @@ pub(super) fn content_hash(query: &str) -> String {
     let hash = Sha256::digest(query.as_bytes());
     format!(
         "{:016x}",
-        u64::from_be_bytes(hash[..8].try_into().expect(
-            "SHA-256 always produces >= 8 bytes"
-        ))
+        u64::from_be_bytes(
+            hash[..8]
+                .try_into()
+                .expect("SHA-256 always produces >= 8 bytes")
+        )
     )
 }
 

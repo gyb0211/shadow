@@ -71,4 +71,3 @@ fn find_char_boundary_from_end(s: &str, idx: usize) -> usize {
     }
     i
 }
-

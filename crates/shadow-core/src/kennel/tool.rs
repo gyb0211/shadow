@@ -94,4 +94,3 @@ pub trait Tool: Attributable {
         }
     }
 }
-

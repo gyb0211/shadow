@@ -1,4 +1,3 @@
-
 const ATTACHMENT_KINDS: &[&str] = &[
     "IMAGE", "PHOTO", "DOCUMENT", "FILE", "VIDEO", "AUDIO", "VOICE",
 ];
@@ -43,4 +42,14 @@ pub fn parse_attachment_markers(message: &str) -> (String, Vec<(String, String)>
     }
 
     (cleaned.trim().to_string(), attachments)
+}
+pub fn floor_char_boundary(s: &str, max_bytes: usize) -> usize {
+    if max_bytes >= s.len() {
+        return s.len();
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
 }

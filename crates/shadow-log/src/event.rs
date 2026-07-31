@@ -509,7 +509,6 @@ impl Event {
         self
     }
 
-
     pub fn with_outcome(mut self, outcome: EventOutcome) -> Self {
         self.outcome = outcome;
         self
