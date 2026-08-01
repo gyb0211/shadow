@@ -164,53 +164,15 @@ fn default_memory_backend() -> String {
 
 impl Default for Config {
     fn default() -> Self {
-        let home =
-            UserDirs::new().map_or_else(|| PathBuf::from("."), |u| u.home_dir().to_path_buf());
-        let shadow_home = home.join(".shadow");
-        let mut agents = HashMap::new();
-        agents.insert(
-            "assistant".to_string(),
-            AliasedAgentConfig {
-                enabled: true,
-                workspace: Default::default(),
-                memory: Default::default(),
-                model_provider: ModelProviderRef::new("custom.default"),
-                risk_profile: Default::default(),
-                runtime_profile: Default::default(),
-                resolved: ResolvedRuntime {
-                    max_tool_iterations: 20,
-                },
-            },
-        );
-        let mut pdf = Providers::default();
-        pdf.models = ModelProviders::default();
-        pdf.models.custom = HashMap::new();
-        pdf.models.custom.insert("default".to_string(), CustomModelProviderConfig {
-            base: ModelProviderConfig {
-                api_key: Some("sk-cp-18TqfpOSbQSSNkZNvjO01R3euRRLhj7zreKCW1ssrFficr3yWC3rBzylPD6Nnw2V450mmZu9Q5s6p0CsqAInQOq1r3ZBzYpl_UUG_PkNiVGl4s5OduwRiFE".to_string()),
-                kind: Some("custom".to_string()),
-                uri: Some("https://api.minimaxi.com/v1".to_string()),
-                model: Some("MiniMax-M2.7".to_string()),
-                temperature: None,
-                timeout_secs: None,
-                extra_headers: Default::default(),
-                response_max_tokens: None,
-                native_tools: None,
-                think: None,
-                context_window: None,
-            },
-        });
-        let mut risk_profiles = HashMap::new();
-        risk_profiles.insert("assistant".to_string(), RiskProfileConfig::default());
         Self {
             schema_version: 0,
             config_path: Default::default(),
             data_dir: Default::default(),
-            agents,
-            risk_profiles,
+            agents: HashMap::new(),
+            risk_profiles: HashMap::new(),
             runtime_profiles: Default::default(),
             skill_bundles: Default::default(),
-            providers: pdf,
+            providers: Providers::default(),
             model_routes: vec![],
             runtime: Default::default(),
             reliability: Default::default(),

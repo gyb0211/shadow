@@ -105,13 +105,6 @@ enum Commands {
         temperature: Option<f64>,
     },
 
-    /// 飞书/Lark 用户认证 (二维码 + 链接)
-    LarkAuth {
-        /// 配置中的 Lark 实例名称 (默认使用第一个)
-        #[arg(long)]
-        name: Option<String>,
-    },
-
     /// 交互式配置引导
     Quickstart {
         /// agent 名称 (不指定则交互选择/创建)
@@ -119,15 +112,22 @@ enum Commands {
         agent: Option<String>,
     },
 
-    /// 启动 channel 监听服务（飞书/Lark）
+    /// 前台运行 daemon -- 启动 channel 监听服务
+    ///
+    /// 这是 systemd/launchd ExecStart 的入口。
+    /// 也可直接手动运行（会阻塞前台）。
     #[command(long_about = "\
-    Start channel listeners for Lark/Feishu.
+    Run the daemon in the foreground (channel listeners).
+    This is the entry point for systemd/launchd.
+    Press Ctrl+C to stop.
 
     Examples:
-        shadow serve -a assistant                   # listen all configured lark channels
-        shadow serve -a assistant -n moqi           # listen specific lark channel
+        shadow daemon                           # start with all enabled agents
+        shadow daemon -a assistant              # start with specific agent
+        shadow daemon -a assistant -n moqi      # start with specific lark channel
     ")]
-    Serve {
+    Daemon {
+        /// 指定 agent 名称（不指定则启动所有 enabled 的 agents）
         #[arg(short = 'a', long)]
         agent: Option<String>,
         /// Lark channel 名称 (不指定则监听所有配置的)
@@ -135,22 +135,21 @@ enum Commands {
         name: Option<String>,
     },
 
-    /// 以守护进程方式启动 channel 监听服务
+    /// OS 服务管理（systemd/launchd）
     #[command(long_about = "\
-    Start channel listeners as a daemon process.
+    Manage the shadow daemon via OS init system (systemd/launchd).
 
     Examples:
-        shadow daemon                             # start daemon with all enabled agents
-        shadow daemon --stop                      # stop the running daemon
-        shadow daemon --status                    # check daemon status
+        shadow service install                  # generate service config
+        shadow service start                    # start via systemctl/launchctl
+        shadow service status                   # check status
+        shadow service logs                     # view logs
+        shadow service stop                     # stop
+        shadow service uninstall                # remove service config
     ")]
-    Daemon {
-        /// 停止守护进程
-        #[arg(long)]
-        stop: bool,
-        /// 查看守护进程状态
-        #[arg(long)]
-        status: bool,
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
     },
 }
 
@@ -174,6 +173,32 @@ enum MemoryAction {
     Forget { key: String },
     /// 清空所有记忆
     Clear,
+}
+
+/// `shadow service` 子命令
+#[derive(Subcommand, Debug)]
+enum ServiceAction {
+    /// 安装服务（生成 systemd unit / launchd plist）
+    Install,
+    /// 启动服务
+    Start,
+    /// 停止服务
+    Stop,
+    /// 重启服务
+    Restart,
+    /// 查看服务状态
+    Status,
+    /// 查看日志
+    Logs {
+        /// 显示行数
+        #[arg(short = 'n', long, default_value = "50")]
+        lines: usize,
+        /// 实时跟踪日志
+        #[arg(short = 'f', long)]
+        follow: bool,
+    },
+    /// 卸载服务（删除 unit/plist 文件）
+    Uninstall,
 }
 
 #[tokio::main]
@@ -299,34 +324,6 @@ async fn main() -> Result<()> {
 
             return Ok(());
         }
-        Commands::LarkAuth { name } => {
-            let lark_config = pick_lark_config(&config, name.as_deref())?;
-            let domain = if lark_config.use_feishu {
-                "feishu"
-            } else {
-                "lark"
-            };
-            println!("正在验证飞书 / Lark 凭证...");
-            match shadow_channels::lark::probe_bot(
-                &lark_config.app_id,
-                &lark_config.app_secret,
-                domain,
-            )
-            .await
-            {
-                Ok(Some(bot_info)) => {
-                    let bot_name = bot_info
-                        .get("bot_name")
-                        .and_then(|n| n.as_str())
-                        .unwrap_or("(未命名)");
-                    println!("  ✓ 凭证验证成功, 机器人: {bot_name}");
-                }
-                _ => {
-                    anyhow::bail!("凭证验证失败, 请检查 app_id / app_secret");
-                }
-            }
-            return Ok(());
-        }
         Commands::Quickstart { agent } => {
             shadow::quickstart::run(&mut config, agent.as_deref()).await?;
             return Ok(());
@@ -389,317 +386,33 @@ async fn main() -> Result<()> {
             .await
             .map(|_| ())
         }
-        Commands::LarkAuth { name } => {
-            let lark_config = pick_lark_config(&config, name.as_deref())?;
-            let domain = if lark_config.use_feishu {
-                "feishu"
-            } else {
-                "lark"
-            };
-            println!("正在验证飞书 / Lark 凭证...");
-            match shadow_channels::lark::probe_bot(
-                &lark_config.app_id,
-                &lark_config.app_secret,
-                domain,
-            )
-            .await
-            {
-                Ok(Some(bot_info)) => {
-                    let bot_name = bot_info
-                        .get("bot_name")
-                        .and_then(|n| n.as_str())
-                        .unwrap_or("(未命名)");
-                    println!("  ✓ 凭证验证成功, 机器人: {bot_name}");
-                }
-                _ => {
-                    anyhow::bail!("凭证验证失败, 请检查 app_id / app_secret");
-                }
-            }
-            Ok(())
-        }
         Commands::Quickstart { agent } => {
             shadow::quickstart::run(&mut config, agent.as_deref()).await?;
             Ok(())
         }
-        Commands::Serve { agent, name } => {
-            use shadow_channels::lark::LarkChannel;
-            use shadow_core::Channel;
-            use std::sync::Arc;
-            use tokio::sync::mpsc;
-
-            // 收集要启动的 agents
-            let agents_to_start: Vec<String> = match agent {
-                Some(a) => {
-                    if config.agent(&a).is_none() {
-                        anyhow::bail!(
-                            "`shadow serve --agent {a}` is not configured (no [agents.{a}] entry)"
-                        )
-                    }
-                    vec![a]
-                }
-                None => {
-                    // 启动所有 enabled 的 agents
-                    config
-                        .agents
-                        .iter()
-                        .filter(|(_, cfg)| cfg.enabled)
-                        .map(|(name, _)| name.clone())
-                        .collect()
-                }
-            };
-
-            if agents_to_start.is_empty() {
-                anyhow::bail!("No enabled agents found. Configure agents in config file.");
-            }
-
-            // 收集要监听的 lark channels 配置（clone 出来避免生命周期问题）
-            let lark_entries: Vec<(String, shadow_config::LarkConfig)> = match name.as_deref() {
-                Some(n) => {
-                    let cfg = config.channels.lark.get(n).ok_or_else(|| {
-                        anyhow::Error::msg(format!(
-                            "Lark config '{n}' not found in [channels.lark.{n}]"
-                        ))
-                    })?;
-                    vec![(n.to_string(), cfg.clone())]
-                }
-                None => {
-                    if config.channels.lark.is_empty() {
-                        anyhow::bail!("No Lark config found. Configure with:\n  shadow quickstart");
-                    }
-                    config
-                        .channels
-                        .lark
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect()
-                }
-            };
-
-            println!(
-                "Starting Lark channel listeners for agents: {:?}",
-                agents_to_start
-            );
-
-            // 为每个 channel 创建 LarkChannel 实例并启动监听
-            let mut handles = vec![];
-
-            for (alias, lark_config) in lark_entries {
-                let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> =
-                    Arc::new(move || {
-                        // 允许所有用户（后续可以从 config 里获取 peer group）
-                        vec!["*".to_string()]
-                    });
-
-                let channel =
-                    LarkChannel::from_config(&lark_config, alias.clone(), peer_resolver.clone());
-
-                let (tx, mut rx) = mpsc::channel::<shadow_core::ChannelMessage>(32);
-
-                // 启动 listen 任务
-                let channel_clone = Arc::new(channel);
-                let listen_handle = {
-                    let channel = channel_clone.clone();
-                    let alias = alias.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = channel.listen(tx).await {
-                            eprintln!("Lark channel '{alias}' listen error: {e}");
-                        }
-                    })
-                };
-
-                // 启动消息处理任务（为每个 agent 启动一个处理任务）
-                let config_clone = config.clone();
-                let agents_clone = agents_to_start.clone();
-                let handle_handle = {
-                    let channel = channel_clone.clone();
-                    let alias = alias.clone();
-                    tokio::spawn(async move {
-                        while let Some(msg) = rx.recv().await {
-                            println!(
-                                "[{}] {} -> {}: {}",
-                                msg.channel, msg.sender, msg.reply_target, msg.content
-                            );
-
-                            // 使用第一个 agent 处理消息（简单策略）
-                            let agent_name = &agents_clone[0];
-
-                            // 调用 agent runtime 处理消息
-                            let reply = match agent::run(
-                                config_clone.clone(),
-                                agent_name,
-                                Some(msg.content.clone()),
-                                None,
-                                false, // 非交互模式
-                                None,
-                                None,
-                                AgentRuntimeOverrides::default(),
-                            )
-                            .await
-                            {
-                                Ok(reply) => reply,
-                                Err(e) => {
-                                    eprintln!("Agent runtime error: {e}");
-                                    format!("Error: {e}")
-                                }
-                            };
-
-                            // 发送回复
-                            let send_msg = shadow_core::SendMessage::new(reply, &msg.reply_target);
-                            if let Err(e) = channel.send(&send_msg).await {
-                                eprintln!("Failed to send reply: {e}");
-                            }
-                        }
-                    })
-                };
-
-                handles.push((listen_handle, handle_handle));
-                println!("  ✓ Listening on Lark channel '{alias}'");
-            }
-
-            println!("\nPress Ctrl+C to stop.\n");
-
-            // 等待所有任务
-            tokio::signal::ctrl_c().await?;
-            println!("\nShutting down...");
-
-            // 取消所有任务
-            for (listen, handle) in handles {
-                listen.abort();
-                handle.abort();
-            }
-
-            Ok(())
-        }
-        Commands::Daemon { stop, status } => {
-            use std::fs;
-            use std::process::Command;
-
-            let pid_file = config.data_dir.join("shadow.pid");
-            let log_file = config.data_dir.join("shadow.log");
-
-            // 确保数据目录存在
-            fs::create_dir_all(&config.data_dir)?;
-
-            // 处理 --status
-            if status {
-                if pid_file.exists() {
-                    let pid_str = fs::read_to_string(&pid_file)?;
-                    let pid: u32 = pid_str.trim().parse().unwrap_or(0);
-                    if pid > 0 {
-                        // 检查进程是否存在
-                        let result = Command::new("kill").args(["-0", &pid.to_string()]).status();
-                        if result.is_ok() && result.unwrap().success() {
-                            println!("Shadow daemon is running (PID: {pid})");
-                            return Ok(());
-                        }
-                    }
-                    println!("Shadow daemon is not running (stale PID file)");
-                } else {
-                    println!("Shadow daemon is not running");
-                }
-                return Ok(());
-            }
-
-            // 处理 --stop
-            if stop {
-                if pid_file.exists() {
-                    let pid_str = fs::read_to_string(&pid_file)?;
-                    let pid: u32 = pid_str.trim().parse().unwrap_or(0);
-                    if pid > 0 {
-                        println!("Stopping shadow daemon (PID: {pid})...");
-                        let _ = Command::new("kill").args([&pid.to_string()]).status();
-                        let _ = fs::remove_file(&pid_file);
-                        println!("Daemon stopped");
-                        return Ok(());
-                    }
-                }
-                println!("No daemon is running");
-                return Ok(());
-            }
-
-            // 启动守护进程
-            let agents_to_start: Vec<String> = config
-                .agents
-                .iter()
-                .filter(|(_, cfg)| cfg.enabled)
-                .map(|(name, _)| name.clone())
-                .collect();
-
-            if agents_to_start.is_empty() {
-                anyhow::bail!("No enabled agents found. Configure agents in config file.");
-            }
-
-            if pid_file.exists() {
-                let pid_str = fs::read_to_string(&pid_file)?;
-                let pid: u32 = pid_str.trim().parse().unwrap_or(0);
-                if pid > 0 {
-                    let result = Command::new("kill").args(["-0", &pid.to_string()]).status();
-                    if result.is_ok() && result.unwrap().success() {
-                        anyhow::bail!("Daemon is already running (PID: {pid})");
-                    }
-                }
-            }
-
-            println!("Starting shadow daemon for agents: {:?}", agents_to_start);
-
-            // 使用 fork 创建守护进程
-            // 简化版：使用 nohup + 重定向
-            let current_exe = std::env::current_exe()?;
-            let mut cmd = Command::new(&current_exe);
-            cmd.arg("serve");
-
-            // 重定向 stdout/stderr 到日志文件
-            let log = fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_file)?;
-            cmd.stdout(log.try_clone()?);
-            cmd.stderr(log);
-
-            // 分离进程组
-            cmd.stdin(std::process::Stdio::null());
-
-            let child = cmd.spawn()?;
-            let pid = child.id();
-
-            // 写入 PID 文件
-            fs::write(&pid_file, pid.to_string())?;
-
-            println!("Daemon started (PID: {pid})");
-            println!("Log file: {}", log_file.display());
-            println!("Stop with: shadow daemon --stop");
-
-            Ok(())
-        }
-    }
-}
-
-/// 从配置中获取 LarkConfig (按名称或取第一个)
-fn pick_lark_config<'a>(
-    config: &'a Config,
-    name: Option<&str>,
-) -> anyhow::Result<&'a shadow_config::LarkConfig> {
-    match name {
-        Some(n) => config.channels.lark.get(n).ok_or_else(|| {
-            anyhow::Error::msg(format!(
-                "Lark config '{n}' not found in [channels.lark.{n}]"
+        Commands::Daemon { agent, name } => {
+            Box::pin(shadow_runtime::daemon::run(
+                config,
+                shadow_runtime::daemon::DaemonArgs { agent, name },
             ))
-        }),
-        None => {
-            if config.channels.lark.is_empty() {
-                anyhow::bail!(
-                    "No Lark config found. Configure with:\n  shadow config set channels.lark.default.app_id <id>\n  shadow config set channels.lark.default.app_secret <secret>"
-                );
+            .await
+            .map(|_| ())
+        }
+        Commands::Service { action } => {
+            use shadow_runtime::service;
+            match action {
+                ServiceAction::Install => service::install(),
+                ServiceAction::Start => service::start(),
+                ServiceAction::Stop => service::stop(),
+                ServiceAction::Restart => service::restart(),
+                ServiceAction::Status => service::status(),
+                ServiceAction::Logs { lines, follow } => service::logs(lines, follow),
+                ServiceAction::Uninstall => service::uninstall(),
             }
-            config
-                .channels
-                .lark
-                .values()
-                .next()
-                .ok_or_else(|| anyhow::Error::msg("Lark config map is non-empty but returned None"))
         }
     }
 }
+
 
 #[derive(Debug)]
 enum CappedLine {

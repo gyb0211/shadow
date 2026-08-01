@@ -15,6 +15,66 @@ struct ChannelNotifyObserver {
     tool_used: AtomicBool,
 }
 
+/// 一个已从配置中构造完成的 channel 实例
+///
+/// collect_configured_channels 返回这个结构的列表，
+/// 之后 daemon/runner 只跟 Arc<dyn Channel> 打交道，不再关心具体类型。
+pub struct ConfiguredChannel {
+    /// 展示名（如 "Lark" / "Feishu" / "Telegram"）
+    pub display_name: String,
+    /// 配置中的 alias（如 "mybot"）
+    pub alias: String,
+    /// channel 实例，擦除为 trait object
+    pub channel: Arc<dyn Channel>,
+}
+
+/// 从配置中收集所有已配置的 channel 实例
+///
+/// 每种 channel 类型一个分支，遍历对应的 config map 构造实例。
+/// 新增 channel 类型时，在此函数末尾追加一个 for 循环即可。
+///
+/// 参考 ZeroClaw 的 collect_configured_channels（900行硬编码分支），
+/// shadow 精简版同理，只是规模更小。
+pub fn collect_configured_channels(config: &Config) -> anyhow::Result<Vec<ConfiguredChannel>> {
+    let mut channels = vec![];
+
+    // ── Lark / Feishu ──
+    for (alias, lark_config) in &config.channels.lark {
+        let peers = config.channel_external_peers("lark", alias);
+        let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> =
+            Arc::new(move || peers.clone());
+
+        let display_name = if lark_config.use_feishu {
+            "Feishu"
+        } else {
+            "Lark"
+        }
+        .to_string();
+
+        let ch = LarkChannel::from_config(lark_config, alias.clone(), peer_resolver);
+
+        channels.push(ConfiguredChannel {
+            display_name,
+            alias: alias.clone(),
+            channel: Arc::new(ch),
+        });
+    }
+
+    // ── Telegram (未来) ──
+    // for (alias, tg_config) in &config.channels.telegram { ... }
+
+    // ── Discord (未来) ──
+    // for (alias, dc_config) in &config.channels.discord { ... }
+
+    if channels.is_empty() {
+        anyhow::bail!(
+            "No channels configured. Configure with:\n  shadow quickstart\n  shadow config set channels.lark.default.app_id <id>"
+        );
+    }
+
+    Ok(channels)
+}
+
 pub async fn deliver_announcement(
     config: &Config,
     channel: &str,

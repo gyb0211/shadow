@@ -282,14 +282,29 @@ pub async fn probe_bot(app_id: &str, app_secret: &str, domain: &str) -> Result<O
 fn render_qr_terminal(url: &str) {
     match qrcode::QrCode::new(url.as_bytes()) {
         Ok(qr) => {
-            let rendered = qr
-                .render::<char>()
-                .dark_color('█')
-                .light_color(' ')
-                .module_dimensions(2, 1)
-                .build();
-            for line in rendered.lines() {
+            // 紧凑渲染：用半高块字符 ▀▄ 让每个终端字符行表示两行 QR 模块
+            // 相比 module_dimensions(2,1) 缩小到约 1/4 面积
+            let w = qr.width();
+            // 反色逻辑：qrcode dark=true → QR 数据点(黑) → 终端里用空格
+            //          qrcode dark=false → QR 背景(白) → 终端里用 █
+            let is_set = |x: usize, y: usize| -> bool {
+                qr[(x, y)] == qrcode::Color::Dark
+            };
+            let mut y = 0;
+            while y < w {
+                let mut line = String::with_capacity(w);
+                for x in 0..w {
+                    let top = is_set(x, y);
+                    let bot = if y + 1 < w { is_set(x, y + 1) } else { true };
+                    match (top, bot) {
+                        (true, true) => line.push(' '),    // 都黑 → 空格
+                        (false, false) => line.push('█'), // 都白 → 全块
+                        (true, false) => line.push('▄'),  // 上黑下白
+                        (false, true) => line.push('▀'),  // 上白下黑
+                    }
+                }
                 println!("  {line}");
+                y += 2;
             }
         }
         Err(e) => eprintln!("  [QR 码生成失败: {e}]"),

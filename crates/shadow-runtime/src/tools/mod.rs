@@ -9,7 +9,10 @@ use shadow_config::policy::SecurityPolicy;
 use shadow_config::{AliasedAgentConfig, Config, RiskProfileConfig};
 use shadow_core::runtime::RuntimePlatformAdapter;
 use shadow_core::{Attributable, Memory, Role, Tool, ToolResult};
-use shadow_tools::llm_task::LlmTaskTool;
+use shadow_tools::{
+    ContentSearchTool, FileEditTool, FileReadTool, FileWriteTool, GlobSearchTool, LlmTaskTool,
+    ShellTool,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -47,11 +50,21 @@ pub fn all_tools_with_runtime(
 
     let sandbox = create_sandbox(&sandbox_cfg, runtime_kind, Some(&security.workspace_dir));
 
-    let mut tools_arcs: Vec<Arc<dyn Tool>> = vec![Arc::new(CronAddTool::new(
-        config.clone(),
-        security.clone(),
-        agent_alias,
-    ))];
+    let mut tools_arcs: Vec<Arc<dyn Tool>> = vec![
+        // ── 基本工具 ──
+        Arc::new(ShellTool::with_workdir(&security.workspace_dir)),
+        Arc::new(FileReadTool::new(&security.workspace_dir)),
+        Arc::new(FileWriteTool::new(&security.workspace_dir)),
+        Arc::new(FileEditTool::new(&security.workspace_dir)),
+        Arc::new(GlobSearchTool::new(&security.workspace_dir)),
+        Arc::new(ContentSearchTool::new(&security.workspace_dir)),
+        // ── Cron ──
+        Arc::new(CronAddTool::new(
+            config.clone(),
+            security.clone(),
+            agent_alias,
+        )),
+    ];
 
     if is_subagent_caller {
         // subagent 不可以切换模型
@@ -218,8 +231,14 @@ pub fn default_tools_with_runtime(
     security: Arc<SecurityPolicy>,
     runtime: Arc<dyn RuntimePlatformAdapter>,
 ) -> Vec<Box<dyn Tool>> {
-    let persist_writes = runtime.has_filesystem_access();
+    use shadow_tools::{ContentSearchTool, FileEditTool, FileReadTool, FileWriteTool, GlobSearchTool, ShellTool};
+    let workspace = &security.workspace_dir;
     vec![
-        // todo 最基本的几个tool shell file_read file_write file_edit global_search content_search
+        Box::new(ShellTool::with_workdir(workspace)),
+        Box::new(FileReadTool::new(workspace)),
+        Box::new(FileWriteTool::new(workspace)),
+        Box::new(FileEditTool::new(workspace)),
+        Box::new(GlobSearchTool::new(workspace)),
+        Box::new(ContentSearchTool::new(workspace)),
     ]
 }
