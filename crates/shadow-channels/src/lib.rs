@@ -8,5 +8,5 @@ pub mod allowlist;
 pub mod cli;
 pub mod lark;
 pub mod orchestrator;
-mod transcription;
+pub mod transcription;
 mod utils;

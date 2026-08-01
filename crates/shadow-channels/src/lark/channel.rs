@@ -113,6 +113,34 @@ impl LarkChannel {
         ch
     }
 
+    /// 启用本地 whisper.cpp 语音转文本
+    ///
+    /// 使用默认路径（~/.shadow/models/ggml-base.bin + /usr/local/bin/whisper）
+    /// 自动初始化 TranscriptionManager
+    pub fn with_local_transcription(mut self) -> anyhow::Result<Self> {
+        match crate::transcription::TranscriptionManager::with_local_whisper() {
+            Ok(manager) => {
+                self.transcription_manager = Some(Arc::new(manager));
+                ::shadow_log::record!(
+                    INFO,
+                    ::shadow_log::Event::new(module_path!(), ::shadow_log::Action::Note),
+                    "local whisper transcription enabled for lark channel"
+                );
+            }
+            Err(e) => {
+                ::shadow_log::record!(
+                    WARN,
+                    ::shadow_log::Event::new(module_path!(), ::shadow_log::Action::Note)
+                        .with_outcome(::shadow_log::EventOutcome::Unknown)
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                    "failed to init local whisper, audio transcription disabled"
+                );
+                anyhow::bail!("Failed to init local whisper: {}", e);
+            }
+        }
+        Ok(self)
+    }
+
     fn resolve_sender<'a>(&self, chat_id: &'a str, sender_open_id: Option<&'a str>) -> &'a str {
         if self.per_user_session {
             match sender_open_id {
