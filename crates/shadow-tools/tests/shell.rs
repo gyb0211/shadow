@@ -6,7 +6,7 @@ use serde_json::json;
 
 #[tokio::test]
 async fn test_shell_basic_echo() {
-    let tool = ShellTool;
+    let tool = ShellTool::new();
     let args = json!({
         "command": "echo hello world",
         "timeout": 5
@@ -19,7 +19,7 @@ async fn test_shell_basic_echo() {
 
 #[tokio::test]
 async fn test_shell_timeout() {
-    let tool = ShellTool;
+    let tool = ShellTool::new();
     let args = json!({
         "command": "sleep 10",
         "timeout": 1
@@ -33,7 +33,7 @@ async fn test_shell_timeout() {
 
 #[tokio::test]
 async fn test_shell_nonzero_exit() {
-    let tool = ShellTool;
+    let tool = ShellTool::new();
     let args = json!({
         "command": "exit 42",
         "timeout": 5
@@ -47,8 +47,7 @@ async fn test_shell_nonzero_exit() {
 
 #[tokio::test]
 async fn test_shell_environment_filtering() {
-    // 测试敏感环境变量被过滤
-    let tool = ShellTool;
+    let tool = ShellTool::new();
     
     unsafe {
         std::env::set_var("TEST_NORMAL_VAR", "normal_value");
@@ -67,4 +66,23 @@ async fn test_shell_environment_filtering() {
         std::env::remove_var("TEST_NORMAL_VAR");
         std::env::remove_var("TEST_API_KEY");
     }
+}
+
+#[tokio::test]
+async fn test_shell_with_workdir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tool = ShellTool::with_workdir(tmp.path());
+    
+    // 在指定目录创建文件
+    let args = json!({
+        "command": "touch test_file.txt && echo created",
+        "timeout": 5
+    });
+    
+    let result = tool.execute(args).await.unwrap();
+    assert!(result.success, "命令应该成功");
+    
+    // 验证文件在正确目录创建
+    let file_path = tmp.path().join("test_file.txt");
+    assert!(file_path.exists(), "文件应该在 workdir 中创建");
 }

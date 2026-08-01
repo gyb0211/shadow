@@ -29,7 +29,30 @@ fn clean_env() -> Vec<(String, String)> {
 }
 
 /// Shell 工具
-pub struct ShellTool;
+pub struct ShellTool {
+    /// 工作目录（可选，设置后命令在此目录下执行）
+    workspace: Option<std::path::PathBuf>,
+}
+
+impl ShellTool {
+    /// 创建无工作目录限制的 ShellTool
+    pub fn new() -> Self {
+        Self { workspace: None }
+    }
+
+    /// 创建带工作目录的 ShellTool
+    pub fn with_workdir(workspace: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            workspace: Some(workspace.into()),
+        }
+    }
+}
+
+impl Default for ShellTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 shadow_core::tool_attribution!(ShellTool, shadow_core::ToolKind::Shell);
 
@@ -85,6 +108,11 @@ impl Tool for ShellTool {
         let mut cmd = tokio::process::Command::new("sh");
         cmd.arg("-c")
            .arg(command);
+
+        // 设置工作目录（如果配置了）
+        if let Some(ref workspace) = self.workspace {
+            cmd.current_dir(workspace);
+        }
 
         // 设置清理后的环境变量
         for (key, value) in clean_env() {
