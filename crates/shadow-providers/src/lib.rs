@@ -17,6 +17,10 @@ pub mod reliable_bak;
 pub mod router;
 pub mod router_bak;
 
+// Transcription module
+pub mod transcription;
+pub use transcription::{TranscriptionProvider, audio_format, local_whisper::LocalWhisperProvider, default_supported_formats};
+
 pub use dispatch::*;
 pub use error::{ChatError, RetryClass};
 pub use openai::OpenAiCompatibleModelProvider;
