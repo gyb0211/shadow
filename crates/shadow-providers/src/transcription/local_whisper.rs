@@ -267,8 +267,50 @@ impl TranscriptionProvider for LocalWhisperProvider {
         if transcript.is_empty() {
             Ok("(silence - no speech detected)".to_string())
         } else {
-            Ok(transcript)
+            // 繁体转简体（whisper 中文输出常为繁体）
+            let simplified = t2s_convert(&transcript);
+            Ok(simplified)
         }
+    }
+}
+
+/// 繁体中文转简体中文
+///
+/// 使用 Python opencc 库做转换。
+/// 如果 Python 或 opencc 不可用，返回原文（不做转换）。
+fn t2s_convert(text: &str) -> String {
+    // 快速检查：如果没有中文字符，直接返回
+    let has_chinese = text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+    if !has_chinese {
+        return text.to_string();
+    }
+
+    let output = tokio::task::block_in_place(|| {
+        std::process::Command::new("python3")
+            .args([
+                "-c",
+                "from opencc import OpenCC; import sys; cc=OpenCC('t2s'); sys.stdout.write(cc.convert(sys.stdin.read()))",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+    });
+
+    match output {
+        Ok(mut child) => {
+            use std::io::Write;
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            match child.wait_with_output() {
+                Ok(out) if out.status.success() => {
+                    String::from_utf8_lossy(&out.stdout).to_string()
+                }
+                _ => text.to_string(),
+            }
+        }
+        Err(_) => text.to_string(),
     }
 }
 
