@@ -105,9 +105,23 @@ impl LocalWhisperProvider {
 fn find_whisper_binary() -> Option<PathBuf> {
     let candidates = vec![
         "~/.local/bin/whisper",
+        "~/.local/bin/whisper-cli",
         "/usr/local/bin/whisper",
+        "/usr/local/bin/whisper-cli",
+        "/opt/homebrew/bin/whisper-cli",
+        "/usr/local/Cellar/whisper-cpp",
         "/usr/bin/whisper",
     ];
+
+    // Homebrew whisper-cpp: 在 /usr/local/Cellar/whisper-cpp/<version>/bin/whisper-cli
+    if let Ok(entries) = std::fs::read_dir("/usr/local/Cellar/whisper-cpp") {
+        for entry in entries.flatten() {
+            let path = entry.path().join("bin/whisper-cli");
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
 
     for path in candidates {
         let expanded = shellexpand::tilde(path).to_string();
@@ -160,22 +174,55 @@ impl TranscriptionProvider for LocalWhisperProvider {
             })?;
 
         // 2. 保存音频到临时文件
+        let ext = file_name.rsplit_once('.').map(|(_, e)| e).unwrap_or("wav");
         let temp_file = self.temp_dir.join(format!(
             "stt_{}.{}",
             uuid::Uuid::new_v4(),
-            audio_format::normalize_filename(file_name)
+            ext,
         ));
 
         tokio::fs::write(&temp_file, audio_data)
             .await
             .context("Failed to write temp audio file")?;
 
-        // 3. 调用 whisper.cpp
+        // 3. 如果不是 WAV，用 ffmpeg 转码为 WAV（16kHz, mono, S16_LE）
+        let wav_file = if ext.eq_ignore_ascii_case("wav") {
+            temp_file.clone()
+        } else {
+            let wav_path = temp_file.with_extension("wav");
+            let ffmpeg_result = tokio::process::Command::new("ffmpeg")
+                .args([
+                    "-y",                    // 覆盖输出
+                    "-i", temp_file.to_str().unwrap(),
+                    "-ar", "16000",         // 16kHz
+                    "-ac", "1",             // 单声道
+                    "-sample_fmt", "s16",   // 16-bit
+                    wav_path.to_str().unwrap(),
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .await;
+
+            match ffmpeg_result {
+                Ok(out) if out.status.success() => {
+                    // 转码成功，删除原始文件
+                    let _ = tokio::fs::remove_file(&temp_file).await;
+                    wav_path
+                }
+                _ => {
+                    // ffmpeg 不可用或失败，直接用原文件尝试（whisper.cpp 可能支持）
+                    temp_file
+                }
+            }
+        };
+
+        // 4. 调用 whisper.cpp
         let output = tokio::process::Command::new(&self.binary_path)
             .arg("-m")
             .arg(&self.model_path)
             .arg("-f")
-            .arg(&temp_file)
+            .arg(&wav_file)
             .arg("--no-timestamps")
             .arg("-otxt")  // 输出为纯文本
             .arg("-l")     // 自动检测语言
@@ -193,18 +240,28 @@ impl TranscriptionProvider for LocalWhisperProvider {
             );
         }
 
-        // 4. 读取转录结果
-        let txt_file = temp_file.with_extension("txt");
+        // 5. 读取转录结果
+        // whisper-cli -otxt 输出文件名是在输入文件全名后追加 .txt
+        // 例如 input.wav → input.wav.txt
+        let txt_file = if wav_file.extension().and_then(|e| e.to_str()) == Some("wav") {
+            // 对于转码后的 .wav 文件，with_extension("txt") 会变成 xxx.txt
+            // 但 whisper 输出的是 xxx.wav.txt
+            let mut txt = wav_file.as_os_str().to_owned();
+            txt.push(".txt");
+            std::path::PathBuf::from(txt)
+        } else {
+            wav_file.with_extension("txt")
+        };
         let transcript = tokio::fs::read_to_string(&txt_file)
             .await
             .context("Failed to read transcription output")?;
 
         let transcript = transcript.trim().to_string();
 
-        // 5. 清理临时文件
+        // 6. 清理临时文件
         if !self.keep_temp_files {
-            let _ = tokio::fs::remove_file(&temp_file).await;
-            let _ = tokio::fs::remove_file(&txt_file).await;
+            let _ = tokio::fs::remove_file(&wav_file).await;
+            let _ = tokio::fs::remove_file(wav_file.with_extension("wav.txt")).await;
         }
 
         if transcript.is_empty() {

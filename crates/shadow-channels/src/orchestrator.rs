@@ -51,7 +51,17 @@ pub fn collect_configured_channels(config: &Config) -> anyhow::Result<Vec<Config
         }
         .to_string();
 
-        let ch = LarkChannel::from_config(lark_config, alias.clone(), peer_resolver);
+        let mut ch = LarkChannel::from_config(lark_config, alias.clone(), peer_resolver);
+
+        // 尝试启用本地语音转文本（whisper.cpp）
+        // 如果 whisper.cpp 或模型不存在，静默跳过
+        if let Err(e) = ch.try_enable_local_transcription() {
+            ::shadow_log::record!(
+                INFO,
+                ::shadow_log::Event::new(module_path!(), ::shadow_log::Action::Note),
+                &format!("local transcription not enabled for lark channel '{alias}': {e}")
+            );
+        }
 
         channels.push(ConfiguredChannel {
             display_name,
