@@ -21,6 +21,10 @@ pub mod router_bak;
 pub mod transcription;
 pub use transcription::{TranscriptionProvider, audio_format, local_whisper::LocalWhisperProvider, default_supported_formats};
 
+// TTS module
+pub mod tts;
+pub use tts::{TtsProvider, minimax::MiniMaxTtsProvider};
+
 pub use dispatch::*;
 pub use error::{ChatError, RetryClass};
 pub use openai::OpenAiCompatibleModelProvider;
