@@ -35,6 +35,7 @@ pub async fn run(config: &mut Config, agent_name: Option<&str>) -> Result<()> {
                 model_provider: ModelProviderRef::default(),
                 risk_profile: RiskProfileRef::default(),
                 runtime_profile: Default::default(),
+                tts_provider: String::new(),
                 resolved: ResolvedRuntime {
                     max_tool_iterations: 20,
                 },

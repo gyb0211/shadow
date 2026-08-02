@@ -167,6 +167,36 @@ pub trait Channel: Attributable {
 
     /// 是否支持审批请求
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> Result<()>;
+
+    /// 发送语音回复（可选，只有支持 TTS 的 channel 实现）
+    ///
+    /// 默认实现返回 "not supported" 错误。
+    /// LarkChannel 会覆盖此方法，使用 MiniMax TTS 合成语音。
+    async fn send_voice(
+        &self,
+        _recipient: &str,
+        _text: &str,
+        _tts_api_key: &str,
+    ) -> Result<()> {
+        anyhow::bail!("Voice reply not supported on this channel")
+    }
+
+    /// 发送语音回复（带完整 TTS 配置）
+    async fn send_voice_with_config(
+        &self,
+        recipient: &str,
+        text: &str,
+        tts_api_key: &str,
+        voice: &str,
+        model: &str,
+        speed: f64,
+        vol: f64,
+        pitch: i32,
+    ) -> Result<()> {
+        // 默认委托给 send_voice
+        let _ = (voice, model, speed, vol, pitch);
+        self.send_voice(recipient, text, tts_api_key).await
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

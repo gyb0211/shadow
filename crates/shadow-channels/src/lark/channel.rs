@@ -208,6 +208,31 @@ impl Channel for LarkChannel {
             LarkReceiveMode::Webhook => anyhow::bail!("unsupported webhook, wait update."),
         }
     }
+
+    /// 语音回复：TTS 合成 → opus 转码 → 上传飞书 → 发送 audio 消息
+    async fn send_voice(
+        &self,
+        recipient: &str,
+        text: &str,
+        tts_api_key: &str,
+    ) -> anyhow::Result<()> {
+        self.send_voice_reply(recipient, text, tts_api_key).await
+    }
+
+    /// 语音回复（带完整 TTS 配置）
+    async fn send_voice_with_config(
+        &self,
+        recipient: &str,
+        text: &str,
+        tts_api_key: &str,
+        voice: &str,
+        model: &str,
+        speed: f64,
+        vol: f64,
+        pitch: i32,
+    ) -> anyhow::Result<()> {
+        self.send_voice_reply_with_config(recipient, text, tts_api_key, voice, model, speed, vol, pitch).await
+    }
 }
 
 #[cfg(test)]

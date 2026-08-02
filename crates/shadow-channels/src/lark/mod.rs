@@ -10,6 +10,7 @@ mod http;
 mod media;
 mod platform;
 mod token;
+mod tts_reply;
 mod ws;
 
 pub use auth::{RegistrationResult, probe_bot, qr_register, verify_credentials};

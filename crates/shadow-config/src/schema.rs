@@ -378,6 +378,32 @@ impl Config {
         self.providers.models.find(type_key, alias_key)
     }
 
+    /// 获取 TTS API Key（复用 MiniMax model provider 的 api_key）
+    pub fn tts_api_key(&self) -> Option<String> {
+        // 从第一个 agent 的 model provider 中获取 api_key
+        let agent = self.agents.values().next()?;
+        let (type_key, alias_key) = agent.model_provider.split_once(".")?;
+        let provider = self.providers.models.find(type_key, alias_key)?;
+        provider.api_key.clone().filter(|k| !k.is_empty())
+    }
+
+    /// 解析 agent 的 TTS provider 配置
+    ///
+    /// agent.tts_provider = "minimax.my_voice" → 查找 [providers.tts.minimax.my_voice]
+    pub fn tts_provider_for_agent(&self, agent_alias: &str) -> Option<&crate::providers::TtsProviderConfig> {
+        let agent = self.agents.get(agent_alias)?;
+        let tts_ref = agent.tts_provider.as_str();
+        if tts_ref.is_empty() {
+            return None;
+        }
+        // 解析 "minimax.my_voice" → family="minimax", alias="my_voice"
+        let (family, alias) = tts_ref.split_once(".")?;
+        match family {
+            "minimax" => self.providers.tts.minimax.get(alias),
+            _ => None,
+        }
+    }
+
     pub fn resolved_model_provider_for_agent(
         &self,
         agent_alias: &str,

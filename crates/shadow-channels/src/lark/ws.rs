@@ -462,7 +462,7 @@ impl LarkChannel {
                                 manager,
                             ).await;
                             let Some(text) = transcript else { continue; };
-                            (text, Vec::new())
+                            (format!("[Voice] {text}"), Vec::new())
                         }
                         "list" => match parse_list_content(&lark_msg.content) {
                             Some(t) => (t, Vec::new()),

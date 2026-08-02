@@ -208,9 +208,59 @@ impl ModelProviders {
 #[serde(default)]
 pub struct Providers {
     pub models: ModelProviders,
-    // pub tts: TtsProviders,
+    pub tts: TtsProviders,
     // pub transcription: TranscriptionProviders,
 }
+
+/// TTS provider 配置（与 LLM provider 分开）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TtsProviders {
+    /// `[providers.tts.minimax.<alias>]` -- MiniMax TTS 实例
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub minimax: HashMap<String, TtsProviderConfig>,
+}
+
+/// 单个 TTS provider 配置
+///
+/// 每个 `[providers.tts.minimax.<alias>]` 块
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TtsProviderConfig {
+    /// API Key（独立于 LLM 的 api_key）
+    pub api_key: String,
+    /// API 端点 URL
+    #[serde(default = "default_minimax_tts_url")]
+    pub uri: String,
+    /// TTS 模型（如 speech-02-hd, speech-01-turbo）
+    #[serde(default = "default_tts_model")]
+    pub model: String,
+    /// 默认音色 ID
+    #[serde(default = "default_tts_voice")]
+    pub voice: String,
+    /// 语速 (0.5-2.0)
+    #[serde(default = "default_tts_speed")]
+    pub speed: f64,
+    /// 音量 (0-10)
+    #[serde(default = "default_tts_vol")]
+    pub vol: f64,
+    /// 音调 (-12 到 +12)
+    #[serde(default)]
+    pub pitch: i32,
+    /// 情感 (happy/sad/angry/fearful/disgusted/surprised/neutral)
+    #[serde(default)]
+    pub emotion: String,
+    /// 语言增强 (Chinese/English/auto)
+    #[serde(default = "default_tts_lang")]
+    pub language_boost: String,
+}
+
+fn default_minimax_tts_url() -> String { "https://api.minimaxi.com/v1/t2a_v2".to_string() }
+fn default_tts_model() -> String { "speech-02-hd".to_string() }
+fn default_tts_voice() -> String { "female-shaonv".to_string() }
+fn default_tts_speed() -> f64 { 1.0 }
+fn default_tts_vol() -> f64 { 1.0 }
+fn default_tts_lang() -> String { "Chinese".to_string() }
 
 /// 单个 provider 配置条目
 ///

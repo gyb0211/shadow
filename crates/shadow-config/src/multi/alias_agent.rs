@@ -41,6 +41,13 @@ pub struct AliasedAgentConfig {
     #[serde(default)]
     pub runtime_profile: crate::providers::RuntimeProfileRef,
 
+    /// TTS provider 引用（如 "minimax.my_voice"）
+    ///
+    /// 格式: "<family>.<alias>"，引用 [providers.tts.<family>.<alias>]
+    /// 为空表示该 agent 不支持语音回复
+    #[serde(default)]
+    pub tts_provider: String,
+
     #[serde(skip)]
     pub resolved: ResolvedRuntime,
 }

@@ -183,17 +183,22 @@ async fn dispatch_loop(
             }
         };
 
+        // 检查是否是语音输入（转录后的消息以 [Voice] 开头）
+        let is_voice_input = msg.content.starts_with("[Voice]");
+
         // 发送回复 -- 通过 channel alias 找到对应的 channel 实例
         let reply_channel = msg.channel_alias.as_deref().unwrap_or(&msg.channel);
+
+        // 先发送文本回复
         if let Some(ch) = channel_map.get(reply_channel) {
-            let send_msg = shadow_core::SendMessage::new(reply, &msg.reply_target);
+            let send_msg = shadow_core::SendMessage::new(reply.clone(), &msg.reply_target);
             if let Err(e) = ch.send(&send_msg).await {
                 error!("Failed to send reply: {e}");
             }
         } else {
             // fallback: 尝试用 msg.channel 字段匹配
             if let Some(ch) = channel_map.get(&msg.channel) {
-                let send_msg = shadow_core::SendMessage::new(reply, &msg.reply_target);
+                let send_msg = shadow_core::SendMessage::new(reply.clone(), &msg.reply_target);
                 if let Err(e) = ch.send(&send_msg).await {
                     error!("Failed to send reply: {e}");
                 }
@@ -202,6 +207,41 @@ async fn dispatch_loop(
                     "Cannot find channel '{}' or '{}' in map to send reply",
                     reply_channel, msg.channel
                 );
+            }
+        }
+
+        // 语音回复：如果用户发的是语音，且回复内容适合语音，额外发送 TTS 语音
+        if is_voice_input
+            && (msg.channel == "feishu" || msg.channel == "lark")
+            && shadow_channels::lark::LarkChannel::is_suitable_for_voice(&reply)
+        {
+            // 从 agent 配置读取 TTS provider
+            let agent_name = &agents[0];
+            if let Some(tts_cfg) = config.tts_provider_for_agent(agent_name) {
+                if !tts_cfg.api_key.is_empty() {
+                    // 找到 lark channel 实例发送语音
+                    if let Some(ch) = channel_map.get(reply_channel)
+                        .or_else(|| channel_map.get(&msg.channel))
+                    {
+                        match ch.send_voice_with_config(
+                            &msg.reply_target,
+                            &reply,
+                            &tts_cfg.api_key,
+                            &tts_cfg.voice,
+                            &tts_cfg.model,
+                            tts_cfg.speed,
+                            tts_cfg.vol,
+                            tts_cfg.pitch,
+                        ).await {
+                            Ok(()) => {
+                                info!("Voice reply sent to {}", msg.reply_target);
+                            }
+                            Err(e) => {
+                                warn!("Voice reply failed: {e}");
+                            }
+                        }
+                    }
+                }
             }
         }
     }
