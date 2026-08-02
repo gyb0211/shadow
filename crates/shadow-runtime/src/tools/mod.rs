@@ -62,6 +62,13 @@ pub fn all_tools_with_runtime(
         Arc::new(shadow_tools::FileDownloadTool::new(&security.workspace_dir)),
         Arc::new(shadow_tools::PdfReadTool::new(&security.workspace_dir)),
         Arc::new(shadow_tools::GitOperationsTool::new(&security.workspace_dir)),
+        // ── 网络 ──
+        Arc::new(shadow_tools::HttpRequestTool::new()),
+        Arc::new(shadow_tools::WebFetchTool::new()),
+        Arc::new(shadow_tools::WebSearchTool::new()),
+        // ── 记忆 ──
+        Arc::new(shadow_tools::MemoryStoreTool::new(memory.clone())),
+        Arc::new(shadow_tools::MemoryRecallTool::new(memory.clone())),
         // ── Cron ──
         Arc::new(CronAddTool::new(
             config.clone(),
