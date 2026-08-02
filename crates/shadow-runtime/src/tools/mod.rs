@@ -58,6 +58,10 @@ pub fn all_tools_with_runtime(
         Arc::new(FileEditTool::new(&security.workspace_dir)),
         Arc::new(GlobSearchTool::new(&security.workspace_dir)),
         Arc::new(ContentSearchTool::new(&security.workspace_dir)),
+        // ── 文件扩展 ──
+        Arc::new(shadow_tools::FileDownloadTool::new(&security.workspace_dir)),
+        Arc::new(shadow_tools::PdfReadTool::new(&security.workspace_dir)),
+        Arc::new(shadow_tools::GitOperationsTool::new(&security.workspace_dir)),
         // ── Cron ──
         Arc::new(CronAddTool::new(
             config.clone(),
