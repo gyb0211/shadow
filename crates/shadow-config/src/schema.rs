@@ -84,6 +84,46 @@ pub struct Config {
 
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub peer_groups: HashMap<String, PeerGroupConfig>,
+
+    /// Jira 集成配置
+    #[serde(default)]
+    pub jira: JiraConfig,
+}
+
+/// Jira 集成配置 (`[jira]`)
+///
+/// 支持 Jira Server/DC（Basic Auth: 用户名+密码）
+/// 和 Jira Cloud（Basic Auth: email+api_token）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct JiraConfig {
+    /// 是否启用 Jira 工具
+    pub enabled: bool,
+    /// Jira 实例地址（如 http://jira.wb-intra.com）
+    pub base_url: String,
+    /// 用户名（Server/DC 认证）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// 密码或 API Token
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    /// Jira Cloud email（Cloud 认证，设置后用 API v3）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    /// 允许的操作列表
+    #[serde(default = "default_jira_allowed_actions")]
+    pub allowed_actions: Vec<String>,
+    /// 请求超时（秒）
+    #[serde(default = "default_jira_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+fn default_jira_allowed_actions() -> Vec<String> {
+    vec!["get_ticket".to_string()]
+}
+
+fn default_jira_timeout_secs() -> u64 {
+    30
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,6 +224,7 @@ impl Default for Config {
             embedding_routes: vec![],
             channels: ChannelsConfig::default(),
             peer_groups: Default::default(),
+            jira: Default::default(),
         }
     }
 }
