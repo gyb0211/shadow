@@ -9,18 +9,22 @@
 //! - content_search: 文件内容正则搜索
 
 pub mod attribution;
+pub mod file_download;
 pub mod file_edit;
 pub mod file_read;
 pub mod file_write;
 pub mod jira;
 pub mod llm_task;
+pub mod pdf_read;
 pub mod search;
 pub mod shell;
 
+pub use file_download::FileDownloadTool;
 pub use file_edit::FileEditTool;
 pub use file_read::FileReadTool;
 pub use file_write::FileWriteTool;
 pub use jira::JiraTool;
 pub use llm_task::LlmTaskTool;
+pub use pdf_read::PdfReadTool;
 pub use search::{ContentSearchTool, GlobSearchTool};
 pub use shell::ShellTool;
