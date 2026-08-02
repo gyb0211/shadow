@@ -103,7 +103,32 @@ pub fn all_tools_with_runtime(
 
     // todo nation
 
-    // todo jira
+    // Jira 集成（配置驱动）
+    if root_config.jira.enabled {
+        match shadow_tools::JiraTool::from_config(&root_config.jira) {
+            Ok(tool) => {
+                ::shadow_log::record!(
+                    INFO,
+                    ::shadow_log::Event::new(module_path!(), ::shadow_log::Action::Note),
+                    &format!(
+                        "Jira tool enabled: {} (allowed: {})",
+                        root_config.jira.base_url,
+                        root_config.jira.allowed_actions.join(", ")
+                    )
+                );
+                tools_arcs.push(Arc::new(tool));
+            }
+            Err(e) => {
+                ::shadow_log::record!(
+                    WARN,
+                    ::shadow_log::Event::new(module_path!(), ::shadow_log::Action::Note)
+                        .with_outcome(::shadow_log::EventOutcome::Unknown)
+                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                    "Jira tool enabled but initialization failed - skipping registration"
+                );
+            }
+        }
+    }
 
     // todo 项目管理工具
 
