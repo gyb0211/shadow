@@ -46,23 +46,23 @@ impl JiraTool {
 
         let auth = if let Some(email) = &config.email {
             // Cloud 模式
-            let token = config.password.as_deref().unwrap_or("");
+            let token = config.password().unwrap_or_default();
             if token.is_empty() {
-                anyhow::bail!("Jira Cloud requires password (api_token)");
+                anyhow::bail!("Jira Cloud requires JIRA_PASSWORD environment variable (api_token)");
             }
             JiraAuth::Cloud {
                 email: email.clone(),
-                api_token: token.to_string(),
+                api_token: token,
             }
         } else if let Some(username) = &config.username {
             // Server/DC 模式
-            let password = config.password.as_deref().unwrap_or("");
+            let password = config.password().unwrap_or_default();
             if password.is_empty() {
-                anyhow::bail!("Jira Server requires password");
+                anyhow::bail!("Jira Server requires JIRA_PASSWORD environment variable");
             }
             JiraAuth::Basic {
                 username: username.clone(),
-                password: password.to_string(),
+                password,
             }
         } else {
             anyhow::bail!("Jira requires either username or email for authentication");

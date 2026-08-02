@@ -94,6 +94,8 @@ pub struct Config {
 ///
 /// 支持 Jira Server/DC（Basic Auth: 用户名+密码）
 /// 和 Jira Cloud（Basic Auth: email+api_token）
+///
+/// 密码/API Token 从环境变量 `JIRA_PASSWORD` 读取，不存储在配置文件中
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct JiraConfig {
@@ -104,9 +106,6 @@ pub struct JiraConfig {
     /// 用户名（Server/DC 认证）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
-    /// 密码或 API Token
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub password: Option<String>,
     /// Jira Cloud email（Cloud 认证，设置后用 API v3）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
@@ -116,6 +115,15 @@ pub struct JiraConfig {
     /// 请求超时（秒）
     #[serde(default = "default_jira_timeout_secs")]
     pub timeout_secs: u64,
+}
+
+impl JiraConfig {
+    /// 从环境变量 JIRA_PASSWORD 读取密码
+    ///
+    /// 不存储在配置文件中，避免明文泄露
+    pub fn password(&self) -> Option<String> {
+        std::env::var("JIRA_PASSWORD").ok().filter(|s| !s.is_empty())
+    }
 }
 
 fn default_jira_allowed_actions() -> Vec<String> {
