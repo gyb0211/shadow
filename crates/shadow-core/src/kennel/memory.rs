@@ -363,21 +363,21 @@ pub trait Memory: Attributable {
         let filtered = entries
             .into_iter()
             .filter(|e| {
-                if let Some(ref ns) = filter.namespace
-                    && e.namespace != *ns
-                {
-                    return false;
+                if let Some(ref ns) = filter.namespace {
+                    if e.namespace != *ns {
+                        return false;
+                    }
                 }
-                if let Some(ref since) = filter.since
-                    && e.timestamp.as_str() < since.as_str()
-                {
-                    return false;
+                if let Some(ref since) = filter.since {
+                    if e.timestamp.as_str() < since.as_str() {
+                        return false;
+                    }
                 }
 
-                if let Some(ref until) = filter.until
-                    && e.timestamp.as_str() > until.as_str()
-                {
-                    return false;
+                if let Some(ref until) = filter.until {
+                    if e.timestamp.as_str() > until.as_str() {
+                        return false;
+                    }
                 }
                 true
             })

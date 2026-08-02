@@ -10,6 +10,7 @@ members = [
     "crates/shadow-memory",    # 记忆后端实现
     "crates/shadow-tools",    # 工具后端实现
     "crates/shadow-channels",    # 工具后端实现
+    "crates/shadow-gateway",   # Web Gateway: HTTP API + 前端嵌入
 ]
 
 [workspace.package]
@@ -27,6 +28,7 @@ shadow-providers = { path = "crates/shadow-providers" }
 shadow-memory = { path = "crates/shadow-memory" }
 shadow-tools = { path = "crates/shadow-tools" }
 shadow-channels = { path = "crates/shadow-channels" }
+shadow-gateway = { path = "crates/shadow-gateway" }
 
 # 核心依赖
 anyhow = "1.0"
@@ -77,6 +79,9 @@ shadow-channels.workspace = true
 # ── Runtime 层 (可选, 默认开启) ──
 shadow-runtime = { workspace = true, optional = true }
 
+# ── Gateway 层 (可选, 默认关闭) ──
+shadow-gateway = { workspace = true, optional = true }
+
 # ── TUI 层 (可选, 默认开启) ──
 
 # ── 外部依赖 ──
@@ -98,6 +103,9 @@ default = ["runtime"]
 # 完整运行时: Agent loop + AgentBuilder + Observer
 # 关闭此 feature 构建 kernel-only 二进制 (~最小内核)
 runtime = ["dep:shadow-runtime"]
+
+# Gateway: Web 管理 API + 前端
+gateway = ["dep:shadow-gateway"]
 
 # TUI dashboard
 

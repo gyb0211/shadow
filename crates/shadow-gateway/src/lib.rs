@@ -1,6 +1,19 @@
-//! 影子网关 -- HTTP/WebSocket 服务器
+//! Shadow Gateway -- Web 管理 API 服务器
 //!
-//! 对照 ZeroClaw 对应 crate, 尚未实现。
-//! 参见 GAP.md 了解差距分析。
+//! 架构:
+//! - axum HTTP 服务器 (端口 7975)
+//! - sea-orm 数据库 (SQLite/MySQL)
+//! - JWT 认证 + 角色权限 (admin/viewer)
+//! - 读写 config.toml 管理 Shadow 配置
+//! - rust-embed 嵌入前端静态文件
+//!
+//! 启动: shadow gateway --port 7975
 
-// TODO: 实现模块
+pub mod auth;
+pub mod db;
+pub mod error;
+pub mod routes;
+pub mod server;
+pub mod state;
+
+pub use server::run_gateway;
