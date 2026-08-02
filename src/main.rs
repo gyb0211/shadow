@@ -135,6 +135,21 @@ enum Commands {
         name: Option<String>,
     },
 
+    /// 启动 Web 管理面板 (Gateway)
+    #[command(long_about = "\
+    Start the web management dashboard (Gateway).
+    Serves HTTP API + embedded React frontend on 127.0.0.1.
+
+    Examples:
+        shadow gateway                       # start on default port 7975
+        shadow gateway --port 8080           # start on custom port
+    ")]
+    Gateway {
+        /// 监听端口 (默认 7975)
+        #[arg(short, long, default_value = "7975")]
+        port: u16,
+    },
+
     /// OS 服务管理（systemd/launchd）
     #[command(long_about = "\
     Manage the shadow daemon via OS init system (systemd/launchd).
@@ -328,6 +343,20 @@ async fn main() -> Result<()> {
             shadow::quickstart::run(&mut config, agent.as_deref()).await?;
             return Ok(());
         }
+        Commands::Gateway { port } => {
+            #[cfg(feature = "gateway")]
+            {
+                shadow_gateway::run_gateway(config, port).await?;
+                return Ok(());
+            }
+            #[cfg(not(feature = "gateway"))]
+            {
+                let _ = port;
+                anyhow::bail!(
+                    "Gateway feature not enabled. Rebuild with: cargo build --features gateway"
+                )
+            }
+        }
         _ => {
             anyhow::bail!(
                 "This command requires the full runtime. Rebuild with default features:\n  cargo build --release"
@@ -397,6 +426,20 @@ async fn main() -> Result<()> {
             ))
             .await
             .map(|_| ())
+        }
+        Commands::Gateway { port } => {
+            #[cfg(feature = "gateway")]
+            {
+                shadow_gateway::run_gateway(config, port).await?;
+                Ok(())
+            }
+            #[cfg(not(feature = "gateway"))]
+            {
+                let _ = port;
+                anyhow::bail!(
+                    "Gateway feature not enabled. Rebuild with: cargo build --features gateway"
+                )
+            }
         }
         Commands::Service { action } => {
             use shadow_runtime::service;

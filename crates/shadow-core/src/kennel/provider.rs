@@ -354,41 +354,40 @@ pub trait ModelProvider: Attributable {
         temperature: Option<f64>,
     ) -> Result<ChatResponse> {
         // 有工具 且provider不支持工具 ， 就要把工具信息放到system_prompt中
-        if let Some(tools) = request.tools
-            && !tools.is_empty()
-            && !self.supports_native_tools()
-        {
-            // 必须是 prompt 引导的方式才能注入
-            // 如果impl 修改了convert_tools这里 就必须要支持tool
-            let tool_instructions = match self.convert_tools(tools) {
-                ToolsPayload::PromptGuided { instructions } => instructions,
-                payload => {
-                    anyhow::bail!(
-                        "ModelProvider returned non-prompt-guided tools payload ({payload:?}) while supports_native_tools() is false"
-                    )
+        if let Some(tools) = request.tools {
+            if !tools.is_empty() && !self.supports_native_tools() {
+                // 必须是 prompt 引导的方式才能注入
+                // 如果impl 修改了convert_tools这里 就必须要支持tool
+                let tool_instructions = match self.convert_tools(tools) {
+                    ToolsPayload::PromptGuided { instructions } => instructions,
+                    payload => {
+                        anyhow::bail!(
+                            "ModelProvider returned non-prompt-guided tools payload ({payload:?}) while supports_native_tools() is false"
+                        )
+                    }
+                };
+                // 修改system_prompt 注入工具信息
+                let mut modified_messages = request.messages.to_vec();
+                if let Some(system_message) = modified_messages.iter_mut().find(|m| m.role == "system")
+                {
+                    if !system_message.content.is_empty() {
+                        system_message.content.push_str("\n\n");
+                    }
+                    system_message.content.push_str(&tool_instructions);
+                } else {
+                    modified_messages.insert(0, ChatMessage::system(tool_instructions));
                 }
-            };
-            // 修改system_prompt 注入工具信息
-            let mut modified_messages = request.messages.to_vec();
-            if let Some(system_message) = modified_messages.iter_mut().find(|m| m.role == "system")
-            {
-                if !system_message.content.is_empty() {
-                    system_message.content.push_str("\n\n");
-                }
-                system_message.content.push_str(&tool_instructions);
-            } else {
-                modified_messages.insert(0, ChatMessage::system(tool_instructions));
-            }
 
-            let text = self
-                .chat_with_history(&modified_messages, model, temperature)
-                .await?;
-            return Ok(ChatResponse {
-                text: Some(text),
-                tool_calls: vec![],
-                reasoning_content: None,
-                usage: None,
-            });
+                let text = self
+                    .chat_with_history(&modified_messages, model, temperature)
+                    .await?;
+                return Ok(ChatResponse {
+                    text: Some(text),
+                    tool_calls: vec![],
+                    reasoning_content: None,
+                    usage: None,
+                });
+            }
         }
 
         // 如果impl支持tool。 那就让他自己实现， default中不帮impl做

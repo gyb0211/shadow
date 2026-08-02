@@ -3,8 +3,37 @@ name = "shadow-gateway"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "影子网关 -- HTTP/WebSocket 服务器"
-publish = false
+description = "影子 Web Gateway -- HTTP API 管理面板 + 前端嵌入"
 
 [dependencies]
-# 依赖按需添加, 初始为空
+shadow-config.workspace = true
+shadow-core.workspace = true
+shadow-log.workspace = true
+
+# Web 框架
+axum = { version = "0.8", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+
+# 认证
+jsonwebtoken = "9"
+bcrypt = "0.17"
+
+# 序列化
+serde.workspace = true
+serde_json.workspace = true
+
+# 异步
+tokio.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+
+# 前端静态文件嵌入
+rust-embed = { version = "8", features = ["axum"] }
+mime_guess = "2"
+
+[dev-dependencies]
+tempfile.workspace = true

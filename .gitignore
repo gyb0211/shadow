@@ -20,3 +20,5 @@ Thumbs.db
 
 # Superpowers brainstorm visual companion
 .superpowers/
+crates/shadow-webui/node_modules/
+crates/shadow-webui/.oxlintrc.json
