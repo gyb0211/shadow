@@ -29,7 +29,7 @@ ZeroClaw 共约 95+ 个工具，分为 24 个类别。Shadow 按优先级逐步�
 | 工具 | 作用 | Shadow 状态 |
 |------|------|-------------|
 | shell | 执行 shell 命令（超时+环境过滤） | ✅ |
-| git_operations | Git 操作（clone/commit/push/pull 等） | ❌ |
+| git_operations | Git 操作（clone/commit/push/pull 等） | ✅ |
 | backup_tool | 备份文件/目录 | ❌ |
 
 ## 3. 网络与 Web 工具
