@@ -1,15 +1,13 @@
 /**
  * Shadow WebUI 主应用
- * React + TypeScript + Ant Design v5 + TanStack Query
+ * 深色主题 + 渐变设计语言
  */
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { ConfigProvider } from 'antd';
+import { ConfigProvider, theme } from 'antd';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-// 上下文
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 
-// 页面组件
 import LoginPage from './pages/LoginPage';
 import SetupPage from './pages/SetupPage';
 import DashboardPage from './pages/DashboardPage';
@@ -21,11 +19,9 @@ import ConfigPage from './pages/ConfigPage';
 import LogsPage from './pages/LogsPage';
 import UsersPage from './pages/UsersPage';
 
-// 组件
 import MainLayout from './components/MainLayout';
 import ProtectedRoute from './components/ProtectedRoute';
 
-// 创建 QueryClient
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -35,17 +31,14 @@ const queryClient = new QueryClient({
   },
 });
 
-// 内部路由组件（需要在 AuthProvider 内使用 useAuth）
 function AppRoutes() {
   const { isAuthenticated } = useAuth();
 
   return (
     <Routes>
-      {/* 公开路由 */}
       <Route path="/login" element={isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />} />
       <Route path="/setup" element={<SetupPage />} />
 
-      {/* 受保护的路由 */}
       <Route
         path="/"
         element={
@@ -64,19 +57,64 @@ function AppRoutes() {
         <Route path="users" element={<UsersPage />} />
       </Route>
 
-      {/* 未匹配的路由重定向到首页 */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }
 
-// 根组件
 function App() {
   return (
     <ConfigProvider
       theme={{
+        algorithm: theme.darkAlgorithm,
         token: {
-          colorPrimary: '#722ed1',
+          colorPrimary: '#6c5ce7',
+          colorBgBase: '#0a0a14',
+          colorBgContainer: '#12121f',
+          colorBgElevated: '#1a1a2e',
+          colorBorder: 'rgba(255,255,255,0.08)',
+          colorBorderSecondary: 'rgba(255,255,255,0.06)',
+          colorText: 'rgba(255,255,255,0.85)',
+          colorTextSecondary: 'rgba(255,255,255,0.45)',
+          borderRadius: 10,
+          fontFamily: "'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+        },
+        components: {
+          Layout: {
+            siderBg: '#0d0d18',
+            headerBg: 'rgba(18,18,31,0.8)',
+            headerPadding: '0 24px',
+            headerHeight: 56,
+          },
+          Menu: {
+            itemBg: 'transparent',
+            itemColor: 'rgba(255,255,255,0.55)',
+            itemHoverColor: 'rgba(255,255,255,0.85)',
+            itemSelectedBg: 'rgba(108,92,231,0.15)',
+            itemSelectedColor: '#a29bfe',
+            itemBorderRadius: 8,
+          },
+          Card: {
+            colorBgContainer: '#12121f',
+            borderRadiusLG: 12,
+          },
+          Table: {
+            colorBgContainer: '#12121f',
+            rowHoverBg: 'rgba(255,255,255,0.03)',
+          },
+          Button: {
+            borderRadius: 8,
+          },
+          Modal: {
+            contentBg: '#12121f',
+            headerBg: '#12121f',
+          },
+          Input: {
+            colorBgContainer: '#0d0d18',
+          },
+          Select: {
+            colorBgContainer: '#0d0d18',
+          },
         },
       }}
     >

@@ -3,20 +3,20 @@
 use axum::{
     extract::{State, Path},
     http::StatusCode,
-    routing::{get, delete},
+    routing::get,
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::auth::middleware::AdminUser;
-use crate::db;
+use crate::db::{User, UserRole};
 use crate::error::{GatewayError, GatewayResult};
 use crate::state::GatewayState;
 
 pub fn routes() -> Router<GatewayState> {
     Router::new()
         .route("/api/users", get(list_users).post(create_user))
-        .route("/api/users/{id}", delete(delete_user))
+        .route("/api/users/{id}", axum::routing::delete(delete_user))
 }
 
 #[derive(Serialize)]
@@ -26,8 +26,8 @@ struct UserInfo {
     role: String,
 }
 
-impl From<db::User> for UserInfo {
-    fn from(user: db::User) -> Self {
+impl From<User> for UserInfo {
+    fn from(user: User) -> Self {
         Self {
             id: user.id,
             username: user.username,
@@ -41,7 +41,8 @@ async fn list_users(
     _admin: AdminUser,
     State(state): State<GatewayState>,
 ) -> GatewayResult<Json<Vec<UserInfo>>> {
-    let users = db::list_users(&state.data_dir)
+    let users = state.db.list_users()
+        .await
         .map_err(|e| GatewayError::Internal(e.to_string()))?;
     let infos: Vec<UserInfo> = users.into_iter().map(UserInfo::from).collect();
     Ok(Json(infos))
@@ -60,10 +61,11 @@ async fn create_user(
     State(state): State<GatewayState>,
     Json(payload): Json<CreateUserRequest>,
 ) -> GatewayResult<Json<UserInfo>> {
-    let role = db::UserRole::from_str(&payload.role)
+    let role = UserRole::from_str(&payload.role)
         .ok_or_else(|| GatewayError::BadRequest("无效的角色".to_string()))?;
 
-    let user = db::create_user(&state.data_dir, &payload.username, &payload.password, role)
+    let user = state.db.create_user(&payload.username, &payload.password, role)
+        .await
         .map_err(|e| GatewayError::BadRequest(e.to_string()))?;
 
     Ok(Json(UserInfo::from(user)))
@@ -75,7 +77,8 @@ async fn delete_user(
     State(state): State<GatewayState>,
     Path(id): Path<i32>,
 ) -> GatewayResult<StatusCode> {
-    db::delete_user(&state.data_dir, id)
+    state.db.delete_user(id)
+        .await
         .map_err(|e| GatewayError::Internal(e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
 }

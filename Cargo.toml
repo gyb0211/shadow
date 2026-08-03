@@ -11,6 +11,7 @@ members = [
     "crates/shadow-tools",    # 工具后端实现
     "crates/shadow-channels",    # 工具后端实现
     "crates/shadow-gateway",   # Web Gateway: HTTP API + 前端嵌入
+    "crates/shadow-plugins",   # Web Gateway: HTTP API + 前端嵌入
 ]
 
 [workspace.package]
@@ -29,6 +30,7 @@ shadow-memory = { path = "crates/shadow-memory" }
 shadow-tools = { path = "crates/shadow-tools" }
 shadow-channels = { path = "crates/shadow-channels" }
 shadow-gateway = { path = "crates/shadow-gateway" }
+shadow-plugins = { path = "crates/shadow-plugins" }
 
 # 核心依赖
 anyhow = "1.0"
@@ -75,6 +77,7 @@ shadow-log.workspace = true
 shadow-providers.workspace = true
 shadow-memory.workspace = true
 shadow-channels.workspace = true
+shadow-plugins.workspace = true
 
 # ── Runtime 层 (可选, 默认开启) ──
 shadow-runtime = { workspace = true, optional = true }

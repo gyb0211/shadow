@@ -3,6 +3,8 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::db::DbConn;
+
 /// Gateway 共享状态，注入到所有 axum handler
 #[derive(Clone)]
 pub struct GatewayState {
@@ -16,6 +18,8 @@ pub struct GatewayState {
     pub data_dir: std::path::PathBuf,
     /// Daemon 是否运行中
     pub daemon_running: bool,
+    /// 数据库连接 (SQLite/MySQL 双后端)
+    pub db: Arc<dyn DbConn>,
 }
 
 // axum 0.8 已有 blanket impl: FromRef<T> for T，无需手动实现

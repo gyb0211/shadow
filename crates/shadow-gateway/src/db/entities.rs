@@ -1,9 +1,10 @@
-//! 数据库实体（用户表）
+//! 数据库实体 -- 用户表
 //!
-//! 使用 JSON 文件存储，不用 ORM
+//! users 表存储管理员和普通用户，用于 Gateway Web 管理面板认证。
+//! SQLite 用 rusqlite，MySQL 用 mysql_async。两套实现共用相同的 User/UserRole 类型。
 
-use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 /// 用户角色枚举
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,7 +31,7 @@ impl UserRole {
     }
 }
 
-/// 用户实体
+/// 用户实体 (与数据库 users 表对应)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub id: i32,
@@ -39,12 +40,4 @@ pub struct User {
     pub role: UserRole,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-/// 用户角色（认证用）
-#[derive(Debug, Clone)]
-pub struct AuthUser {
-    pub user_id: i32,
-    pub username: String,
-    pub role: UserRole,
 }

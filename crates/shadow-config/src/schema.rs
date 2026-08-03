@@ -606,6 +606,13 @@ impl Config {
                 .map(ActiveStorage::Sqlite)
                 .unwrap_or(ActiveStorage::None),
 
+            "mysql" => self
+                .storage
+                .mysql
+                .get(alias)
+                .map(ActiveStorage::Mysql)
+                .unwrap_or(ActiveStorage::None),
+
             _ => ActiveStorage::None,
         }
     }
@@ -620,22 +627,17 @@ impl Config {
 pub enum ActiveStorage<'a> {
     None,
     Sqlite(&'a SqliteStorageConfig),
+    Mysql(&'a MysqlStorageConfig),
 }
 impl ActiveStorage<'_> {
     pub fn kind(&self) -> &'static str {
         match self {
             ActiveStorage::None => "none",
             ActiveStorage::Sqlite(_) => "sqlite",
+            ActiveStorage::Mysql(_) => "mysql",
         }
     }
 }
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct SqliteStorageConfig {
-    pub path: Option<String>,
-    pub open_timeout_secs: Option<u64>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 pub struct SchedulerConfig {
@@ -750,16 +752,40 @@ impl Default for MemoryConfig {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SqliteStorageConfig {
+    pub path: Option<String>,
+    pub open_timeout_secs: Option<u64>,
+}
+
+/// MySQL 存储配置 (`[storage.mysql.<alias>]`)
+///
+/// 用于 Gateway Web 管理面板的用户数据存储。
+/// setup 时由前端传入，写入 config.toml 后持久化。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MysqlStorageConfig {
+    pub host: String,
+    pub port: Option<u16>,
+    pub user: String,
+    pub password: String,
+    pub database: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    sqlite: HashMap<String, SqliteStorageConfig>,
+    pub sqlite: HashMap<String, SqliteStorageConfig>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub mysql: HashMap<String, MysqlStorageConfig>,
 }
 
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
             sqlite: HashMap::new(),
+            mysql: HashMap::new(),
         }
     }
 }

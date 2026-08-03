@@ -1,13 +1,13 @@
 /**
- * 登录页面
+ * 登录页面 -- 全屏渐变 + 玻璃拟态
  */
 import { useState } from 'react';
-import { Form, Input, Button, Card, message, Typography } from 'antd';
+import { Form, Input, Button, message, Typography } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
-const { Title } = Typography;
+const { Title, Paragraph } = Typography;
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false);
@@ -29,17 +29,64 @@ export default function LoginPage() {
   };
 
   return (
-    <div style={{
+    <div className="gradient-bg" style={{
       minHeight: '100vh',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      padding: 24,
     }}>
-      <Card style={{ width: 400, boxShadow: '0 14px 40px rgba(0,0,0,0.2)' }}>
-        <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <Title level={2}>Shadow 管理面板</Title>
-          <p style={{ color: '#666' }}>请登录以继续</p>
+      {/* 背景光晕 */}
+      <div style={{
+        position: 'fixed',
+        top: '15%',
+        left: '20%',
+        width: 400,
+        height: 400,
+        borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(108,92,231,0.15), transparent 70%)',
+        pointerEvents: 'none',
+      }} />
+      <div style={{
+        position: 'fixed',
+        bottom: '10%',
+        right: '20%',
+        width: 300,
+        height: 300,
+        borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(0,206,201,0.12), transparent 70%)',
+        pointerEvents: 'none',
+      }} />
+
+      <div className="glass-card" style={{
+        width: 380,
+        maxWidth: '100%',
+        padding: '40px 32px',
+        position: 'relative',
+        zIndex: 1,
+      }}>
+        {/* Logo */}
+        <div style={{ textAlign: 'center', marginBottom: 32 }}>
+          <div style={{
+            width: 56,
+            height: 56,
+            borderRadius: 16,
+            background: 'linear-gradient(135deg, #6c5ce7, #00cec9)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 28,
+            fontWeight: 800,
+            color: '#fff',
+            marginBottom: 16,
+            boxShadow: '0 8px 24px rgba(108,92,231,0.4)',
+          }}>
+            S
+          </div>
+          <Title level={3} style={{ color: '#fff', margin: 0 }}>Shadow</Title>
+          <Paragraph style={{ color: 'rgba(255,255,255,0.45)', marginTop: 4 }}>
+            管理面板
+          </Paragraph>
         </div>
 
         <Form
@@ -52,23 +99,31 @@ export default function LoginPage() {
             name="username"
             rules={[{ required: true, message: '请输入用户名' }]}
           >
-            <Input prefix={<UserOutlined />} placeholder="用户名" size="large" />
+            <Input
+              prefix={<UserOutlined style={{ color: 'rgba(255,255,255,0.3)' }} />}
+              placeholder="用户名"
+              size="large"
+            />
           </Form.Item>
 
           <Form.Item
             name="password"
             rules={[{ required: true, message: '请输入密码' }]}
           >
-            <Input.Password prefix={<LockOutlined />} placeholder="密码" size="large" />
+            <Input.Password
+              prefix={<LockOutlined style={{ color: 'rgba(255,255,255,0.3)' }} />}
+              placeholder="密码"
+              size="large"
+            />
           </Form.Item>
 
-          <Form.Item>
-            <Button type="primary" htmlType="submit" loading={loading} block size="large">
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Button type="primary" htmlType="submit" loading={loading} block size="large" style={{ marginTop: 8 }}>
               登录
             </Button>
           </Form.Item>
         </Form>
-      </Card>
+      </div>
     </div>
   );
 }

@@ -3,6 +3,7 @@
  */
 import React from 'react';
 import { Navigate } from 'react-router-dom';
+import { Spin } from 'antd';
 import { useAuth } from '../contexts/AuthContext';
 
 interface ProtectedRouteProps {
@@ -14,13 +15,13 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
 
   if (isLoading) {
     return (
-      <div style={{
+      <div className="gradient-bg" style={{
         minHeight: '100vh',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
       }}>
-        加载中...
+        <Spin size="large" />
       </div>
     );
   }

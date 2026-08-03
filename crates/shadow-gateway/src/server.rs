@@ -2,9 +2,10 @@
 //!
 //! 启动流程:
 //! 1. 加载 Shadow 配置
-//! 2. 生成/加载 JWT 密钥
-//! 3. 构建 axum Router (API 路由 + 前端静态文件)
-//! 4. 绑定 127.0.0.1:port 启动 HTTP 服务
+//! 2. 从配置连接数据库 (SQLite/MySQL)，如无配置则默认 SQLite
+//! 3. 生成/加载 JWT 密钥
+//! 4. 构建 axum Router (API 路由 + 前端静态文件)
+//! 5. 绑定 127.0.0.1:port 启动 HTTP 服务
 
 use std::net::SocketAddr;
 
@@ -18,6 +19,7 @@ use axum::{
 use rust_embed::Embed;
 use tower_http::cors::CorsLayer;
 
+use crate::db;
 use crate::routes;
 use crate::state::GatewayState;
 
@@ -31,6 +33,10 @@ pub async fn run_gateway(config: shadow_config::Config, port: u16) -> anyhow::Re
     let data_dir = config.data_dir.clone();
     let config_path = config.config_path.clone();
 
+    // 从配置连接数据库
+    let db_conn = db::connect_from_config(&config).await?;
+    tracing::info!("数据库连接成功: {}", db::db_kind(&config));
+
     // JWT 密钥 -- 从 ~/.shadow/.jwt_secret 加载或随机生成
     let jwt_secret = load_or_create_jwt_secret(&data_dir)?;
 
@@ -40,6 +46,7 @@ pub async fn run_gateway(config: shadow_config::Config, port: u16) -> anyhow::Re
         config_path,
         data_dir,
         daemon_running: false,
+        db: db_conn,
     };
 
     let app = Router::new()
@@ -95,16 +102,9 @@ fn load_or_create_jwt_secret(data_dir: &std::path::Path) -> anyhow::Result<Strin
         }
     }
 
-    // 生成随机密钥 (32 字节 hex 编码)
-    let secret = uuid::Uuid::new_v4().to_string() + &uuid::Uuid::new_v4().to_string();
+    // 生成随机密钥
+    let secret = uuid::Uuid::new_v4().to_string();
     fs::create_dir_all(data_dir)?;
     fs::write(&key_path, &secret)?;
-    // Unix 权限保护
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = fs::Permissions::from_mode(0o600);
-        let _ = fs::set_permissions(&key_path, perms);
-    }
     Ok(secret)
 }

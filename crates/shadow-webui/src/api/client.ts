@@ -15,15 +15,26 @@ export interface LoginResponse {
   user: UserInfo;
 }
 
+export type DatabaseType = 'sqlite' | 'mysql';
+
+export interface SqliteDatabaseConfig {
+  type: 'sqlite';
+  path?: string;
+}
+
+export interface MysqlDatabaseConfig {
+  type: 'mysql';
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+}
+
+export type DatabaseConfig = SqliteDatabaseConfig | MysqlDatabaseConfig;
+
 export interface SetupRequest {
-  database: {
-    type: 'mysql';
-    host: string;
-    port: number;
-    user: string;
-    password: string;
-    database: string;
-  };
+  database: DatabaseConfig;
   admin: {
     username: string;
     password: string;

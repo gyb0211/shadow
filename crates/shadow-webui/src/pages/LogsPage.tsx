@@ -2,18 +2,17 @@
  * 日志查看页面
  */
 import { useState } from 'react';
-import { Card, Table, Select, Button, Typography, Tag, Space } from 'antd';
+import { Card, Select, Button, Tag, Space, Empty } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { logsApi } from '../api/client';
-
-const { Title } = Typography;
+import PageHeader from '../components/PageHeader';
 
 const levelColors: Record<string, string> = {
   ERROR: 'red',
   WARN: 'orange',
   INFO: 'blue',
-  DEBUG: 'gray',
+  DEBUG: 'default',
   TRACE: 'default',
 };
 
@@ -32,6 +31,7 @@ export default function LogsPage() {
       dataIndex: 'timestamp',
       key: 'timestamp',
       width: 180,
+      render: (v: string) => <span style={{ color: 'rgba(255,255,255,0.45)', fontFamily: 'monospace, monospace', fontSize: 12 }}>{v}</span>,
     },
     {
       title: '级别',
@@ -45,19 +45,25 @@ export default function LogsPage() {
       dataIndex: 'target',
       key: 'target',
       width: 200,
+      render: (v: string) => <span style={{ color: 'rgba(255,255,255,0.35)', fontFamily: 'monospace, monospace', fontSize: 12 }}>{v || '-'}</span>,
     },
     {
       title: '消息',
       dataIndex: 'message',
       key: 'message',
+      render: (v: string) => <span style={{ color: 'rgba(255,255,255,0.75)' }}>{v}</span>,
     },
   ];
 
   return (
-    <div>
-      <Title level={2}>日志查看</Title>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+      <PageHeader title="日志查看" subtitle="系统运行日志" />
 
-      <Card style={{ marginBottom: 16 }}>
+      {/* 筛选栏 */}
+      <Card
+        style={{ borderRadius: 12, marginBottom: 12, flexShrink: 0 }}
+        styles={{ body: { padding: '12px 16px' } }}
+      >
         <Space>
           <Select value={level} onChange={setLevel} style={{ width: 120 }}>
             <Select.Option value="">全部</Select.Option>
@@ -66,29 +72,66 @@ export default function LogsPage() {
             <Select.Option value="INFO">INFO</Select.Option>
             <Select.Option value="DEBUG">DEBUG</Select.Option>
           </Select>
-
           <Select value={limit} onChange={setLimit} style={{ width: 120 }}>
             <Select.Option value={50}>50 条</Select.Option>
             <Select.Option value={100}>100 条</Select.Option>
             <Select.Option value={200}>200 条</Select.Option>
             <Select.Option value={500}>500 条</Select.Option>
           </Select>
-
-          <Button icon={<ReloadOutlined />} onClick={() => refetch()}>
-            刷新
-          </Button>
+          <Button icon={<ReloadOutlined />} onClick={() => refetch()}>刷新</Button>
         </Space>
       </Card>
 
-      <Card>
-        <Table
-          dataSource={logs || []}
-          columns={columns}
-          rowKey="timestamp"
-          loading={isLoading}
-          pagination={{ pageSize: 20, showSizeChanger: false }}
-          scroll={{ x: 800 }}
-        />
+      {/* 日志表格 -- 撑满剩余空间 */}
+      <Card
+        className="fill-card no-pad"
+        style={{ borderRadius: 12 }}
+      >
+        {logs && logs.length > 0 ? (
+          <div style={{ flex: 1, overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead style={{ position: 'sticky', top: 0, background: '#12121f', zIndex: 1 }}>
+              <tr>
+                {columns.map((c) => (
+                  <th key={c.key} style={{
+                    textAlign: 'left',
+                    padding: '10px 16px',
+                    color: 'rgba(255,255,255,0.45)',
+                    fontSize: 12,
+                    fontWeight: 500,
+                    borderBottom: '1px solid rgba(255,255,255,0.06)',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    {c.title}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {logs.map((log, i) => (
+                <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+                  <td style={{ padding: '8px 16px', color: 'rgba(255,255,255,0.45)', fontFamily: 'monospace, monospace', fontSize: 12, whiteSpace: 'nowrap' }}>
+                    {log.timestamp}
+                  </td>
+                  <td style={{ padding: '8px 16px' }}>
+                    <Tag color={levelColors[log.level] || 'default'}>{log.level}</Tag>
+                  </td>
+                  <td style={{ padding: '8px 16px', color: 'rgba(255,255,255,0.35)', fontFamily: 'monospace, monospace', fontSize: 12, whiteSpace: 'nowrap' }}>
+                    {log.target || '-'}
+                  </td>
+                  <td style={{ padding: '8px 16px', color: 'rgba(255,255,255,0.75)' }}>
+                    {log.message}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+            <Empty description={isLoading ? '加载中...' : '暂无日志'} />
+          </div>
+        )}
       </Card>
     </div>
   );

@@ -6,5 +6,35 @@ license.workspace = true
 description = "影子插件 -- WASM 插件系统"
 publish = false
 
+[features]
+default = ["plugins-wit-v0"]
+plugins-wit-v0 = []
+plugins-wasmtime = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:wasmtime-wasi-http"]
+plugins-wasm-cranelift = ["plugins-wasmtime", "wasmtime/cranelift"]
+plugins-wasm-pulley = ["plugins-wasmtime", "wasmtime/pulley"]
+
 [dependencies]
+shadow-log.workspace = true
+anyhow.workspace = true
+thiserror = "2.0"
+toml = "1.0"
+ring = "0.17"
+
 # 依赖按需添加, 初始为空
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+
+
+wasmtime = { version = "45.0.3", default-features = false, features = [
+    "component-model",
+    "runtime",
+    "std",
+    "async",
+], optional = true }
+wasmtime-wasi = { version = "45.0.3", default-features = false, features = [
+    "p2",
+], optional = true }
+wasmtime-wasi-http = { version = "45.0.3", default-features = false, features = [
+    "p2",
+    "default-send-request",
+], optional = true }
