@@ -1,0 +1,8 @@
+package shadow:plugin@0.0.1;
+
+
+@unstable(feature = plugins-wit-v0)
+interface plugin-info {
+  plugin-name: func() -> string;
+  plugin-version: func() -> string;
+}

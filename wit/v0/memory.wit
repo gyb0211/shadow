@@ -1,0 +1,145 @@
+package shadow:plugin@0.0.1;
+
+@unstable(feature = plugins-wit-v0)
+interface memory {
+  @unstable(feature = plugins-wit-v0)
+  variant memory-category {
+    core,
+    daily,
+    conversation,
+    custom(string),
+  }
+  @unstable(feature = plugins-wit-v0)
+  variant semantic-sub-type {
+    preference,
+    fact,
+    decision,
+    entity,
+  }
+  @unstable(feature = plugins-wit-v0)
+  variant memory-kind {
+    episodic,
+    semantic(semantic-sub-type),
+    procedural,
+  }
+  @unstable(feature = plugins-wit-v0)
+  record memory-entry {
+    id: string,
+    agent-id: option<string>,
+    key: string,
+    content: string,
+    timestamp: string, // RFC 3339 字符串
+    session-id: option<string>,
+    score: option<f64>, // 检索相关度
+    agent-alias: option<string>,
+    namespace: string, // 默认值由 Rust 函数提供，WIT 只关心类型
+    importance: option<f64>, // 重要程度
+    superseded-by: option<string>,
+    kind: option<memory-kind>, // 内存类型
+    pinned: bool,
+    tenant-id: option<string>,
+    category: memory-category, // 注意：Rust 中 category 非 Option
+  }
+  @unstable(feature = plugins-wit-v0)
+  record export-filter {
+    namespace: option<string>,
+    session-id: option<string>,
+    category: option<memory-category>, // 需定义 memory-category
+    since: option<string>, // RFC 3339 时间字符串
+    until: option<string>, // RFC 3339 时间字符串
+  }
+  @unstable(feature = plugins-wit-v0)
+  record procedural-message {
+    role: string,
+    content: string,
+    name: option<string>,
+  }
+
+  @unstable(feature = plugins-wit-v0)
+  variant agent-filter {
+    all,
+    some(list<string>)
+  }
+  @unstable(feature = plugins-wit-v0)
+  flags memory-capabilities {
+    get-for-agent,
+    purge-namespace,
+    purge-session,
+    purge-session-for-agent,
+    purge-agent,
+    reindex,
+    store-procedual,
+    ensure-agent-uuid,
+    recall-namespced,
+    export-entries,
+    store-with-metadata,
+  }
+
+
+  name: func() -> string;
+  get-memory-capabilities: func() -> memory-capabilities;
+  store-entry: func(key: string, content: string, category: memory-category, session-id: option<string>) -> result<_, string>;
+  recall: func(query: string, limit: u64, session-id: option<string >, since:option<string>, until: option<string>)-> result<list<memory-entry>, string>;
+  get: func(key: string) -> result<option<memory-entry>, string >;
+  list-entries: func(
+  category: option<memory-category>,
+  session-id: option<string>,
+  ) -> result<list<memory-entry>, string>;
+  forget: func(key: string) -> result<bool, string>;
+  forget-for-agent: func(key: string, agent-id: string) -> result<bool, string>;
+  count: func() -> result<u64, string>;
+  health-check: func() -> bool;
+  store-with-agent: func(
+  key: string,
+  content: string,
+  category: memory-category,
+  session-id: option<string>,
+  namespace: option<string>,
+  importance: option<f64>,
+  agent-id: option<string>,
+  ) -> result<_, string>;
+  recall-for-agents: func(
+  agents: agent-filter,
+  query: string,
+  limit: u64,
+  session-id: option<string>,
+  since: option<string>,
+  until: option<string>,
+  ) -> result<list<memory-entry>, string>;
+  get-for-agent: func(key: string, agent-id: string) -> result<option<memory-entry>, string>;
+  purge-namespace: func(namespace: string) -> result<u64, string>;
+  purge-session: func(session-id: string) -> result<u64, string>;
+  purge-session-for-agent: func(session-id: string, agent-id: string) -> result<u64, string>;
+  purge-agent: func(agent-alias: string) -> result<u64, string>;
+  reindex: func() -> result<u64, string>;
+  store-procedural: func(
+  messages: list<procedural-message>,
+  session-id: option<string>,
+  ) -> result<_, string>;
+  ensure-agent-uuid: func(alias: string) -> result<string, string>;
+  recall-namespaced: func(
+  namespace: string,
+  query: string,
+  limit: u64,
+  session-id: option<string>,
+  since: option<string>,
+  until: option<string>,
+  ) -> result<list<memory-entry>, string>;
+  export-entries: func(filter: export-filter) -> result<list<memory-entry>, string>;
+  store-with-metadata: func(
+  key: string,
+  content: string,
+  category: memory-category,
+  session-id: option<string>,
+  namespace: option<string>,
+  importance: option<f64>,
+  ) -> result<_, string>;
+
+}
+
+@unstable(feature = plugins-wit-v0)
+world memory-plugin {
+  import logging;
+  export plugin-info;
+  export memory;
+}

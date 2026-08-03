@@ -1,0 +1,7 @@
+package shadow:plugin@0.0.1;
+
+@unstable(feature = plugins-wit-v0)
+interface types {
+  @unstable(feature = plugins-wit-v0)
+  type json-string = string;
+}

@@ -1,0 +1,120 @@
+package shadow:plugin@0.0.1;
+
+@unstable(feature = plugins-wit-v0)
+interface channel {
+  @unstable(feature = plugins-wit-v0)
+  use types.{json-string};
+
+  @unstable(feature = plugins-wit-v0)
+  record media-attachment {
+    file-name: string,
+    data: list<u8>,
+    mime-type: option<string>,
+  }
+
+  @unstable(feature = plugins-wit-v0)
+  record inbound-message {
+    id: string,
+    sender: string,
+    reply-target: string,
+    content: string,
+    channel: string,
+    channel-alias: string,
+    timestamp: u64,
+    thread-ts: option<string>,
+    interruption-scope-id: option<string>,
+    attachment: list<media-attachment>,
+    subject: option<string>,
+  }
+
+  @unstable(feature = plugins-wit-v0)
+  record send-message {
+    content: string,
+    recipient: string,
+    subject: option<string>,
+    thread-ts: option<string>,
+    attachment: list<media-attachment>,
+    in-reply-to: option<string>,
+  }
+
+  @unstable(feature = plugins-wit-v0)
+  record approval-request {
+    tool-name: string,
+    arguments-summary: string,
+    raw-arguments: option<json-string>,
+  }
+
+  @unstable(feature = plugins-wit-v0)
+  variant approval-response {
+    approve,
+    deny,
+    always-approve,
+    deny-with-edit(
+    string
+    ),
+  }
+
+  @unstable(feature = plugins-wit-v0)
+  flags channel-capabilities {
+    health-check,
+    self-handle,
+    self-addressed-mention,
+    drop-self-message,
+    start-typing,
+    stop-typing,
+    supports-draft-updates,
+    supports-multi-message-streaming,
+    multi-message-delay-ms,
+    send-draft,
+    update-draft,
+    update-draft-progress,
+    finalize-draft,
+    cancel-draft,
+    add-reaction,
+    remove-reaction,
+    pin-message,
+    unpin-message,
+    redact-message,
+    request-approval,
+    request-choice,
+    supports-free-from-ask,
+  }
+
+  name: func() -> string;
+  configure: func(config: string) -> result<_, string>;
+  send: func(message: send-message) -> result<_, string>;
+  poll-message: func() -> option<inbound-message>;
+  get-channel-capabilities: func() -> channel-capabilities;
+  health-check: func() -> bool;
+  self-handle: func() -> option<string>;
+  self-addressed-mention: func() -> option<string>;
+  drop-self-message: func(msg: inbound-message) -> bool;
+  start-typing: func(recipient: string) -> result<_, string>;
+  stop-typing: func(recipient: string) -> result<_, string>;
+  supports-draft-updates: func() -> bool;
+  send-draft: func(message: send-message) -> result<option<string>, string>;
+  update-draft: func(recipient: string, message-id: string, text: string,) -> result<_, string>;
+  update-draft-progress: func(recipient: string, message-id: string, text: string,) -> result<_, string>;
+
+  finalize-draft: func(recipient: string, message-id: string, text: string,) -> result<_, string>;
+
+  cancel-draft: func(recipient: string, message-id: string) -> result<_, string>;
+  supports-multi-message-streaming: func() -> bool;
+  multi-message-delay-ms: func() -> u64;
+  add-reaction: func(channel-id: string, message-id: string, emoji: string,) -> result<_, string>;
+  remove-reaction: func(channel-id: string, message-id: string, emoji: string,) -> result<_, string>;
+  pin-message: func(channel-id: string, message-id: string) -> result<_, string>;
+  unpin-message: func(channel-id: string, message-id: string) -> result<_, string>;
+  redact-message: func(channel-id: string, message-id: string, reason: option<string>,) -> result<_, string>;
+  request-approval: func(recipient: string, request: approval-request,) -> result<option<approval-response>, string>;
+  request-choice: func(question: string, choices: list<string>, timeout-secs: u64,) -> result<option<string>, string>;
+  supports-free-form-ask: func() -> bool;
+}
+
+@unstable(feature = plugins-wit-v0)
+world channel-plugin {
+  import logging;
+  import inbound;
+  export plugin-info;
+  export channel;
+}

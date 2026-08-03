@@ -1,0 +1,32 @@
+package shadow:plugin@0.0.1;
+
+
+
+@unstable(feature = plugins-wit-v0)
+interface tool {
+  @unstable(feature = plugins-wit-v0)
+  use types.{json-string};
+
+  /// Result returned by a tool execution.
+  @unstable(feature = plugins-wit-v0)
+  record tool-result {
+    success: bool,
+    output: string,
+    error: option<string>,
+  }
+
+  name: func() -> string;
+
+  description: func() -> string;
+
+  parameters-schema: func() -> json-string;
+
+  execute: func(args: json-string) -> result<tool-result, string>;
+}
+
+@unstable(feature = plugins-wit-v0)
+world tool-plugin {
+  import logging;
+  export plugin-info;
+  export tool;
+}

@@ -1,0 +1,22 @@
+package shadow:plugin@0.0.1;
+
+
+@unstable(feature = plugins-wit-v0)
+interface inbound {
+  @unstable(feature = plugins-wit-v0)
+  record host-inbound-message {
+    id: string,
+    sender: string,
+    reply-target: string,
+    content: string,
+    channel: string,
+    channel-alias: option<string>,
+    timestamp: u64,
+    thread-ts: option<string>,
+    interruption-scope-id: option<string>,
+    subject: option<string>,
+  }
+
+  inbound-poll: func() -> option<host-inbound-message>;
+  inbound-pending: func() ->u32;
+}
