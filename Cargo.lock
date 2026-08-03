@@ -3430,6 +3430,7 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
+ "shadow-core",
  "shadow-log",
  "thiserror 2.0.18",
  "toml 1.1.4+spec-1.1.0",

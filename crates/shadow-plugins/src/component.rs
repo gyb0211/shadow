@@ -201,7 +201,7 @@ fn load_inner(wasm_path: &Path) -> wasmtime::Result<Component> {
 macro_rules! call_plugin {
     ($self: expr, $body: expr) => {
         {
-            let mut guard = $self.state.lock().await;
+            let mut guard = $self.state.lock();
             let (ref mut store, ref mut bindings) = *guard;
             crate::component::refuel(store);
             let f = $body,

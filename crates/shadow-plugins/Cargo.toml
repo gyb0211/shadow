@@ -15,6 +15,7 @@ plugins-wasm-pulley = ["plugins-wasmtime", "wasmtime/pulley"]
 
 [dependencies]
 shadow-log.workspace = true
+shadow-core.workspace = true
 anyhow.workspace = true
 thiserror = "2.0"
 toml = "1.0"

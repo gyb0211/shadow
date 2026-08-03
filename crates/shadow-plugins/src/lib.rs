@@ -12,6 +12,7 @@ pub mod component;
 mod error;
 mod host;
 mod signature;
+pub mod runtime;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
